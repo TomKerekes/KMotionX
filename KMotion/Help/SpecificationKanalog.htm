@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
+
+<meta name="keywords" content="ethernet 16-axis controller, cnc control, motion control, cnc boards, 4-axis, 8-axis, stepper, brushless, DC motor, servo, encoder, adc, dac, motion controller, automated motion, manufacturing, Mach3">
+<meta name="description" content="Manufacturer of premium motion control products for CNC Manufacturing, Robotics and Automation">
+<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+<meta http-equiv="Content-Language" content="en-us">
+
+<title>Kanalog Hardware and Software Specification</title>
+
+<link rel="stylesheet" type="text/css" href="css/style.css">
+</head>
+
+<body>
+
+<div id="logo"><a href="index.htm"></a></div>
+
+<div id="home">
+	<a href="index.htm">Table of contents</a> | 
+	<script>
+		if (navigator.userAgent.indexOf("NT 6.2") == -1){
+			document.write('<a href="https://www.dynomotion.com">Dynomotion home page</a>')
+		} else {
+			document.write('<a href="https://www.dynomotion.com" target="_blank">Dynomotion home page</a>')
+		}
+	</script>
+</div>
+<div id="searchNav">
+
+	<div class="gcse-search">
+					<script>
+					  if (document.location.protocol  ==  'https:') {
+					  (function() {
+					  var cx = '012657033059195044748:9fmjmlufts0';
+					  var gcse = document.createElement('script');
+					  gcse.type = 'text/javascript';
+					  gcse.async = true;
+					  gcse.src = (document.location.protocol == 'https:' ? 'https:' : 'http:') +
+					      '//cse.google.com/cse.js?cx=' + cx;
+					  var s = document.getElementsByTagName('script')[0];
+					  s.parentNode.insertBefore(gcse, s);
+					})();
+					  }
+				      </script> 
+				      <gcse:search> </gcse:search>  
+
+	       </div>
+</div>	
+
+	
+
+
+<div id="google_translate_element" style="background: transparent;" align="right"><script type="text/javascript">
+if (navigator.userAgent.indexOf("NT 6.2") == -1) {
+		function googleTranslateElementInit() {
+	  new google.translate.TranslateElement({pageLanguage: 'en', includedLanguages: 'en,de,fr,it,es,pt,ru,uk,ar,zh-CN,zh-TW,ko,iw,hi,ja,tr', layout: google.translate.TranslateElement.InlineLayout.SIMPLE}, 'google_translate_element');
+		}						}
+	</script>
+	<script type="text/javascript" src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit">
+	</script>
+</div>		
+<div id="main">
+
+<h1>Kanalog 1.0 Hardware</h1>
+  
+   <table class="tableMedium">
+   
+    <tr>
+      <th>Parameter</th>
+      <th>Specification</th>
+    </tr>
+    <tr>
+      <td colspan="2" class="header">Analog</td>
+     </tr>
+    <tr>
+      <td>DAC Outputs</td>
+      <td>(8) +/- 10V&nbsp; @ 10ma, recommended load &gt;2Kohm<br />
+          12 bit - update rate 11.1KHz all 8 channels</td>
+    </tr>
+    <tr>
+      <td>ADC Inputs</td>
+      <td>(8) +/- 10V 100Kohm input Impedance<br />
+		  12 bit - update rate 11.1KHz all 8 channels</td>
+    </tr>
+    <tr>
+      <td colspan="2" class="header">Optos</td>
+     </tr>
+    <tr>
+      <td>Opto Isolated Outputs</td>
+      <td>(8) Max differential voltage 80V&nbsp; 25ma</td>
+    </tr>
+    <tr>
+      <td>Opto Isolated Inputs</td>
+      <td>(8) 3-24V input, internal 10KOhm series resistor</td>
+    </tr>
+    <tr>
+      <td colspan="2" class="header">Differential</td>
+     </tr>
+    <tr>
+      <td>Differential Input Receivers</td>
+      <td>(16) ANSI TIA/EIA-422-B, ANSI TIA/EIA-423-B<br />
+		+/-7V common mode range, 200mv sensitivity<br />
+		Internal 470ohm termination</td>
+    </tr>
+    <tr>
+      <td colspan="2" class="header">Relay Drivers</td>
+     </tr>
+    <tr>
+      <td>N channel FET Switches</td>
+      <td>(8) 24V @ 1 Amp max<br />
+		  Open Drain switches to ground</td>
+    </tr>
+    <tr>
+      <td colspan="2"  class="header">Digital I/O</td>
+     </tr>
+    <tr>
+      <td>GPIO - LVTTL </td>
+      <td>(8) Outputs Source/Sink 12ma<br />
+		  (8) Inputs LVTTL, 3.3V 1µa max</td>
+    </tr>
+  	<tr>
+  	  <td colspan="2" class="header">&plusmn;15V</td>
+     </tr>
+  	<tr>
+      <td>On-board DC-DC Generator</td>
+      <td>2 Watts (70ma each supply)</td>
+    </tr>
+	<tr>
+	  <td colspan="2" class="header">RS232</td>
+     </tr>
+	<tr>
+      <td>Driver/Receiver</td>
+      <td>EIA/TIA-232-F</td>
+    </tr>
+	<tr>
+	  <td colspan="2" class="header">Terminal Strips</td>
+     </tr>
+	<tr>
+      <td>Screw Terminals</td>
+      <td>112 Pluggable Screw Terminals<br />
+		  (7) x 16 pin<br />
+		  5mm pitch </td>
+    </tr>
+	<tr>
+	  <td colspan="2" class="header">Watchdog</td>
+     </tr>
+	<tr>
+      <td>Charge Pump</td>
+      <td>DSP communication enables<br />
+		  (1) Relay Driver, FET Switch 24V @ 1A<br />
+	  </td>
+    </tr>
+	<tr>
+	  <td colspan="2" class="header">Logic Supply</td>
+     </tr>
+	<tr>
+	  <td>Voltage</td>
+	  <td>+5V &plusmn;10%</td>
+     </tr>
+	<tr>
+      <td>Typical Current</td>
+      <td>0.5 A</td>
+    </tr>
+	<tr>
+	  <td colspan="2" class="header">Environment</td>
+     </tr>
+	<tr>
+      <td>Operating Temperature</td>
+      <td>0-40º C</td>
+    </tr>
+	<tr>
+	  <td>Storage Temperature</td>
+	  <td>0-40&ordm; C</td>
+     </tr>
+	<tr>
+	  <td>Humidity</td>
+	  <td>20-90% Relative Humidity, non-condensing</td>
+     </tr>
+	<tr>
+	  <td colspan="2" class="header">Dimensions</td>
+     </tr>
+	<tr>
+      <td>Length</td>
+      <td>8.5 inches (216 mm)</td>
+    </tr>
+	<tr>
+	  <td>Width</td>
+	  <td>7.0 inches (178 mm)</td>
+     </tr>
+	<tr>
+	  <td>Height</td>
+	  <td>0.75 inches (19 mm)</td>
+     </tr>
+	<tr>
+	  <td colspan="2" class="header">Green</td>
+     </tr>
+	<tr>
+      <td>RoHS</td>
+      <td>Compliant</td>
+    </tr>
+  </table>
+  
+<p>&nbsp;</p>
+	</div>
+	
+</body>
+
+</html>

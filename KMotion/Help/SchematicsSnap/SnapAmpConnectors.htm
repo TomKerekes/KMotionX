@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
+
+<meta name="keywords" content="ethernet 16-axis controller, cnc control, motion control, cnc boards, 4-axis, 8-axis, stepper, brushless, DC motor, servo, encoder, adc, dac, motion controller, automated motion, manufacturing, Mach3">
+<meta name="description" content="Manufacturer of premium motion control products for CNC Manufacturing, Robotics and Automation">
+<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+<meta http-equiv="Content-Language" content="en-us">
+
+<title>SnapAmp Connectors</title>
+
+<link rel="stylesheet" type="text/css" href="../css/style.css">
+<link rel="stylesheet" href="../css/prism.css" data-noprefix />
+<script src="../js/prism.js"></script>
+</head>
+
+<body>
+
+<div id="logo"><a href="../index.htm"></a></div>
+
+<div id="home">
+<a href="../index.htm">Table of contents</a> |  
+	<script>
+		if (navigator.userAgent.indexOf("NT 6.2") == -1){
+			document.write('<a href="https://www.dynomotion.com">Dynomotion home page</a>')
+		} else {
+			document.write('<a href="https://www.dynomotion.com" target="_blank">Dynomotion home page</a>')
+		}
+	</script>
+</div>
+	
+<div id="searchNav">
+
+	<div class="gcse-search">
+					<script>
+					  if (document.location.protocol  ==  'https:') {
+					  (function() {
+					  var cx = '012657033059195044748:9fmjmlufts0';
+					  var gcse = document.createElement('script');
+					  gcse.type = 'text/javascript';
+					  gcse.async = true;
+					  gcse.src = (document.location.protocol == 'https:' ? 'https:' : 'http:') +
+					      '//cse.google.com/cse.js?cx=' + cx;
+					  var s = document.getElementsByTagName('script')[0];
+					  s.parentNode.insertBefore(gcse, s);
+					})();
+					  }
+				      </script> 
+				      <gcse:search> </gcse:search>  
+
+	       </div>
+</div>	
+
+	
+
+
+<div id="google_translate_element" style="background: transparent;" align="right"><script type="text/javascript">
+if (navigator.userAgent.indexOf("NT 6.2") == -1) {
+		function googleTranslateElementInit() {
+	  new google.translate.TranslateElement({pageLanguage: 'en', includedLanguages: 'en,de,fr,it,es,pt,ru,uk,ar,zh-CN,zh-TW,ko,iw,hi,ja,tr', layout: google.translate.TranslateElement.InlineLayout.SIMPLE}, 'google_translate_element');
+		}						}
+	</script>
+	<script type="text/javascript" src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit">
+	</script>
+</div>		
+<div id="main">
+
+<h1>SnapAmp - Connector Pinouts</h1>
+
+<p>SnapAmp contains three connectors labeled JP1, JP6, and JP7.</p>
+
+<h2>JP6 - KFLOP/Kogna Communication &amp; Logic Power</h2>
+
+<p>JP6 is a proprietary high-speed communication bus where command and status communication between  KFLOP/Kogna and the SnapAmp Amplifier. Up to two SnapAmps may be attached to a single KFLOP/Kogna. The second of the two SnapAmps must have a configuration jumper installed into JP5.</p>
+
+<p>This connection is required for proper operation of the SnapAmp and should be as short as possible.</p>
+
+<p><img src="JP6.png" width="479" height="202" alt="Connection" /></p>
+
+<p>16 pin ribbon cable connection between SnapAmp and KFLOP/Kogna.</p>
+
+<p>Note: 4 - 40 x 1<sup>3/8</sup> inch standoffs are used between SnapAmp (top) and KFLOP/Kogna (bottom).</p>
+
+<p><img src="SnapToKMotionComm.png" width="442" height="290" alt="Snap To KMotion Comm" /></p>
+
+<p>16 pin ribbon cable connection between Dual SnapAmps and KFLOP/Kogna.</p>
+
+<p>Notes: </p>
+<p>4 - 40 x 1 3/8 inch standoffs are used between SnapAmp and KFLOP/Kogna.</p>
+<p>4 - 40 x 1 5/8 inch standoffs are used between SnapAmps.</p>
+<p>JP5 Jumper installed configures a SnapAmp as the 2nd SnapAmp.</p>
+
+<p><img src="DualBoards.JPG" width="550" height="456" alt="Dual Boards" /></p>
+
+<p>When attaching SnapAmp to  KFLOP/Kogna first attach main ground plug as shown.</p>
+
+<p><img src="GndPlug.JPG" width="300" height="236" alt="Gnd Plug" /></p>
+
+<p><img src="GndConnetion.JPG" width="300" height="199" alt="Gnd Connetion" /></p>
+
+<p>For Dual Snap Amp systems attach the 1:2 spade Y adapter before connecting the first SnapAmp.</p>
+
+<p><img src="DualGndSpades.JPG" width="300" height="197" alt="Dual Gnd Spades" /></p>
+
+<h2>JP7 - I/O - General Purpose LVTTL - OPTO Isolated - Differential - Encoder Inputs</h2>
+
+<p>JP7 Is used for all Digital I/O. Fourteen General Purpose LVTTL I/O, Eight Differential Encoder Inputs, and Eight Optically Isolated Inputs.</p>
+
+<p><img src="JP7.png" width="500" height="196" alt="JP7" /></p>
+<p><img src="Header50Pin.PNG" width="687" height="659" alt="Header 50 Pin" /></p>
+
+<p>Optically isolated input circuit. 5-12V may be applied. Current requirements at 5V is approximately 6ma and at 12V is approximately 20ma. SnapAmp Opto inputs have negative true polarity (energizing the Opto is read as a Logic 0 in KFLOP/Kogna).</p>
+
+<p><img src="OptoCircuit.PNG" width="671" height="213" alt="Opto Circuit" /></p>
+
+<table class="tableMedium">
+	<tr>
+		<th class="col10">Pin</th>
+		<th class="col20">Name</th>
+		<th class="col50">Description</th>
+		<th class="col10">Bit<br />SnapAmp #0</th>
+		<th class="col10">Bit<br />SnapAmp #1</th>
+	</tr>
+	<tr>
+		<td>
+		1</td>
+		<td>
+		GPIO0</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		80</td>
+		<td>
+		112</td>
+	</tr>
+	<tr>
+		<td>
+		2</td>
+		<td>
+		GPIO7</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		87</td>
+		<td>
+		119</td>
+	</tr>
+	<tr>
+		<td>
+		3</td>
+		<td>
+		GPIO1</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		81</td>
+		<td>
+		113</td>
+	</tr>
+	<tr>
+		<td>
+		4</td>
+		<td>
+		GPIO8</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		88</td>
+		<td>
+		120</td>
+	</tr>
+	<tr>
+		<td>
+		5</td>
+		<td>
+		GPIO2</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		82</td>
+		<td>
+		114</td>
+	</tr>
+	<tr>
+		<td>
+		6</td>
+		<td>
+		GPIO9</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		89</td>
+		<td>
+		121</td>
+	</tr>
+	<tr>
+		<td>
+		7</td>
+		<td>
+		GPIO3</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		83</td>
+		<td>
+		115</td>
+	</tr>
+	<tr>
+		<td>
+		8</td>
+		<td>
+		GPIO10</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		90</td>
+		<td>
+		122</td>
+	</tr>
+	<tr>
+		<td>
+		9</td>
+		<td>
+		GPIO4</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		84</td>
+		<td>
+		116</td>
+	</tr>
+	<tr>
+		<td>
+		10</td>
+		<td>
+		GPIO11</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		91</td>
+		<td>
+		123</td>
+	</tr>
+	<tr>
+		<td>
+		11</td>
+		<td>
+		GPIO5</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		85</td>
+		<td>
+		117</td>
+	</tr>
+	<tr>
+		<td>
+		12</td>
+		<td>
+		GPIO12</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		92</td>
+		<td>
+		124</td>
+	</tr>
+	<tr>
+		<td>
+		13</td>
+		<td>
+		GPIO6</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		86</td>
+		<td>
+		118</td>
+	</tr>
+	<tr>
+		<td>
+		14</td>
+		<td>
+		GPIO13</td>
+		<td>
+		Gen Purpose LVTTL</td>
+		<td>
+		93</td>
+		<td>
+		125</td>
+	</tr>
+	<tr>
+		<td>
+		15</td>
+		<td>
+		CHA DIFF PLUS 0</td>
+		<td>
+		Differential Input + Encoder 0 Input Phase A</td>
+		<td>
+		64</td>
+		<td>
+		96</td>
+	</tr>
+	<tr>
+		<td>
+		16</td>
+		<td>
+		CHA DIFF MINUS 0</td>
+		<td>
+		Differential Input - Encoder 0 Input Phase A</td>
+		<td>
+		64</td>
+		<td>
+		96</td>
+	</tr>
+	<tr>
+		<td>
+		17</td>
+		<td>
+		CHB DIFF PLUS 0</td>
+		<td>
+		Differential Input + Encoder 0 Input Phase B</td>
+		<td>
+		65</td>
+		<td>
+		97</td>
+	</tr>
+	<tr>
+		<td>
+		18</td>
+		<td>
+		CHB DIFF MINUS 0</td>
+		<td>
+		Differential Input - Encoder 0 Input Phase B</td>
+		<td>
+		65</td>
+		<td>
+		97</td>
+	</tr>
+	<tr>
+		<td>
+		19</td>
+		<td>
+		CHA DIFF PLUS 1</td>
+		<td>
+		Differential Input + Encoder 1 Input Phase A</td>
+		<td>
+		66</td>
+		<td>
+		98</td>
+	</tr>
+	<tr>
+		<td>
+		20</td>
+		<td>
+		CHA DIFF MINUS 1</td>
+		<td>
+		Differential Input - Encoder 1 Input Phase A</td>
+		<td>
+		66</td>
+		<td>
+		98</td>
+	</tr>
+	<tr>
+		<td>
+		21</td>
+		<td>
+		CHB DIFF PLUS 1</td>
+		<td>
+		Differential Input + Encoder 1 Input Phase B</td>
+		<td>
+		67</td>
+		<td>
+		99</td>
+	</tr>
+	<tr>
+		<td>
+		22</td>
+		<td>
+		CHB DIFF MINUS 1</td>
+		<td>
+		Differential Input - Encoder 1 Input Phase B</td>
+		<td>
+		67</td>
+		<td>
+		99</td>
+	</tr>
+	<tr>
+		<td>
+		23</td>
+		<td>
+		CHA DIFF PLUS 2</td>
+		<td>
+		Differential Input + Encoder 2 Input Phase A</td>
+		<td>
+		68</td>
+		<td>
+		100</td>
+	</tr>
+	<tr>
+		<td>
+		24</td>
+		<td>
+		CHA DIFF MINUS 2</td>
+		<td>
+		Differential Input - Encoder 2 Input Phase A</td>
+		<td>
+		68</td>
+		<td>
+		100</td>
+	</tr>
+	<tr>
+		<td>
+		25</td>
+		<td>
+		CHB DIFF PLUS 2</td>
+		<td>
+		Differential Input + Encoder 2 Input Phase B</td>
+		<td>
+		69</td>
+		<td>
+		101</td>
+	</tr>
+	<tr>
+		<td>
+		26</td>
+		<td>
+		CHB DIFF MINUS 2</td>
+		<td>
+		Differential Input - Encoder 2 Input Phase B</td>
+		<td>
+		69</td>
+		<td>
+		101</td>
+	</tr>
+	<tr>
+		<td>
+		27</td>
+		<td>
+		CHA DIFF PLUS 3</td>
+		<td>
+		Differential Input + Encoder 3 Input Phase A</td>
+		<td>
+		70</td>
+		<td>
+		102</td>
+	</tr>
+	<tr>
+		<td>
+		28</td>
+		<td>
+		CHA DIFF MINUS 3</td>
+		<td>
+		Differential Input - Encoder 3 Input Phase A</td>
+		<td>
+		70</td>
+		<td>
+		102</td>
+	</tr>
+	<tr>
+		<td>
+		29</td>
+		<td>
+		CHB DIFF PLUS 3</td>
+		<td>
+		Differential Input + Encoder 3 Input Phase B</td>
+		<td>
+		71</td>
+		<td>
+		103</td>
+	</tr>
+	<tr>
+		<td>
+		30</td>
+		<td>
+		CHB DIFF MINUS 3</td>
+		<td>
+		Differential Input - Encoder 3 Input Phase B</td>
+		<td>
+		71</td>
+		<td>
+		103</td>
+	</tr>
+	<tr>
+		<td>
+		31</td>
+		<td>
+		OPTO NEG 0</td>
+		<td>
+		Opto Isolated Input 0 Negative Connection</td>
+		<td>
+		72</td>
+		<td>
+		104</td>
+	</tr>
+	<tr>
+		<td>
+		32</td>
+		<td>
+		OPTO POS 0</td>
+		<td>
+		Opto Isolated Input 0 Positive Connection</td>
+		<td>
+		72</td>
+		<td>
+		104</td>
+	</tr>
+	<tr>
+		<td>
+		33</td>
+		<td>
+		OPTO NEG 1</td>
+		<td>
+		Opto Isolated Input 1 Negative Connection</td>
+		<td>
+		73</td>
+		<td>
+		105</td>
+	</tr>
+	<tr>
+		<td>
+		34</td>
+		<td>
+		OPTO POS 1</td>
+		<td>
+		Opto Isolated Input 1 Positive Connection</td>
+		<td>
+		73</td>
+		<td>
+		105</td>
+	</tr>
+	<tr>
+		<td>
+		35</td>
+		<td>
+		OPTO NEG 2</td>
+		<td>
+		Opto Isolated Input 2 Negative Connection</td>
+		<td>
+		74</td>
+		<td>
+		106</td>
+	</tr>
+	<tr>
+		<td>
+		36</td>
+		<td>
+		OPTO POS 2</td>
+		<td>
+		Opto Isolated Input 2 Positive Connection</td>
+		<td>
+		74</td>
+		<td>
+		106</td>
+	</tr>
+	<tr>
+		<td>
+		37</td>
+		<td>
+		OPTO NEG 3</td>
+		<td>
+		Opto Isolated Input 3 Negative Connection</td>
+		<td>
+		75</td>
+		<td>
+		107</td>
+	</tr>
+	<tr>
+		<td>
+		38</td>
+		<td>
+		OPTO POS 3</td>
+		<td>
+		Opto Isolated Input 3 Positive Connection</td>
+		<td>
+		75</td>
+		<td>
+		107</td>
+	</tr>
+	<tr>
+		<td>
+		39</td>
+		<td>
+		OPTO NEG 4</td>
+		<td>
+		Opto Isolated Input 4 Negative Connection</td>
+		<td>
+		76</td>
+		<td>
+		108</td>
+	</tr>
+	<tr>
+		<td>
+		40</td>
+		<td>
+		OPTO POS 4</td>
+		<td>
+		Opto Isolated Input 4 Positive Connection</td>
+		<td>
+		76</td>
+		<td>
+		108</td>
+	</tr>
+	<tr>
+		<td>
+		41</td>
+		<td>
+		OPTO NEG 5</td>
+		<td>
+		Opto Isolated Input 5 Negative Connection</td>
+		<td>
+		77</td>
+		<td>
+		109</td>
+	</tr>
+	<tr>
+		<td>
+		42</td>
+		<td>
+		OPTO POS 5</td>
+		<td>
+		Opto Isolated Input 5 Positive Connection</td>
+		<td>
+		77</td>
+		<td>
+		109</td>
+	</tr>
+	<tr>
+		<td>
+		43</td>
+		<td>
+		OPTO NEG 6</td>
+		<td>
+		Opto Isolated Input 6 Negative Connection</td>
+		<td>
+		78</td>
+		<td>
+		110</td>
+	</tr>
+	<tr>
+		<td>
+		44</td>
+		<td>
+		OPTO POS 6</td>
+		<td>
+		Opto Isolated Input 6 Positive Connection</td>
+		<td>
+		78</td>
+		<td>
+		110</td>
+	</tr>
+	<tr>
+		<td>
+		45</td>
+		<td>
+		OPTO NEG 7</td>
+		<td>
+		Opto Isolated Input 7 Negative Connection</td>
+		<td>
+		79</td>
+		<td>
+		111</td>
+	</tr>
+	<tr>
+		<td>
+		46</td>
+		<td>
+		OPTO POS 7</td>
+		<td>
+		Opto Isolated Input 7 Positive Connection</td>
+		<td>
+		79</td>
+		<td>
+		111</td>
+	</tr>
+	<tr>
+		<td>
+		47</td>
+		<td>
+		VDD5</td>
+		<td>
+		+ 5V Encoder Power Output</td>
+		<td>
+		</td>
+		<td>
+		</td>
+	</tr>
+	<tr>
+		<td>
+		48</td>
+		<td>
+		VDD5</td>
+		<td>
+		+ 5V Encoder Power Output</td>
+		<td>
+		</td>
+		<td>
+		</td>
+	</tr>
+	<tr>
+		<td>
+		49</td>
+		<td>
+		GND</td>
+		<td>
+		Digital Logic Ground</td>
+		<td>
+		</td>
+		<td>
+		</td>
+	</tr>
+	<tr>
+		<td>
+		50</td>
+		<td>
+		GND</td>
+		<td>
+		Digital Logic Ground</td>
+		<td>
+		</td>
+		<td>
+		</td>
+	</tr>
+</table>
+<p>For a single page printable PDF of the above click <a href="SnapAmpPinouts.pdf">here</a>.</p>
+
+<h2>JP1 - Motor/Motor Supply (10-80V) Connector</h2>
+
+<p><img src="JP1.png" width="500" height="296" alt="JP1" /></p>
+
+<table class="tableMedium">
+  <tr>
+    <th class="col10"></th>
+    <th class="col30">Motor type DC -Brush</th>
+    <th class="col30">Motor type - 3 Phase brushless</th>
+    <th class="col30">Motor type - Stepper</th>
+  </tr>
+  <tr>
+    <td><strong>Axis 0</strong></td>
+    <td>Connect Motor across OUT0-OUT1<br />
+	Specify PWM Channel 8</td>
+    <td>
+    Connect Phase A to OUT0<br />
+    Connect Phase B to OUT1<br />
+    Connect Phase C to OUT2<br />
+    Leave OUT3 disconnected<br />
+	Specify PWM Channel 8</td>
+    <td>
+    Connect Coil A across OUT0-OUT1<br />
+    Connect Coil B across OUT2-OUT3<br />
+    Specify PWM Channels 8 and 9</td>
+  </tr>
+  <tr>
+    <td>
+    <p><strong>Axis 1</strong></td>
+    <td>
+    Connect Motor across OUT2-OUT3<br />
+	Specify PWM Channel 9</td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>
+    <strong>Axis 2</strong></td>
+    <td>
+    Connect Motor across OUT4-OUT5<br />
+	Specify PWM Channel 10</td>
+    <td>
+    Connect Phase A to OUT4<br />
+    Connect Phase B to OUT5<br />
+    Connect Phase C to OUT6<br />
+    Leave OUT7 disconnected<br />
+	Specify PWM Channel 10</td>
+    <td>
+    Connect Coil A across OUT4-OUT5<br />
+    Connect Coil B across OUT6-OUT7<br />
+    Specify PWM Channels 10 and 11</td>
+  </tr>
+  <tr>
+    <td>
+    <strong>Axis 3</strong></td>
+    <td>Connect Motor across OUT6-OUT7<br />
+	Specify PWM Channel 11</td>
+    <td></td>
+    <td></td>
+  </tr>
+</table>
+<p>&nbsp;</p>
+	</div>
+</body>
+
+</html>
