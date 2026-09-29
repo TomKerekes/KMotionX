@@ -130,9 +130,15 @@ int reg_classes[NB_REGS] = {
 // reg (pair)
 
 
-#define NoCallArgsPassedOnStack 10
+#define NoCallArgsPassedOnStack 10  // args passed in regs A4,B4..A12,B12
+#define MAX_FUNC_ARGS           16  // args beyond 10 are passed on the
+                                    // stack per the TI convention (packed
+                                    // from the call-time SP+4), so TI and
+                                    // TCC67 compiled code interoperate.
+                                    // Bounded by the ucst5 addressing range
+                                    // of the slot loads in gfunc_call
 int NoOfCurFuncArgs;
-int TranslateStackToReg[NoCallArgsPassedOnStack];
+int TranslateStackToReg[MAX_FUNC_ARGS];
 int ParamLocOnStack[NoCallArgsPassedOnStack];
 int TotalBytesPushedOnStack;
 
@@ -223,7 +229,7 @@ typedef struct GFuncContext {
     int func_call; /* func call type (FUNC_STDCALL or FUNC_CDECL) */
 #if (DO_C67)
     int func_type; /* parameter type (FUNC_NEW or FUNC_OLD or FUNC_ELLIPSIS ... */
-	int args_sizes[NoCallArgsPassedOnStack];
+	int args_sizes[MAX_FUNC_ARGS];
 #endif
 } GFuncContext;
 
@@ -396,6 +402,7 @@ static void gen_modrm(int op_reg, int r, Sym *sym, int c)
 #define C67_B3 107
 #define C67_FP 108
 #define C67_B2 109
+#define C67_A1 110
 #define C67_CREG_ZERO -1 // Special code for no condition reg test
 
 
@@ -423,6 +430,8 @@ int C67_map_regn(int r)
 		return (((r & 0xfffffffc) >> 1) | (r & 1)) + 2;  
 	else if (r==C67_A0)
 		return 0; // set to A0 (offset reg)
+	else if (r==C67_A1)
+		return 1; // set to A1 (shuttle pair partner of A0)
 	else if (r==C67_B2)
 		return 2; // set to B2 (offset reg)
 	else if (r==C67_B3)
@@ -484,9 +493,11 @@ int C67_map_regs(int r)
 	else if (r>=TREG_C67_A4 && r<=TREG_C67_B13)  // these form a pattern of alt pairs
 		return (r & 2) >> 1;  
 	else if (r==C67_A0)
-		return 0; // set to A side 
+		return 0; // set to A side
+	else if (r==C67_A1)
+		return 0; // set to A side
 	else if (r==C67_B2)
-		return 1; // set to B side 
+		return 1; // set to B side
 	else if (r==C67_B3)
 		return 1; // set to B side
 	else if (r==C67_SP)
@@ -704,6 +715,20 @@ void C67_asm(char *s,int a, int b, int c)
 		      (1              << 8) |    //r (LDDW bit 1)
 		      (1              << 7) |    //y D1/D2  B side
 		      (6              << 4) |    //ldst 3=STB, 5=STH 5, 7=STW, 6=LDW 4=LDH 2=LDB 0=LDHU 1=LDBU
+		      (1              << 2) |    //opcode
+		      (C67_map_regs(a)<< 1) |    //side of dst
+		      (0              << 0));    //parallel
+	}
+	else if (strstr(s,"LDDW.D +*")==s)
+	{
+		ALWAYS_ASSERT(c<32);
+		C67_g((C67_map_regn(a)<<23) |    //dst
+			  (C67_map_regn(b)<<18) |    //base reg
+		      (c              <<13) |    //ucst5 (in double words)
+		      (1			  << 9) |    //mode 1 = pos cst offset
+		      (1              << 8) |    //r (LDDW bit 1)
+		      (C67_map_regs(b)<< 7) |    //y D1/D2 base reg side
+		      (6              << 4) |    //ldst 6=LDW (r bit makes it LDDW)
 		      (1              << 2) |    //opcode
 		      (C67_map_regs(a)<< 1) |    //side of dst
 		      (0              << 0));    //parallel
@@ -1655,6 +1680,11 @@ void C67_POP_DW(int r)
 	C67_asm("LDDW.D SP PRE INC",r,0,0);     // LDDW  *++SP,r
 }
 
+void C67_LDDW_PTR_UCST(int r, int r2, int n)
+{
+	C67_asm("LDDW.D +*",r,r2,n);            // LDDW  *+r2[n], r+1:r  (n in DWs)
+}
+
 void C67_CMPLT(int s1, int s2, int dst)
 {
 	C67_asm("CMPLT.L1",s1,s2,dst);     
@@ -1887,6 +1917,48 @@ void C67_SHR(int r, int v)
 
 
 
+#if (DO_C67)
+
+// tcc references function parameters as if on the stack at positive offsets
+// (starting at 8, growing by each parameter's size).  On the C67 the first
+// 10 arrive in registers and the prolog homes them to 8 byte slots at
+// negative offsets (ParamLocOnStack); parameters beyond 10 are placed by
+// the caller per the TI convention: packed at increasing addresses from
+// the call-time SP+4 (= our FP+4) with natural alignment.  Translate a
+// positive tcc offset to the real offset (the +8 bias is applied at use).
+
+int TranslateParamOffset(int fc)
+{
+	int t, i, sz, off, stack_pos = 8;
+
+	for (t = 0; t < NoOfCurFuncArgs; t++)
+	{
+		if (fc == stack_pos) break;
+
+		stack_pos += TranslateStackToReg[t];
+	}
+
+	if (t >= NoOfCurFuncArgs)
+		error("unsupported reference into a parameter (struct parameter? copy it to a local variable first)");
+
+	if (t < NoCallArgsPassedOnStack)
+		return ParamLocOnStack[t] - 8;             // homed register arg
+
+	// TI convention stack arg: packed from FP+4 with natural alignment
+
+	off = 4;
+	for (i = NoCallArgsPassedOnStack; i <= t; i++)
+	{
+		sz = TranslateStackToReg[i];
+		off = (off + sz-1) & ~(sz-1);
+		if (i < t) off += sz;
+	}
+
+	return off - 8;
+}
+
+#endif
+
 /* load 'r' from value 'sv' */
 void load(int r, SValue *sv)
 {
@@ -1944,26 +2016,12 @@ void load(int r, SValue *sv)
 			size=4;
 		}
 
-		// check if fc is a positive reference on the stack, 
+		// check if fc is a positive reference on the stack,
 		// if it is tcc is referencing what it thinks is a parameter
-		// on the stack, so check if it is really in a register.
-
+		// on the stack, so translate to where the parameter really is
 
 		if (v == VT_LOCAL && fc > 0)
-		{
-			int stack_pos=8;
-
-			for (t=0; t<NoCallArgsPassedOnStack; t++)
-			{
-				if (fc==stack_pos) break;
-
-				stack_pos += TranslateStackToReg[t];
-			}
-
-			// param has been pushed on stack, get it like a local var
-
-			fc = ParamLocOnStack[t]-8;
-		}
+			fc = TranslateParamOffset(fc);
 
 		
 		if ((fr & VT_VALMASK) < VT_CONST)  // check for pure indirect of register
@@ -2122,12 +2180,19 @@ void load(int r, SValue *sv)
 			C67_MVKL(r,fc);   //r=reg to load, constant
 			C67_MVKH(r,fc);   //r=reg to load, constant
         } 
-		else if (v == VT_LOCAL) 
+		else if (v == VT_LOCAL)
 		{
+			// taking the ADDRESS of what tcc thinks is a parameter on the
+			// stack - translate exactly as parameter loads/stores do, or
+			// the pointer aims at memory where the parameter never existed
+
+			if (fc > 0)
+				fc = TranslateParamOffset(fc);
+
 			C67_MVKL(r,fc+8);   //r=reg to load, constant C67 stack points to next free
 			C67_MVKH(r,fc+8);   //r=reg to load, constant
 			C67_ADD(C67_FP,r);   // MV v,r   v -> r
-        } 
+        }
 		else if (v == VT_CMP) 
 		{
 			if (C67_invert_test) 
@@ -2230,7 +2295,7 @@ void store(int r, SValue *v)
 {
 #if (DO_C67)
 
-    int fr, bt, ft, fc, size, t, element;
+    int fr, bt, ft, fc, size, element;
 
     ft = v->type.t;
     fc = v->c.ul;
@@ -2279,27 +2344,11 @@ void store(int r, SValue *v)
 		else if ((v->r & VT_VALMASK) == VT_LOCAL) 
 		{
 			// check case of storing to passed argument that
-			// tcc thinks is on the stack but for C67 is
-			// passed as a reg.  However it may have been
-			// saved to the stack, if that reg was required
-			// for a call to a child function
+			// tcc thinks is on the stack - translate to where the
+			// parameter really is
 
 			if (fc > 0)  // argument ??
-			{
-				// walk through sizes and figure which param
-
-				int stack_pos=8;
-
-				for (t=0; t<NoCallArgsPassedOnStack; t++)
-				{
-					if (fc==stack_pos) break;
-
-					stack_pos += TranslateStackToReg[t];
-				}
-
-				// param has been pushed on stack, get it like a local var
-				fc=ParamLocOnStack[t]-8;
-			}
+				fc = TranslateParamOffset(fc);
 
 			if (size==8)
 				element = 4;
@@ -2440,14 +2489,29 @@ void gfunc_param(GFuncContext *c)
         
 		// put the parameter into the corresponding reg (pair)
 
-		if (c->args_count >= 0 && c->args_count < NoCallArgsPassedOnStack)
+		if (c->args_count < NoCallArgsPassedOnStack)
 		{
 			r = gv(RC_C67_A4 << (2 * c->args_count));
 
 			// must put on stack because with 1 pass compiler , no way to tell
 			// if an up coming nested call might overwrite these regs
 
-			C67_PUSH(r);  
+			C67_PUSH(r);
+
+			if (size == 8)
+			{
+				C67_STW_PTR_PRE_INC(r+1, C67_SP, 3);  // STW  r, *+SP[3] (go back and put the other)
+			}
+		}
+		else if (c->args_count < MAX_FUNC_ARGS)
+		{
+			// args beyond the 10 register args: evaluate into any working
+			// reg (even reg pair for doubles) and push; gfunc_call later
+			// copies them into the TI convention stack arg block
+
+			r = gv(size == 8 ? RC_FLOAT : RC_INT);
+
+			C67_PUSH(r);
 
 			if (size == 8)
 			{
@@ -2455,7 +2519,7 @@ void gfunc_param(GFuncContext *c)
 			}
 		}
 		else
-			error("more than 10 function parameters not allowed");
+			error("more than %d function parameters not allowed", MAX_FUNC_ARGS);
 		
 		
 		
@@ -2678,23 +2742,15 @@ void CheckPreserveRegs(int *A2_inuse ,int *A3_inuse,int *B0_inuse,int *B1_inuse)
 }
 
 
-// Now reload any values that we saved before the call 
+// Now reload any values that we saved before the call.
+// NOTE restore must run in REVERSE (LIFO) order of CheckPreserveRegs's
+// pushes: the B side slot was pushed last so it pops first.  (This was
+// historically backwards, swapping the A and B side values whenever both
+// sides were preserved - reachable through the intrinsic divide/modulo
+// helper calls with 3+ live temporaries.)
 
 void CheckRestoreRegs(int A2_inuse, int A3_inuse, int B0_inuse, int B1_inuse)
 {
-	if (A2_inuse && A3_inuse)
-	{
-		C67_POP_DW(TREG_EAX);
-	}
-	else if (A2_inuse)
-	{
-		C67_POP(TREG_EAX);// really A2
-	}
-	else if (A3_inuse)
-	{
-		C67_POP(TREG_ECX);// really A3
-	}
-
 	if (B0_inuse && B1_inuse)
 	{
 		C67_POP_DW(TREG_EDX);// really B0
@@ -2706,6 +2762,19 @@ void CheckRestoreRegs(int A2_inuse, int A3_inuse, int B0_inuse, int B1_inuse)
 	else if (B1_inuse)
 	{
 		C67_POP(TREG_ST0);// really B1
+	}
+
+	if (A2_inuse && A3_inuse)
+	{
+		C67_POP_DW(TREG_EAX);
+	}
+	else if (A2_inuse)
+	{
+		C67_POP(TREG_EAX);// really A2
+	}
+	else if (A3_inuse)
+	{
+		C67_POP(TREG_ECX);// really A3
 	}
 
 
@@ -2724,16 +2793,135 @@ void gfunc_call(GFuncContext *c)
 #if (DO_C67)   
 	int A2_inuse=0,A3_inuse=0,B0_inuse=0,B1_inuse=0;
 
-	int r, i, proto_count, size, loc, stackused=0;;
+	int r, i, proto_count, size, loc, stackused=0, slots_release=0;
 	Sym *sym;
 
 	if (c->args_size && c->func_call == FUNC_CDECL)
     {
 		if (c->args_count > NoCallArgsPassedOnStack)
 		{
-			error("more than 10 function params not currently supported");
-			// handle more than 10, put some on the stack
-			gadd_sp(c->args_size);
+			// More than 10 args: per the TI convention the first 10 go in
+			// registers and the rest are packed on the stack with natural
+			// alignment at increasing addresses from the call-time SP+4.
+			// For a variable argument callee the block instead starts at
+			// the last declared arg (same rule the 10-arg path applies),
+			// so TI compiled functions (printf) and TCC67 functions
+			// interoperate in either direction.
+
+			int first_stack;
+			int pb;
+
+			// a struct return adds an implicit pointer argument the
+			// stack arg accounting doesn't model - reject cleanly
+
+			if ((vtop->type.ref->type.t & VT_BTYPE) == VT_STRUCT)
+				error("more than 10 arguments to a struct returning function not supported");
+
+			if (vtop->type.ref->c == FUNC_ELLIPSIS)
+			{
+				// rule is that last formal param plus var
+				// params go in the stack block
+
+				proto_count=0;
+				sym=vtop->type.ref;
+				while (sym->next)
+				{
+					sym=sym->next;
+					proto_count++;
+				}
+				first_stack = proto_count-1;
+				if (first_stack < 0) first_stack = 0;
+
+				if (first_stack > NoCallArgsPassedOnStack)
+					error("variable argument functions with more than 11 declared parameters not supported");
+			}
+			else
+				first_stack = NoCallArgsPassedOnStack;
+
+			// save any live working regs FIRST so the frame layout below
+			// is fixed (this also frees A3:A2 as a shuttle)
+
+			CheckPreserveRegs(&A2_inuse,&A3_inuse,&B0_inuse,&B1_inuse);
+
+			pb = ((A2_inuse||A3_inuse) ? 8 : 0) + ((B0_inuse||B1_inuse) ? 8 : 0);
+
+			// load the 10 register args straight from their push slots.
+			// LDDW also serves the 4 byte args - the odd partner reg
+			// receives the slot's upper junk word, which is harmless:
+			// TCC67 code never keeps values in A5..B13 and thread
+			// switches save all registers.
+
+			for (i = NoCallArgsPassedOnStack-1; i >= 0; i--)
+				C67_LDDW_PTR_UCST(TREG_C67_A4 + i*2, C67_SP,
+					c->args_count - i + pb/8);
+
+			C67_NOP(4);        // the block stores below may read these regs
+
+			// size the stack arg block (offsets start at 4, natural
+			// alignment per arg, whole block kept double word aligned)
+
+			loc=0;
+			for (i=first_stack; i<c->args_count; i++)
+			{
+				size = c->args_sizes[i];
+				loc = (loc+size-1) & ~(size-1);
+				loc += size;
+			}
+			size = 8;
+			loc = (loc+size-1) & ~(size-1);
+
+			stackused = loc;
+
+			C67_ADDK(-stackused,C67_SP);    //  ADDK.L2 -loc,SP
+
+			// store the stack args into the block: args 1..10 from their
+			// registers, args beyond 10 via the A1:A0 shuttle from their
+			// original push slots.  A1:A0 is safe: the value stack, the
+			// arg regs, and the later function-address load (gv in
+			// gcall_or_jmp) can never occupy those registers.
+
+			loc=4;
+			for (i=first_stack; i<c->args_count; i++)
+			{
+				size = c->args_sizes[i];
+				loc = (loc+size-1) & ~(size-1);
+
+				// the STW *+SP[ucst5] used below reaches 32 words
+
+				if (loc/4 + (size == 8 ? 1 : 0) > 31)
+					error("stack argument block too large - reduce argument count or sizes");
+
+				if (i < NoCallArgsPassedOnStack)
+				{
+					r = TREG_C67_A4+(2 * i);
+
+					C67_STW_PTR_PRE_INC(r, C67_SP, loc/4);
+
+					if (size == 8)
+					{
+						C67_STW_PTR_PRE_INC(r+1, C67_SP, loc/4+1);
+					}
+				}
+				else
+				{
+					C67_LDDW_PTR_UCST(C67_A0, C67_SP,
+						c->args_count - i + (pb + stackused)/8);
+					C67_NOP(5);
+
+					C67_STW_PTR_PRE_INC(C67_A0, C67_SP, loc/4);
+
+					if (size == 8)
+					{
+						C67_STW_PTR_PRE_INC(C67_A1, C67_SP, loc/4+1);
+					}
+				}
+				loc += size;
+			}
+
+			// stackused (the block) is released right after the call;
+			// the original 8 byte arg slots after the preserved regs
+
+			slots_release = 8*c->args_count;
 		}
 		else
 		{
@@ -2826,6 +3014,9 @@ void gfunc_call(GFuncContext *c)
 	}
 	else
 	{
+		if (c->args_count > NoCallArgsPassedOnStack)
+			error("more than 10 arguments only supported for standard (cdecl) calls");
+
 		CheckPreserveRegs(&A2_inuse,&A3_inuse,&B0_inuse,&B1_inuse);
 	}
 
@@ -2838,10 +3029,16 @@ void gfunc_call(GFuncContext *c)
 		C67_ADDK(stackused,C67_SP);    //  ADDK.L2 loc,SP
 	}
 
-	// Now reload any values that we saved before the call 
-	
+	// Now reload any values that we saved before the call
+
 	CheckRestoreRegs(A2_inuse,A3_inuse,B0_inuse,B1_inuse);
 
+	if (slots_release)
+	{
+		// release the original arg slots of a > 10 argument call
+
+		C67_ADDK(slots_release,C67_SP);    //  ADDK.L2 loc,SP
+	}
 
 #else
 
@@ -2897,6 +3094,17 @@ void gfunc_prolog(CType *func_type)
 		// we can translate where tcc thinks they
 		// are on the stack into the appropriate reg
 
+		if (NoOfCurFuncArgs >= MAX_FUNC_ARGS)
+			error("more than %d function parameters not supported", MAX_FUNC_ARGS);
+
+		// a struct return's implicit pointer occupies a register arg
+		// position the beyond-10 overflow convention doesn't model
+
+		if ((func_vt.t & VT_BTYPE) == VT_STRUCT &&
+			NoOfCurFuncArgs >= NoCallArgsPassedOnStack)
+			error("struct returning functions support at most %d parameters",
+				NoCallArgsPassedOnStack-1);
+
 		TranslateStackToReg[NoOfCurFuncArgs] = size;
 		NoOfCurFuncArgs++;
 #endif
@@ -2918,10 +3126,27 @@ void gfunc_prolog(CType *func_type)
 	C67_MV(C67_FP,C67_A0);    //  move FP -> A0
 	C67_MV(C67_SP,C67_FP);    //  move SP -> FP
 
-	// place all the args passed in regs onto the stack
+	// place the args passed in regs (the first 10) onto the stack.  Args
+	// beyond 10 were packed by the caller per the TI convention starting
+	// at our FP+4 - see TranslateParamOffset
+
+	{
+	int nreg = NoOfCurFuncArgs;
+	if (nreg > NoCallArgsPassedOnStack) nreg = NoCallArgsPassedOnStack;
 
 	loc=0;
-	for (int i=0; i<NoOfCurFuncArgs; i++)
+
+	// with params beyond 10 the caller's stack arg block begins at FP+4,
+	// and an 8 byte param 0's upper word would be homed at FP+4 - start
+	// the homes one slot lower so they cannot overwrite the block
+
+	if (NoOfCurFuncArgs > NoCallArgsPassedOnStack)
+	{
+		C67_ADDK(-8,C67_SP);    //  ADDK.L2 -8,SP
+		loc = -8;
+	}
+
+	for (int i=0; i<nreg; i++)
 	{
 
 		ParamLocOnStack[i] = loc;        // remember where the param is
@@ -2933,6 +3158,7 @@ void gfunc_prolog(CType *func_type)
 		{
 			C67_STW_PTR_PRE_INC(TREG_C67_A4 + i*2 + 1, C67_SP, 3);  // STW  r, *+SP[1] (go back and put the other)
 		}
+	}
 	}
 
 	TotalBytesPushedOnStack=-loc;

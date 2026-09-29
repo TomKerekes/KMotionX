@@ -21,7 +21,7 @@
 //#define NTDDI_VERSION NTDDI_WINXP
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 
-#define INCL_WINSOCK_API_PROTOTYPES 1 // tktk
+#define INCL_WINSOCK_API_PROTOTYPES 1 
 
 #include <afxwin.h>         // MFC core and standard components
 #include <afxext.h>         // MFC extensions

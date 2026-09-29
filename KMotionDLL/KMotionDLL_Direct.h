@@ -6,7 +6,7 @@
 
 #pragma once
 
-
+#include "KMotionDLL.h"
 
 enum 
 { 
@@ -38,9 +38,9 @@ enum
 // This class is exported from the KMotionDLL_Direct.dll
 class KMOTIONDLL_API CKMotionDLL_Direct {
 public:
-	CKMotionDLL_Direct(void);
+	CKMotionDLL_Direct();
 
-	void FindKognas();
+	void FindKognas(bool NoInternet);
 
 	int MapBoardToIndex(int board);
 	int SetRequested_ID(int board, unsigned int Board_ID);
@@ -66,5 +66,6 @@ public:
 
 	int nInstances();
 
+	bool operator==(const CKMotionDLL_Direct& other) const;
 };
 

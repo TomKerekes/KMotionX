@@ -50,7 +50,7 @@ public:
 	CMutex *Mutex;
 	int NumberBytesAvailToRead(int *navail, bool ShowMessage);
 	int WriteLineReadLine(const char *send, char *response);
-	bool RequestedDeviceAvail(CStringW *reason);
+	bool RequestedDeviceAvail(CString *reason);
 	int ReadLineTimeOut(char *buf, int TimeOutms);
 	int ReadLineTimeOutRaw(char *buf, int TimeOutms);
 	int SendSocketNonBlock(char* s2, int length);
@@ -65,8 +65,8 @@ public:
 	int FlushInputBufferKogna();
 	CKMotionIO();
 	virtual ~CKMotionIO();
-	SOCKET ConnectToKognaSocket(CStringW *pReason, unsigned long ipAddress, int port);
-	SOCKET TryConnectToSocket(CStringW *pReason, unsigned long ipAddress, int port);
+	SOCKET ConnectToKognaSocket(CString *pReason, unsigned long ipAddress, int port);
+	SOCKET TryConnectToSocket(CString *pReason, unsigned long ipAddress, int port);
 	void TryConnectToSocketThread();
 	int connect_with_timeout(SOCKET sockfd, const sockaddr* addr, socklen_t addrlen, unsigned int timeout_ms);
 	CHiResTimer Timer;
@@ -78,7 +78,7 @@ public:
 	int port;
 
 	bool m_Connected;
-	CStringW ErrMsg;
+	CString ErrMsg;
 
 	CString m_LastCallerID;
 

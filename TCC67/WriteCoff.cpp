@@ -90,7 +90,7 @@ typedef struct
 } AUXEF;
 
 
-int WriteCoff(TCCState *s1, const char *OutFile)
+int WriteCoff(TCCState *s1, const wchar_t *OutFile)
 {
 	FILE *f;
 	Section *tcc_sect;
@@ -101,7 +101,7 @@ int WriteCoff(TCCState *s1, const char *OutFile)
 
 	Section *stext, *sdata, *sbss;
 
-	f = fopen(OutFile,"wb");
+	f = _wfopen(OutFile, L"wb");
 
 	if (!f)
 	{
@@ -773,8 +773,15 @@ void SortSymbolTable(void)
 	int i,j,k,n=0;
 	Elf32_Sym *p,*p2,*NewTable;
 	char *name,*name2;
+	char *Copied;
 
 	NewTable = (Elf32_Sym *)tcc_malloc(nb_syms*sizeof(Elf32_Sym));
+
+	// the same file name may have more than one file symbol (file included
+	// twice, or same name in different folders) so flag which func symbols
+	// have been copied to make sure each is only copied once
+	Copied = (char *)tcc_malloc(nb_syms);
+	memset(Copied, 0, nb_syms);
 
 	p = (Elf32_Sym *)symtab_section->data;
 
@@ -797,7 +804,7 @@ void SortSymbolTable(void)
 
 			for (j=0; j<nb_syms; j++)
 			{
-				if (p2->st_info == 0x12)
+				if (p2->st_info == 0x12 && !Copied[j])
 				{
 					// this is a func symbol
 
@@ -825,6 +832,7 @@ void SortSymbolTable(void)
 						// yes they match copy it over
 
 						NewTable[n++] = *p2;
+						Copied[j] = 1;
 					}
 				}
 				p2++;
@@ -845,6 +853,8 @@ void SortSymbolTable(void)
 		}
 		p++;
 	}
+
+	tcc_free(Copied);
 
 	if (n != nb_syms)
 		error("Internal Compiler error, debug info");

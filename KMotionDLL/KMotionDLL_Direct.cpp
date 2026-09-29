@@ -18,15 +18,27 @@
 #include "HiResTimer.h"
 #include "Ping.h"
 
-
-
 CKMotionDLL_Direct::CKMotionDLL_Direct()
-{ 
+{
+    // Constructor implementation (currently empty)
 }
 
-void CKMotionDLL_Direct::FindKognas(void)
+
+void CKMotionDLL_Direct::FindKognas(bool NoInternet=false)
 {
-	::FindKognas();
+	if (!NoInternet)
+		::FindKognas(); // scan for Kognas on the network
+	else
+	{
+		// Create a mutex with no initial owner
+		KognaListMutex = CreateMutex(
+			NULL,              // default security attributes
+			FALSE,             // initially not owned
+			NULL);             // unnamed mutex
+
+		FirstKognasScanComplete = true;  // force it to be true so we don't wait for the internet
+	}
+
 	::FindKFLOPs();
 }
 
@@ -236,3 +248,5 @@ void CKMotionDLL_Direct::ClearErrMsg(int board)
 {
 	KMotionLocal.KMotionIO[board].ErrMsg="";
 }
+
+

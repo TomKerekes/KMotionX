@@ -483,7 +483,7 @@ static void tcc_assemble_inline(TCCState *s1, char *str, int len)
     str[len] = CH_EOB;
     /* same name as current file so that errors are correctly
        reported */
-    pstrcpy(bf->filename, sizeof(bf->filename), file->filename);
+    pwstrcpy(bf->filename, sizeof(bf->filename), file->filename);
     bf->line_num = file->line_num;
     saved_file = file;
     file = bf;

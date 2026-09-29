@@ -20,10 +20,10 @@ void tcc_set_error_func(TCCState *s, void *error_opaque,
 /* preprocessor */
 
 /* add include path */
-int tcc_add_include_path(TCCState *s, const char *pathname);
+int tcc_add_include_path(TCCState *s, const wchar_t *pathname);
 
 /* add in system include path */
-int tcc_add_sysinclude_path(TCCState *s, const char *pathname);
+int tcc_add_sysinclude_path(TCCState *s, const wchar_t *pathname);
 
 /* define preprocessor symbol 'sym'. Can put optional value */
 void tcc_define_symbol(TCCState *s, const char *sym, const char *value);
@@ -36,7 +36,7 @@ void tcc_undefine_symbol(TCCState *s, const char *sym);
 
 /* add a file (either a C file, dll, an object, a library or an ld
    script). Return -1 if error. */
-int tcc_add_file(TCCState *s, const char *filename);
+int tcc_add_file(TCCState *s, const wchar_t *filename);
 
 /* compile a string containing a C source. Return non zero if
    error. */
@@ -54,21 +54,21 @@ int tcc_compile_string(TCCState *s, const char *buf);
 int tcc_set_output_type(TCCState *s, int output_type);
 
 /* equivalent to -Lpath option */
-int tcc_add_library_path(TCCState *s, const char *pathname);
+int tcc_add_library_path(TCCState *s, const wchar_t *pathname);
 
 /* the library name is the same as the argument of the '-l' option */
-int tcc_add_library(TCCState *s, const char *libraryname);
+int tcc_add_library(TCCState *s, const wchar_t *libraryname);
 
 /* add a symbol to the compiled program */
 int tcc_add_symbol(TCCState *s, const char *name, unsigned long val);
 
 /* output an executable, library or object file. DO NOT call
    tcc_relocate() before. */
-int tcc_output_file(TCCState *s, const char *filename);
+int tcc_output_file(TCCState *s, const wchar_t *filename);
 
 /* link and run main() function and return its value. DO NOT call
    tcc_relocate() before. */
-int tcc_run(TCCState *s, int argc, char **argv);
+int tcc_run(TCCState *s, int argc, wchar_t **argv);
 
 /* do all relocations (needed before using tcc_get_symbol()). Return
    non zero if link error. */
