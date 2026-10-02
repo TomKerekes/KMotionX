@@ -681,6 +681,7 @@ void WebController::SetMotionParams(const char *buf, size_t len) {
   //p->RadiusC = m_RadiusC;
 
   char path[64];
+  bool axisDefined[6] = {false, false, false, false, false, false};  // X Y Z A B C have countsPerUnit
   for(int i= 0;i<6;i++){
 
     snprintf(path, 64, "axes[%i]",i);
@@ -691,6 +692,11 @@ void WebController::SetMotionParams(const char *buf, size_t len) {
       json_double(token,"countsPerUnit",&countsPerUnit);
       json_double(token,"maxAccel",&maxAccel);
       json_double(token,"maxVel",&maxVel);
+      if (countsPerUnit > 0.0 && name[0] >= 'A' && name[0] <= 'Z') {
+        const char *letters = "XYZABC";
+        const char *l = strchr(letters, name[0]);
+        if (l) axisDefined[l - letters] = true;
+      }
 
       // default values form KMotionCNCDlg.c
       maxAccel = maxAccel == 0.0?0.01:maxAccel;
@@ -736,6 +742,71 @@ void WebController::SetMotionParams(const char *buf, size_t len) {
 
   }
   free(name);
+
+  // KMotion 5.5.1: the 3rd Order (jerk limited) planner and limits per actuator
+  bool thirdOrder = false, cubicKnots = false, actuatorLimits = false, logSegments = false;
+  json_bool(jsontoken, "tplanner.thirdOrder", &thirdOrder);
+  json_bool(jsontoken, "tplanner.cubicKnots", &cubicKnots);
+  json_bool(jsontoken, "tplanner.actuatorLimits", &actuatorLimits);
+  json_bool(jsontoken, "tplanner.logSegments", &logSegments);
+
+  // actuators[i]: scale counts/unit, maxVel, maxAccel, maxJerk in actuator units
+  // (inches, or degrees when degrees is set) and seconds, like the axes
+  for (int i = 0; i < MAX_TP_ACTUATORS; i++) {
+    double scale = 0.0, vel = 0.0, accel = 0.0, jerk = 0.0;
+    bool degrees = false;
+    snprintf(path, 64, "actuators[%i]", i);
+    token = find_json_token(jsontoken, path);
+    if (token) {
+      json_double(token, "scale", &scale);
+      json_double(token, "maxVel", &vel);
+      json_double(token, "maxAccel", &accel);
+      json_double(token, "maxJerk", &jerk);
+      json_bool(token, "degrees", &degrees);
+    }
+    p->ActScale[i] = scale;
+    p->MaxActVel[i] = vel;
+    p->MaxActAccel[i] = accel;
+    p->MaxActJerk[i] = jerk;
+    p->ActDegrees[i] = degrees;
+  }
+
+  // The planner divides by these, so an incomplete table falls back to the CAD-axis limits.
+  // Without actuator limits the 3rd order planner would run with the library's default jerk,
+  // because this settings file has no jerk per CAD axis
+  CString problem;
+  if (actuatorLimits) {
+    for (int i = 0; i < MAX_TP_ACTUATORS; i++) {
+      bool used = p->ActScale[i] != 0.0 || p->MaxActVel[i] != 0.0 || p->MaxActAccel[i] != 0.0 || p->MaxActJerk[i] != 0.0;
+      if (i < 6 && axisDefined[i]) used = true;
+      if (!used) continue;
+      if (p->ActScale[i] <= 0.0 || p->MaxActVel[i] <= 0.0 || p->MaxActAccel[i] <= 0.0 || (thirdOrder && p->MaxActJerk[i] <= 0.0)) {
+        CString one;
+        one.Format("%s%d", problem.IsEmpty() ? "" : ", ", i);
+        problem += one;
+      }
+    }
+    if (!problem.IsEmpty()) {
+      problem = CString("Actuator Limits: slot ") + problem + (thirdOrder ? " needs Scale, Vel, Accel and Jerk. " : " needs Scale, Vel and Accel. ") + "Using the axis limits instead";
+      actuatorLimits = false;
+    }
+  }
+  if (thirdOrder && !actuatorLimits) {
+    if (!problem.IsEmpty()) problem += ". ";
+    problem += "3rd Order Planner needs Actuator Space Limits here. Using the standard planner";
+    thirdOrder = false;
+  }
+  if (!problem.IsEmpty()) {
+    log_info("%s", (const char*)problem);
+    OnErrorMessageCallback(problem);
+  }
+  p->ThirdOrderTP = thirdOrder;
+  p->CubicKnots = thirdOrder && cubicKnots;
+  p->ActuatorLimits = actuatorLimits;
+  p->LogSegments = logSegments;
+  log_info("Trajectory planner: %s%s%s%s", thirdOrder ? "3rd order" : "standard", p->CubicKnots ? ", cubic knots" : "",
+           actuatorLimits ? ", actuator limits" : ", axis limits", logSegments ? ", logging" : "");
+
   //M2-M9,S index 2-9
   //userButtons index 11-20
   //M100-M119 index 21 -39
