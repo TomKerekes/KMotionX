@@ -40,7 +40,7 @@ class KMOTIONDLL_API CKMotionDLL_Direct {
 public:
 	CKMotionDLL_Direct();
 
-	void FindKognas(bool NoInternet);
+	void FindKognas(bool NoInternet = false);
 
 	int MapBoardToIndex(int board);
 	int SetRequested_ID(int board, unsigned int Board_ID);

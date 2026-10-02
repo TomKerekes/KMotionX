@@ -67,9 +67,9 @@ public:
 	int IntersectionTwoCircles(CPT2D c0, double r0, CPT2D c1, double r1, CPT2D *q);
 
 	virtual int ReadGeoTable(const TCHAR *name);
-	int CKinematics::ReadLinearTable(int i, const TCHAR* name, bool* valid);
+	int ReadLinearTable(int i, const TCHAR* name, bool* valid);
 	virtual int GeoCorrect(double x, double y, double z, double *cx, double *cy, double *cz);
-	virtual int CKinematics::LinearCorrect(double x, double* cx, int ia);
+	virtual int LinearCorrect(double x, double* cx, int ia);
 	virtual int GetSoftLimits(double *xm, double *xp, double *ym, double *yp, double *zm, double *zp,
 		double *am, double *ap, double *bm, double *bp, double *cm, double *cp, double *um, double *up, double *vm, double *vp) {
 		return 0;

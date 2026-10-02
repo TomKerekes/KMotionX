@@ -24,7 +24,7 @@ CKMotionDLL_Direct::CKMotionDLL_Direct()
 }
 
 
-void CKMotionDLL_Direct::FindKognas(bool NoInternet=false)
+void CKMotionDLL_Direct::FindKognas(bool NoInternet)
 {
 	if (!NoInternet)
 		::FindKognas(); // scan for Kognas on the network

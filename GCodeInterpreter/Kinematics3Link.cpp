@@ -58,7 +58,7 @@
 //
 //////////////////////////////////////////////////////////////////////
 
-#include "stdafx.h"
+#include "StdAfx.h"
 #include "Kinematics3Link.h"
 
 #define sqr(x) ((x)*(x))
