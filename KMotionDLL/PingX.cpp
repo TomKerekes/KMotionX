@@ -38,6 +38,139 @@ bool volatile FirstKognasScanComplete = false;
 
 uint8_t nKFLOPs = 0;
 KFLOP_INFO KFLOPs[MAX_KFLOPS]; // KFLOP Online list
+#ifdef _KMOTIONX
+// Kogna discovery, as KMotion.exe does it: ask "Kogna?" on the multicast group 239.81.92.240,
+// port 25000, from every network adapter; each Kogna answers "I am Kogna SNnnn" (64 bytes) to
+// port 25001 of the asking address. A background thread repeats the scan and keeps Kognas[]
+// (IPs in host order) up to date under KognaListMutex. KMX_KOGNA_IP=a.b.c.d[,e.f.g.h] names
+// Kognas that multicast can't reach.
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <sys/time.h>
+
+static int AddKogna(KOGNA_INFO *found, int nfound, unsigned long ip, unsigned long adapter, int serial)
+{
+    for (int k = 0; k < nfound; k++)
+        if (found[k].KognaIP == ip) return nfound;  // the same board can answer on more than one adapter
+    if (nfound >= MAX_KOGNAS) return nfound;
+    found[nfound].KognaIP = ip;
+    found[nfound].AdapterIP = adapter;
+    found[nfound].KognaSerialNumber = serial;
+    return nfound + 1;
+}
+
+// adapterIP in network order; returns the new count
+static int QueryKognasOn(unsigned long adapterIP, KOGNA_INFO *found, int nfound)
+{
+    struct sockaddr_in me, to, from;
+    socklen_t fromlen;
+    char buf[64];
+    int one = 1;
+    unsigned char ttl = 8;
+    struct timeval tv = {0, 500000};  // the replies come within a few ms
+
+    int rx = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (rx < 0) return nfound;
+    setsockopt(rx, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(rx, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    memset(&me, 0, sizeof me);
+    me.sin_family = AF_INET;
+    me.sin_port = htons(25001);
+    me.sin_addr.s_addr = adapterIP;
+    if (bind(rx, (struct sockaddr *)&me, sizeof me) < 0) { close(rx); return nfound; }
+
+    int tx = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (tx < 0) { close(rx); return nfound; }
+    struct in_addr ifaddr;
+    ifaddr.s_addr = adapterIP;
+    setsockopt(tx, IPPROTO_IP, IP_MULTICAST_IF, &ifaddr, sizeof ifaddr);
+    setsockopt(tx, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof ttl);
+    memset(&to, 0, sizeof to);
+    to.sin_family = AF_INET;
+    to.sin_port = htons(25000);
+    inet_pton(AF_INET, "239.81.92.240", &to.sin_addr);
+    memset(buf, 0, sizeof buf);
+    strcpy(buf, "Kogna?");
+    sendto(tx, buf, sizeof buf, 0, (struct sockaddr *)&to, sizeof to);
+    close(tx);
+
+    for (;;)
+    {
+        fromlen = sizeof from;
+        int n = recvfrom(rx, buf, sizeof buf, 0, (struct sockaddr *)&from, &fromlen);
+        if (n < 0) break;  // timeout: no more answers
+        int serial;
+        if (n == 64 && strncmp(buf, "I am Kogna SN", 13) == 0 && sscanf(buf + 13, "%d", &serial) == 1)
+            nfound = AddKogna(found, nfound, ntohl(from.sin_addr.s_addr), ntohl(adapterIP), serial);
+    }
+    close(rx);
+    return nfound;
+}
+
+static int ScanKognasOnce(KOGNA_INFO *found)
+{
+    int nfound = 0;
+    struct ifaddrs *ifs = NULL;
+    if (getifaddrs(&ifs) == 0)
+    {
+        for (struct ifaddrs *i = ifs; i; i = i->ifa_next)
+        {
+            if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
+            if (!(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK) || !(i->ifa_flags & IFF_MULTICAST)) continue;
+            nfound = QueryKognasOn(((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr, found, nfound);
+        }
+        freeifaddrs(ifs);
+    }
+    const char *env = getenv("KMX_KOGNA_IP");
+    if (env)
+    {
+        char list[256];
+        strncpy(list, env, sizeof list - 1);
+        list[sizeof list - 1] = 0;
+        for (char *p = strtok(list, ", "); p; p = strtok(NULL, ", "))
+        {
+            struct in_addr a;
+            if (inet_pton(AF_INET, p, &a) == 1)
+                nfound = AddKogna(found, nfound, ntohl(a.s_addr), 0, 0);
+        }
+    }
+    return nfound;
+}
+
+static void *KognaScanThread(void *)
+{
+    KOGNA_INFO found[MAX_KOGNAS];
+    bool first = true;
+    for (;;)
+    {
+        int n = ScanKognasOnce(found);
+        pthread_mutex_lock(KognaListMutex);
+        bool changed = first || n != nKognas;
+        for (int i = 0; !changed && i < n; i++)
+            changed = found[i].KognaIP != Kognas[i].KognaIP;
+        memcpy(Kognas, found, n * sizeof(KOGNA_INFO));
+        nKognas = n;
+        pthread_mutex_unlock(KognaListMutex);
+        FirstKognasScanComplete = true;
+        if (changed)
+        {
+            if (n == 0) log_info("No Kogna found on the network");
+            for (int i = 0; i < n; i++)
+            {
+                unsigned long ip = found[i].KognaIP;
+                log_info("Kogna SN%d at %lu.%lu.%lu.%lu", found[i].KognaSerialNumber, (ip >> 24) & 255, (ip >> 16) & 255, (ip >> 8) & 255, ip & 255);
+            }
+        }
+        first = false;
+        sleep(10);
+    }
+    return NULL;
+}
+#endif
+
 int FindKognas()
 {
     // Create a mutex with no initial owner
@@ -45,6 +178,20 @@ int FindKognas()
     memset(KognaListMutex, 0, sizeof(pthread_mutex_t));
     // Initialize the mutex
     pthread_mutex_init(KognaListMutex, NULL);
+#ifdef _KMOTIONX
+    // scan for Kognas in the background, like FindKFLOPs does for the USB boards
+    pthread_t thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&thread, &attr, KognaScanThread, NULL))
+    {
+        FirstKognasScanComplete = true;  // nothing to wait for
+        pthread_attr_destroy(&attr);
+        return -1;
+    }
+    pthread_attr_destroy(&attr);
+#endif
     return 0;
 }
 int FindKFLOPs()

@@ -408,7 +408,7 @@ namespace kmx
 	{
 		if (BoardType == BOARD_TYPE_KOGNA)
 		{
-			snprintf(OutFile, MAX_PATH, "%s%cDSPKOGNA%cDSPKOGNA.out", getInstallPath(), PATH_SEPARATOR, PATH_SEPARATOR);
+			snprintf(OutFile, MAX_PATH, "%s%cDSP_KOGNA%cDSPKOGNA.out", getInstallPath(), PATH_SEPARATOR, PATH_SEPARATOR);
 		}
 		else
 		{

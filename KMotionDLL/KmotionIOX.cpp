@@ -33,6 +33,10 @@ either expressed or implied, of the FreeBSD Project.
 #include <stdlib.h>
 #include <ftdi.h>
 #include "Ping.h"
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <poll.h>
 
 int _ftdi_usb_close(ftdi_context *ftdi){
 #ifdef __APPLE__
@@ -159,6 +163,49 @@ SOCKET CKMotionIO::ConnectToKognaSocket(CString* pReason, unsigned long ipAddres
 		}
 		ReleaseMutex(KognaListMutex);
 	}
+#else
+	// Check if User has specified a specific Board
+	// 0x00000000 = 0 = any board found
+	// 0x00XXXXXX = High byte 0 assume USB Address
+	// 0xFF000XXX = High Byte 255 low 2 bytes = Serial Number = Domain KognaXXXX
+	// 0x01000000 - 0xDFFFFFFF assume static IP Address if high byte >= 1 and < 224
+
+	if (ipAddress >= 0x01000000 && ipAddress <= 0xDFFFFFFF) // Static ip address?
+	{
+		SOCKET s = TryConnectToSocket(pReason, ipAddress, port);  // Try it
+		if (s) Actual_ID = ipAddress;
+		return s;
+	}
+
+	if (ipAddress == 0 ||									  // use any Board found
+		(ipAddress >= 0xFF000000 && ipAddress <= 0xFF000FFF)) // or use Kogna Serial Number?
+	{
+		// wait for the first complete scan for Kognas so Apps expecting to connect on the first
+		// try succeed. The scan runs in KMotionServer (FindKognas); without it don't wait forever
+		CHiResTimer Timer;
+		Timer.Start();
+		while (!FirstKognasScanComplete && Timer.Elapsed_Seconds() < 5.0)
+			Sleep(1);
+
+		if (KognaListMutex == NULL || pthread_mutex_lock(KognaListMutex) != 0) return 0;
+
+		for (int i = 0; i < nKognas; i++)
+		{
+			if (ipAddress == 0 || Kognas[i].KognaSerialNumber == (int)(ipAddress & 0xFFF))
+			{
+				ipAddress = Kognas[i].KognaIP;
+				SOCKET s = TryConnectToSocket(pReason, ipAddress, port);
+
+				if (s)
+				{
+					pthread_mutex_unlock(KognaListMutex);
+					Actual_ID = ipAddress;
+					return s;
+				}
+			}
+		}
+		pthread_mutex_unlock(KognaListMutex);
+	}
 #endif
 	return NULL;
 }
@@ -220,6 +267,25 @@ SOCKET CKMotionIO::TryConnectToSocket(CString* pReason, unsigned long ipAddress,
 		}
 	}
 	while (true);
+#else
+	// connect_with_timeout gives up after timeout_ms, so no worker thread is needed here
+	SOCKET s = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (s < 0) return 0;
+
+	sockaddr_in clientService;
+	memset(&clientService, 0, sizeof(clientService));
+	clientService.sin_family = AF_INET;
+	clientService.sin_addr.s_addr = htonl(ipAddress);
+	clientService.sin_port = htons(port);
+
+	if (connect_with_timeout(s, (const sockaddr*)&clientService, sizeof(clientService), 500) < 0)
+	{
+		close(s);
+		return 0;
+	}
+	int one = 1;  // the protocol is short request/response lines: send them right away
+	setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+	return s;
 #endif	
 	return NULL;
 }
@@ -321,8 +387,53 @@ int CKMotionIO::connect_with_timeout(SOCKET sockfd, const struct sockaddr* addr,
 //	if (fcntl(sockfd, F_SETFL, sockfd_flags_before) < 0) return -1;
 	// Success
 	return rc;
+#else
+	int rc = 0;
+
+	// Set O_NONBLOCK (and leave it set: the connection is used non-blocking)
+	int flags = fcntl(sockfd, F_GETFL, 0);
+	if (flags < 0 || fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) < 0) return -1;
+
+	// Start connecting (asynchronously)
+	if (connect(sockfd, addr, addrlen) < 0)
+	{
+		// Did connect return an error? If so, we'll fail.
+		if (errno != EINPROGRESS && errno != EWOULDBLOCK)
+		{
+			rc = -1;
+		}
+		// Otherwise, we'll wait for it to complete.
+		else
+		{
+			CHiResTimer Timer;
+			Timer.Start();
+
+			// Wait for the connection to complete (or for the timeout deadline)
+			do {
+				if (Timer.Elapsed_Seconds() > timeout_ms * 0.001)
+				{
+					rc = -1;
+					break;
+				}
+
+				struct pollfd PollConnect[1];
+				PollConnect->fd = sockfd;
+				PollConnect->events = POLLOUT;
+
+				int n = poll(PollConnect, 1, 100);
+				if (n > 0)  // connected or failed
+				{
+					int error = 0; socklen_t len = sizeof(error);
+					if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) rc = -1;
+					break;
+				}
+			}
+			// If poll was interrupted or timed out, try again.
+			while (1);
+		}
+	}
+	return rc;
 #endif
-return 0;
 }
 
 
@@ -338,17 +449,17 @@ bool CKMotionIO::RequestedDeviceAvail(CString *Reason)
 
 	if (TryKogna)
 	{
-		// if (ConnectSocket)
-		// {
-		// 	Mutex->Unlock();
-		// 	return true;
-		// }
-		// ConnectSocket = ConnectToKognaSocket(Reason, Requested_ID, port);
-		// if (ConnectSocket != NULL)
-		// {
-		// 	Mutex->Unlock();
-		// 	return true;
-		// }
+		if (ConnectSocket)
+		{
+			Mutex->Unlock();
+			return true;
+		}
+		ConnectSocket = ConnectToKognaSocket(Reason, Requested_ID, port);
+		if (ConnectSocket != NULL)
+		{
+			Mutex->Unlock();
+			return true;
+		}
 	}
 	
 	if (TryKFLOP) 
@@ -455,11 +566,11 @@ int CKMotionIO::Connect()
 
 
 Timer.Start();
-#ifndef _KMOTIONX
 	if((unsigned int)Actual_ID > MAX_USB_ID)
 	{
 		// Set Socket to non-blocking mode
 		// Set socket to blocking mode
+#ifndef _KMOTIONX
 		unsigned long ul = 1;  // 0=Nonblocking mode disabled
 		int nRet = ioctlsocket(ConnectSocket, FIONBIO, (unsigned long*)&ul);
 		if (nRet == SOCKET_ERROR)
@@ -469,6 +580,16 @@ Timer.Start();
 			Mutex->Unlock();
 			return 1;
 		}
+#else
+		int flags = fcntl(ConnectSocket, F_GETFL, 0);
+		if (flags < 0 || fcntl(ConnectSocket, F_SETFL, flags | O_NONBLOCK) < 0)
+		{
+			close(ConnectSocket);
+			ConnectSocket = 0;
+			Mutex->Unlock();
+			return 1;
+		}
+#endif
 
 		m_Connected=true;  // All set
 
@@ -481,7 +602,6 @@ Timer.Start();
 		Mutex->Unlock();
 		return 0;
 	}
-#endif
 
 	
 	#define TIME_TO_TRY_TO_OPEN 3.0
@@ -586,7 +706,6 @@ Timer.Start();
 #define CONNECT_TIMEOUT 1.0
 int CKMotionIO::FlushInputBufferKogna()
 {
-#ifndef _KMOTIONX
 	char s[2560];
 	CHiResTimer Timer;
 
@@ -611,7 +730,6 @@ int CKMotionIO::FlushInputBufferKogna()
 				return 1;
 		} while ((s[0] != 0x1b || s[1] != 'C' || s[2] != '\r' || s[3] != '\n' || s[4] != 0));
 	}
-#endif
 	// OK looks like we are in sync
 	return 0;
 }
@@ -680,45 +798,32 @@ int CKMotionIO::ReadBytesAvailable(char *RxBuffer, int maxbytes, uint32_t *Bytes
 	Mutex->Lock();
 	if((unsigned int)Actual_ID > MAX_USB_ID)
 	{
-		/*
+		int Offset = 0;
 		int nRet = 0;
 
 		do  // loop until no more data available or buffer full
 		{
-			nRet = recv(ConnectSocket, RxBuffer + Offset, maxbytes - Offset - 1, 0);
-			if(nRet != SOCKET_ERROR)
+			nRet = recv(ConnectSocket, RxBuffer + Offset, maxbytes - Offset - 1, 0);  // non blocking call
+			if (nRet > 0)
 			{
 				Offset += nRet;
 			}
-			if(Offset >= maxbytes - 1)
+			else if (nRet == 0 || (errno != EWOULDBLOCK && errno != EAGAIN))
 			{
-				Offset = maxbytes - 1;
-				break;
-			}
-			if (nRet == SOCKET_ERROR)
-			{
-				int error = WSAGetLastError();
-				if (error == WSAEWOULDBLOCK)
-				{
-					nRet = 0;
-				}
-				else
-				{
-					wchar_t ErrMsg[1024];
-					_swprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
-					ErrorMessageBox(ErrMsg);
-					closesocket(ConnectSocket);
-					ConnectSocket = NULL;
-					Failed();
-					Mutex->Unlock();
-					return 1;
-				}
+				// 0 bytes from a non blocking socket means the Kogna closed the connection
+				CString ErrMsg;
+				ErrMsg.Format(Translate("SOCKET ERROR: %d"), nRet == 0 ? ECONNRESET : errno);
+				ErrorMessageBox(ErrMsg.c_str());
+				close(ConnectSocket);
+				ConnectSocket = 0;
+				Failed();
+				Mutex->Unlock();
+				return 1;
 			}
 		}
 		while (nRet > 0 && maxbytes - Offset - 1 > 0);
 		RxBuffer[Offset] = 0;
 		*BytesReceived = Offset;
-		*/
 	}
 	else
 	{
@@ -1090,6 +1195,49 @@ int CKMotionIO::SendSocketNonBlock(char *s2, int length)
 		}
 
 	} while (true);
+#else
+	CHiResTimer Timer;
+	bool waitingForProgress = false;
+
+	do
+	{
+		// non blocking call. MSG_NOSIGNAL: a closed connection must not SIGPIPE the server
+		int BytesWritten = send(ConnectSocket, s2, length, MSG_NOSIGNAL);
+		int error = BytesWritten < 0 ? errno : 0;
+		if (BytesWritten == 0 && length > 0) error = ECONNRESET;
+
+		if (error == EWOULDBLOCK || error == EAGAIN)
+		{
+			// the Kogna isn't taking data: wait for progress, but not forever
+			if (!waitingForProgress)
+			{
+				Timer.Start();
+				waitingForProgress = true;
+			}
+			if (Timer.Elapsed_Seconds() < 20.0)
+			{
+				Sleep(1);
+				continue;
+			}
+			error = ETIMEDOUT;
+		}
+
+		if (error)
+		{
+			CString ErrMsg;
+			ErrMsg.Format(Translate("SOCKET ERROR: %d"), error);
+			ErrorMessageBox(ErrMsg.c_str());
+			close(ConnectSocket);
+			ConnectSocket = 0;
+			Failed();
+			Mutex->Unlock();
+			return 1;
+		}
+
+		waitingForProgress = false;
+		length -= BytesWritten;
+		s2 += BytesWritten;
+	} while (length > 0);
 #endif	
 	return 0;
 }
@@ -1298,7 +1446,7 @@ int CKMotionIO::Failed()
 	
 	if(ConnectSocket)
 	{
-		//closesocket(ConnectSocket);
+		close(ConnectSocket);
 		ConnectSocket = NULL;
 	}
     if(_ftdi_usb_close(ftdi) < 0)

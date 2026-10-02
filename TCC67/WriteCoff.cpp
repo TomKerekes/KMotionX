@@ -983,6 +983,124 @@ Section* FindSection(TCCState *s1, const char *sname)
 
 
 
+int ReadSymbols(TCCState *s1, const char *InFile)
+{
+	FILE *f;
+	int v;
+	char s[100];
+	
+	f = fopen(InFile, "rt");
+
+	if (!f)	error("Unable to open .sym file for input");
+
+	// skip until we find the start
+
+	while (!feof(f))
+	{
+		fgets(s, 99, f);
+
+		if (strlen(s) > 11)
+		{
+			if (s[9] == 'T' || s[9] == 'B')
+			{
+				int n = sscanf(s, "%x", &v);
+
+				if (n==1) tcc_add_symbol(s1, s+11, v);
+			}
+		}
+	}
+	return 0;
+}
+
+
+int ReadElf(TCCState *s1, const char *InFile)
+{
+	FILE *f;
+	int i;
+	unsigned int VersionAddress = 0;
+	Elf32_Ehdr file_hdr;                   /* FILE HEADER STRUCTURE              */
+	Elf32_Shdr sect_hdr, const_hdr, symbol_hdr, strtab_hdr;
+
+	f = fopen(InFile, "rb");
+	
+	if (!f) return 1;
+
+	if (fread(&file_hdr, sizeof(file_hdr), 1, f) != 1) return 1;
+
+	// find the offset to the string table
+	// read in the String section header
+	if (fseek(f, file_hdr.e_shoff + file_hdr.e_shstrndx * file_hdr.e_shentsize, SEEK_SET)) return 1;
+	if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) return 1;
+
+	int HeaderStringsOffset = sect_hdr.sh_offset;
+	int HeaderStringTableSize = sect_hdr.sh_size;
+
+	char *HeaderStringTable = (char *)malloc(HeaderStringTableSize + 1);
+	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  return 1; }
+	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable;  return 1; }
+
+	//find 3 section headers
+	const_hdr.sh_name = strtab_hdr.sh_name = symbol_hdr.sh_name = 0;
+
+	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) return 1;  // seek to section headers
+	for (i = 0; i < file_hdr.e_shnum; i++)
+	{
+		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  return 1; }
+
+		if (strcmp(HeaderStringTable + sect_hdr.sh_name, ".const") == 0)
+			const_hdr = sect_hdr;
+		else if (strcmp(HeaderStringTable + sect_hdr.sh_name, ".strtab") == 0)
+			strtab_hdr = sect_hdr;
+		else if (strcmp(HeaderStringTable + sect_hdr.sh_name, ".symtab") == 0)
+			symbol_hdr = sect_hdr;
+
+		if (const_hdr.sh_name != 0 && strtab_hdr.sh_name != 0 && symbol_hdr.sh_name != 0) break;
+	}
+
+	delete HeaderStringTable;
+
+	if (i == file_hdr.e_shnum) return 1;
+
+	// Read in main String table
+	int StringsOffset = strtab_hdr.sh_offset;
+	int StringTableSize = strtab_hdr.sh_size;
+
+	char *StringTable = (char *)malloc(StringTableSize + 1);
+	if (fseek(f, StringsOffset, SEEK_SET)) { delete StringTable;  return 1; }
+	if (fread(StringTable, StringTableSize, 1, f) != 1) { delete StringTable;  return 1; }
+
+	// read in all symbols
+	Elf32_Sym *Syms = (Elf32_Sym *)malloc(symbol_hdr.sh_size * sizeof(Elf32_Sym));
+	if (Syms==NULL) { delete StringTable; return 1; }
+	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  return 1; }  // seek to symbols
+	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { delete StringTable; delete Syms;  return 1; }
+
+	// go through the symbols and pass them to TCC 
+	for (i = 0; i < (int)(symbol_hdr.sh_size / sizeof(Elf32_Sym)); i++)
+	{
+#define STB_GLOBAL 1
+#define STT_OBJECT 1
+#define STT_FUNC 2
+#define STT_COMMON 5
+
+		int bind = ((Syms[i].st_info) >> 4);
+		int type = ((Syms[i].st_info) & 0xf);
+
+		if (bind == STB_GLOBAL && (type == STT_OBJECT || type == STT_FUNC || type == STT_COMMON || type == STT_NOTYPE))
+		{
+			char *name = StringTable + Syms[i].st_name;
+			if (strcmp(name, "main") != 0)
+				tcc_add_symbol(s1, name, Syms[i].st_value);
+		}
+	}
+
+	delete StringTable;
+	delete Syms;
+	return 0;
+}
+
+
+
 int ReadCoff(TCCState *s1, const char *InFile)
 {
 	FILE *f;
@@ -1002,6 +1120,14 @@ int ReadCoff(TCCState *s1, const char *InFile)
 
 	if (fread(&o_filehdr, sizeof(o_filehdr), 1, f) != 1)
 		error("error reading .out file for input");
+
+	// check for ELF file
+	char *p = (char*)&file_hdr;
+	if (p[1] == 'E' && p[2] == 'L' &&p[3] == 'F')
+	{
+		fclose(f);
+		return ReadElf(s1, InFile);
+	}
 
 	// first read the string table
 
