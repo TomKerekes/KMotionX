@@ -58,8 +58,8 @@ install: subdirs
 	$(INSTALL) -m644 $(addprefix $(BUILD_ROOT)/KMotionX/include/,$(KMX_HEADERS)) "$(includedir)/kmx/KMotionX"
 	cp -R $(BUILD_ROOT)/KMotionX/include/ftdi "$(includedir)/kmx/KMotionX"
 	cp -R $(BUILD_ROOT)/KMotionX/include/win "$(includedir)/kmx/KMotionX"
-	cp -R $(BUILD_ROOT)/DSP_KFLOP/ $(kmxhome)/DSP_KFLOP
-	cp -R $(BUILD_ROOT)/DSP_KOGNA/ $(kmxhome)/DSP_KOGNA
+	cp -R $(BUILD_ROOT)/DSP_KFLOP/. "$(kmxhome)/DSP_KFLOP"
+	cp -R $(BUILD_ROOT)/DSP_KOGNA/. "$(kmxhome)/DSP_KOGNA"
 	cp "$(BUILD_ROOT)/KMotion/Data/emc.var" "$(kmxhome)/Data/"
 	cp "$(BUILD_ROOT)/C Programs/BlinkKFLOP.c" "$(kmxhome)/C Programs/"
 	ln -sf $(addprefix $(kmxhome)/bin/,$(KMXPROGS)) $(bindir)
