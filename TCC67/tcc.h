@@ -185,8 +185,8 @@ typedef struct BufferedFile {
     int ifndef_macro_saved; /* saved ifndef_macro */
     int *ifdef_stack_ptr; /* ifdef_stack value at the start of the file */
     char inc_type;          /* type of include */
-    char inc_filename[512]; /* filename specified by the user */
-    char filename[1024];    /* current filename - here to simplify code */
+    TCHAR inc_filename[512]; /* filename specified by the user */
+    TCHAR filename[1024];    /* current filename - here to simplify code */
     unsigned char buffer[IO_BUF_SIZE + 1]; /* extra size for CH_EOB char */
 } BufferedFile;
 
@@ -215,7 +215,7 @@ typedef struct TokenString {
 typedef struct CachedInclude {
     int ifndef_macro;
     char type; /* '"' or '>' to give include type */
-    char filename[1]; /* path specified in #include */
+    TCHAR filename[1]; /* path specified in #include */
 } CachedInclude;
 
 
@@ -226,9 +226,9 @@ typedef struct {
     int *ifdef_stack_ptr;
 
     /* include file handling */
-    char **include_paths;
+    TCHAR **include_paths;
     int nb_include_paths;
-    char **sysinclude_paths;
+    TCHAR **sysinclude_paths;
     int nb_sysinclude_paths;
     CachedInclude **cached_includes;
     int nb_cached_includes;
@@ -294,6 +294,8 @@ void *tcc_malloc(unsigned long size);
 void error(const char *fmt, ...);
 inline void tcc_free(void *ptr);
 char *pstrcpy(char *buf, int buf_size, const char *s);
+char* ConvertToUTF8(const TCHAR* wstr);
+TCHAR* ConvertToWideChar(const char* str);
 
 
 

@@ -18,6 +18,9 @@
  *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+char* ConvertToUTF8(const TCHAR* wstr);
+TCHAR* ConvertToWideChar(const char* str);
+
 static int put_elf_str(Section *s, const char *sym)
 {
     int offset, len;
@@ -252,7 +255,7 @@ static void put_elf_reloc(Section *symtab, Section *s, unsigned long offset,
 }
 
 
-static void put_stabs(const char *str, int type, int other, int desc, 
+static void put_stabs(const char *str, int type, int other, int desc,
                       unsigned long value)
 {
     Stab_Sym *sym;
@@ -724,7 +727,7 @@ static void build_got_entries(TCCState *s1)
 
 static Section *new_symtab(TCCState *s1,
                            const char *symtab_name, int sh_type, int sh_flags,
-                           const char *strtab_name, 
+                           const char *strtab_name,
                            const char *hash_name, int hash_sh_flags)
 {
     Section *symtab, *strtab, *hash;
@@ -876,7 +879,7 @@ static char elf_interp[] = "/lib/ld-linux.so.2";
 
 /* output an ELF file */
 /* XXX: suppress unneeded sections */
-int tcc_output_file(TCCState *s1, const char *filename)
+int tcc_output_file(TCCState *s1, const TCHAR*filename)
 {
 #if (!DO_C67)
     int mode, fd, size, offset;
@@ -1830,8 +1833,9 @@ static int tcc_load_dll(TCCState *s1, int fd, const char *filename, int level)
     int i, nb_syms, nb_dts, sym_bind, ret;
     Elf32_Sym *sym, *dynsym;
     Elf32_Dyn *dt, *dynamic;
-    unsigned char *dynstr;
-    const char *name, *soname, *p;
+    unsigned char* dynstr;
+    const char *soname, *p;
+    const char *name;
     DLLReference *dllref;
     
     (void)_read(fd, &ehdr, sizeof(ehdr));
@@ -2046,7 +2050,7 @@ static int tcc_load_ldscript(TCCState *s1)
                     error_noabort("filename expected");
                     return -1;
                 } 
-                tcc_add_file(s1, filename);
+                tcc_add_file(s1, ConvertToWideChar(filename));
                 t = ld_next(s1, filename, sizeof(filename));
                 if (t == ',') {
                     t = ld_next(s1, filename, sizeof(filename));

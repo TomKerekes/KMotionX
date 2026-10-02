@@ -16,6 +16,7 @@
 #include <CMutex.h> 
 #else
 #include <afxmt.h>
+#include <afxtempl.h> // Include this header for CList
 #include "../DSP_KOGNA/PC-DSP.h"
 #define KMOTIONDLL_DLL
 #endif
@@ -58,9 +59,9 @@
 #define TILINKCMD_KOGNA "\\DSP_KOGNA\\Link.cmd"
 
 #define COMPILER "\\TCC67.exe"
-#define VALIDATOR "\\DSP_KFLOP\\Cppcheck\\Cppcheck.exe"
-#define VALIDATOR_SUPPRESS "\\DSP_KFLOP\\ValidateOptions.txt"
-#define VALIDATEOPTIONS "\\DSP_KFLOP\\ValidateOptions.txt"
+#define VALIDATOR "\\DSP_KFLOP\\clang\\clang-tidy.exe"
+#define VALIDATECHECKS "\\DSP_KFLOP\\clang\\.clang-tidy"
+#define VALIDATEOPTIONS "\\DSP_KFLOP\\clang\\ValidateOptions.txt"
 #endif
 
 #define KMOTION_PORT    57777   // Default server socket port (for TCP connections)
@@ -87,10 +88,8 @@ enum // KMotionLocked Return Codes
 	KMOTION_NOT_CONNECTED=2, // if error or not able to connect
 };
 
-typedef int CONSOLE_HANDLER(const char* buf);
-typedef int CONSOLE_HANDLER_WIDE(const wchar_t* buf);
-typedef void ERRMSG_HANDLER(const char* ErrMsg);
-typedef void ERRMSG_HANDLER_WIDE(const wchar_t* ErrMsg);
+typedef int CONSOLE_HANDLER(const TCHAR* buf);
+typedef void ERRMSG_HANDLER(const TCHAR* ErrMsg);
 
 
 
@@ -107,14 +106,15 @@ public:
 	virtual ~CKMotionDLL();
     int BoardID;
 
+	bool NoEthernet = false; // set to true if not to attempt to use ethernet
 
 	int WriteLineReadLine(const char *s, char *response);
 	int WriteLine(const char *s);
 	int WriteLineWithEcho(const char *s);
-	int ReadLineTimeOut(char *buf, int TimeOutms=1000000);
+	int ReadLineTimeOut(char *buf, int TimeOutms=20000);
 	int ListLocations(int *nlocations, int *list);
 	int WaitToken(char* CallerID);
-	int WaitToken(bool display_msg=true, int TimeOut_ms=1000000, const char *CallerID=NULL);
+	int WaitToken(bool display_msg=true, int TimeOut_ms=20000, const char *CallerID=NULL);
 	int KMotionLock(const char *CallerID=NULL);
 	int USBLocation();
 	int KMotionLockRecovery();
@@ -128,34 +128,43 @@ public:
 	// Note: ALL User Thread Numbers start with 1
 	
 	
-	int LoadCoff(int Thread, const char *Name, int PackToFlash=0); //PackToFlash 0=normal,1=NewVersion,2=bootload
-	int CompileAndLoadCoff(const char *Name, int Thread);
-	int CompileAndLoadCoff(const char* Name, int Thread, char* Err, int MaxErrLen);
-	int Compile(const char* Name, const char* OutFile, const int board_type, int Thread, char *Err, int MaxErrLen);
-	int CompileTI(const char * Name, const char * OutFile, const int BoardType, int Thread,wchar_t *Err, int MaxErrLen);
-	int LinkTI(const char * Linker, const char * Name, const char * OutFile, const int BoardType, int Thread,wchar_t *Err, int MaxErrLen, int MaxSize);
-	int ValidateC(const char *Name, wchar_t *Err, int MaxErrLen);
-	int CheckCoffSize(const char *Name, int *size_text, int *size_bss, int *size_data, int *size_total);  // return size of sections and total (including padding)
-	int CheckElfSize(const char* InFile, int* size_text, int* size_bss, int* size_data, int* size_total);
+	int LoadCoff(int Thread, const TCHAR *Name, int PackToFlash=0); //PackToFlash 0=normal,1=NewVersion,2=bootload
+#ifdef _UNICODE
+	int LoadCoff(int Thread, const char* Name, int PackToFlash); //PackToFlash 0=normal,1=NewVersion,2=bootload
+#endif
+	int CompileAndLoadCoff(const TCHAR *Name, int Thread);
+	int CompileAndLoadCoff(const TCHAR* Name, int Thread, TCHAR* Err, int MaxErrLen);
+	int Compile(const TCHAR* Name, const TCHAR* OutFile, const int board_type, int Thread, TCHAR *Err, int MaxErrLen);
+	int RemoveBOMandIncludedFiles(const CString& FilePath, const CList<CString, CString&>& IncludePaths);
+	int CompileTI(const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread,TCHAR *Err, int MaxErrLen);
+	int LinkTI(const TCHAR * Linker, const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread,TCHAR *Err, int MaxErrLen, int MaxSize);
+	int ValidateC(const TCHAR *Name, TCHAR *Err, int MaxErrLen, int BoardType);
+	CStringA W2UTF8(const TCHAR* pszText, int nLength);
+	CString UTF82W(const char* pszText, int nLength);
+	int CheckCoffSize(const TCHAR *Name, int *size_text, int *size_bss, int *size_data, int *size_total);  // return size of sections and total (including padding)
+	int CheckElfSize(const TCHAR* InFile, int* size_text, int* size_bss, int* size_data, int* size_total);
 	unsigned int GetLoadAddress(int thread, int BoardType);
-	void ConvertToOut(int thread, const char *InFile, char *OutFile, int MaxLength);
-
+	void ConvertToOut(int thread, const TCHAR *InFile, TCHAR *OutFile, int MaxLength);
+	void RemoveComments(CString &s);
+	int ConvertCRToCRLF(const CString filePath);
+	int RemoveUTF8BOM(const CString filePath);  // remove UTF8 BOM from file
 	int ServiceConsole();
 
 	int SetConsoleCallback(CONSOLE_HANDLER *ch);
 	int SetErrMsgCallback(ERRMSG_HANDLER* eh);
-	int SetErrMsgCallbackW(ERRMSG_HANDLER_WIDE* eh);
 	int CheckKMotionVersion(int *type=NULL, bool GetBoardTypeOnly=false, bool Wait=true);
-	int ExtractCoffVersionString(const char *InFile, char *Version);
-	int ExtractElfVersionString(const char *InFile, char *Version);
-	int ElfLoad(const char *InFile, unsigned int *EntryPoint, int PackToFlash);
+	int ExtractCoffVersionString(const TCHAR *InFile, char *Version);
+	int ExtractElfVersionString(const TCHAR *InFile, char *Version);
+	int ElfLoad(const TCHAR *InFile, unsigned int *EntryPoint, int PackToFlash);
 
-	void DoErrMsg(const wchar_t* s);
+	void DoErrMsg(const TCHAR* s);
 
 	int GetStatus(MAIN_STATUS& status, bool lock);
+#ifdef _UNICODE
 	int FlashKognaCOM(const char* Com);
-	std::wstring Translate(std::string s);
-	void DoErrMsg(const char *s);
+#endif
+	int FlashKognaCOM(const TCHAR* Com);
+	CString Translate(CString s);
 
 	bool ErrMessageDisplayed;
 	
@@ -176,9 +185,7 @@ private:
 	bool ReadStatus;
 
 	CONSOLE_HANDLER* ConsoleHandler;
-	CONSOLE_HANDLER_WIDE* ConsoleHandlerW;
 	ERRMSG_HANDLER* ErrMsgHandler;
-	ERRMSG_HANDLER_WIDE* ErrMsgHandlerW;
 
 	int OpenPipe();
 	int PipeCmd(int code);

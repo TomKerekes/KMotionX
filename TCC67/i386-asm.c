@@ -530,7 +530,7 @@ static void asm_opcode(TCCState *s1, int opcode)
         g(0x9b);
 
     v = pa->opcode;
-    if (v == 0x69 || v == 0x69) {
+    if (v == 0x69) {
         /* kludge for imul $im, %reg */
         nb_ops = 3;
         ops[2] = ops[1];

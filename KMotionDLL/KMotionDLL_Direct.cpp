@@ -18,20 +18,32 @@
 #include "HiResTimer.h"
 #include "Ping.h"
 
-
-
 CKMotionDLL_Direct::CKMotionDLL_Direct()
-{ 
-
+{
+    // Constructor implementation (currently empty)
 }
+
 CKMotionDLL_Direct::~CKMotionDLL_Direct()
 { 
 	//mutex libusb etc
 	::CleanupFindKFLOPs();
 }
-void CKMotionDLL_Direct::FindKognas(void)
+
+void CKMotionDLL_Direct::FindKognas(bool NoInternet)
 {
-	::FindKognas();
+	if (!NoInternet)
+		::FindKognas(); // scan for Kognas on the network
+	else
+	{
+		// Create a mutex with no initial owner
+		KognaListMutex = CreateMutex(
+			NULL,              // default security attributes
+			FALSE,             // initially not owned
+			NULL);             // unnamed mutex
+
+		FirstKognasScanComplete = true;  // force it to be true so we don't wait for the internet
+	}
+
 	::FindKFLOPs();
 }
 
@@ -96,7 +108,7 @@ int CKMotionDLL_Direct::MapBoardToIndex(int BoardID)
 
 	if (i == MAX_BOARDS)
 	{
-		MessageBoxW(NULL, Translate("Fatal Error: Too Many Board IDs used"), L"KMotion", MB_ICONSTOP | MB_OK);
+		MessageBox(NULL, Translate("Fatal Error: Too Many Board IDs used"), _T("KMotion"), MB_ICONSTOP | MB_OK);
 		KMotionLocal.KMotionIO[i].Mutex->Unlock();
 		exit(1);
 	}
@@ -232,7 +244,7 @@ int CKMotionDLL_Direct::nInstances()
 	return share;
 }
 
-const wchar_t * CKMotionDLL_Direct::GetErrMsg(int board)
+const TCHAR * CKMotionDLL_Direct::GetErrMsg(int board)
 {
 	return KMotionLocal.KMotionIO[board].ErrMsg.c_str();
 }
@@ -241,3 +253,5 @@ void CKMotionDLL_Direct::ClearErrMsg(int board)
 {
 	KMotionLocal.KMotionIO[board].ErrMsg=L"";
 }
+
+

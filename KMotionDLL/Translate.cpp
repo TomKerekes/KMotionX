@@ -11,7 +11,7 @@ extern CString MainPath;
 
 CTranslate Trans;
 
-CStringW Translate(CString s)
+CString Translate(CString s)
 {
 	return Trans.Translate(s);
 }
@@ -21,46 +21,40 @@ CTranslate::CTranslate()
 	CheckedForList = ListLoaded = false;
 }
 
-CStringW CTranslate::Translate(CString s)
-{
-	CStringW w = Translate(s.GetBuffer());
-	return (w);
-}
 
-CStringW CTranslate::Translate(char* s)
+CString CTranslate::Translate(CString w)
 {
-	CStringW w = s;
 	if (CheckedForList && !ListLoaded)  return w;
 
 
 	if (!CheckedForList)
 	{
-		wchar_t wcsString[4001];
+		TCHAR wcsString[4001];
 
 		CheckedForList = true;
 
 		// Open the file with the specified encoding
 		// Some editors like NotePad++ don't put BOM Byte Order Mark so better to let Windows decide
 		FILE* fStream;
-		errno_t e = _tfopen_s(&fStream, MainPath + "\\Data\\LocalLanguage.txt", _T("rt,ccs=UNICODE"));
-		if (e != 0)  // failed..CString sRead;
+		_tfopen_s(&fStream, MainPath + "\\Data\\LocalLanguage.txt", _T("rt,ccs=UNICODE"));
+		if (!fStream)  // failed..;
 			return w;
 
-		CStringW sRead, Eng, Trans;
+		CString sRead, Eng, Trans;
 		bool bReadData;
 		do
 		{
-			bReadData = (NULL != fgetws(wcsString, 4000, fStream));
+			bReadData = (NULL != _fgetts(wcsString, 4000, fStream));
 
 			sRead = wcsString;
 
 			sRead.Remove('\n');
 
 			// for some reason slashes are changed to double slashes
-			sRead.Replace(L"\\r", L"\r");
+			sRead.Replace(_T("\\r"), _T("\r"));
 
 			// file format is English Left ..#.. Translated Right
-			int i = sRead.Find((CStringW)"    ..#..    ", 0);
+			int i = sRead.Find(_T("    ..#..    "), 0);
 
 			Eng = sRead.Left(i);
 			Trans = sRead.Right(sRead.GetLength() - i - 13);
@@ -74,8 +68,8 @@ CStringW CTranslate::Translate(char* s)
 
 		fclose(fStream);
 
-		CStringW sip, skp;
-		CStringW sip2, skp2;
+		CString sip, skp;
+		CString sip2, skp2;
 		// sort by length
 		POSITION i2 = TanslateList.GetHeadPosition(), k2, k;
 		for (POSITION i = EnglishList.GetHeadPosition(); i != NULL; )
@@ -101,7 +95,7 @@ CStringW CTranslate::Translate(char* s)
 				TanslateList.GetNext(k2);
 				if (skp.GetLength() > sip.GetLength())
 				{
-					CStringW temp = sip;
+					CString temp = sip;
 					skp = sip;  // swap in both lists
 					skp = temp;
 					temp = sip2;
@@ -117,7 +111,7 @@ CStringW CTranslate::Translate(char* s)
 	{
 		// look for match
 
-		CStringW e,t;
+		CString e,t;
 
 		POSITION i2 = TanslateList.GetHeadPosition();
 		for (POSITION i = EnglishList.GetHeadPosition(); i != NULL; )

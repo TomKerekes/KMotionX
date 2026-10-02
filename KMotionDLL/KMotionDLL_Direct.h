@@ -7,7 +7,7 @@
 #ifndef KMOTIONDLL_DIRECT_H
 #define KMOTIONDLL_DIRECT_H
 
-
+#include "KMotionDLL.h"
 
 enum 
 { 
@@ -39,11 +39,11 @@ enum
 // This class is exported from the KMotionDLL_Direct.dll
 class KMOTIONDLL_API CKMotionDLL_Direct {
 public:
-	CKMotionDLL_Direct(void);
+	CKMotionDLL_Direct();
 
 	~CKMotionDLL_Direct();
 
-	void FindKognas();
+	void FindKognas(bool NoInternet = false);
 
 	int MapBoardToIndex(int board);
 	int SetRequested_ID(int board, unsigned int Board_ID);
@@ -62,12 +62,13 @@ public:
 	int FirmwareVersion(int board);
 	int CheckForReady(int board);
 	int ServiceConsole(int board);
-	const wchar_t *GetErrMsg(int board);
+	const TCHAR *GetErrMsg(int board);
 	void ClearErrMsg(int board);
 
 	int SetConsoleCallback(int board, SERVER_CONSOLE_HANDLER *ch);
 
 	int nInstances();
 
+	bool operator==(const CKMotionDLL_Direct& other) const;
 };
 #endif

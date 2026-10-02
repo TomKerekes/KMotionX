@@ -30,10 +30,9 @@ CKMotionDLL::CKMotionDLL(int boardid)
 	ServerMessDisplayed = false;
 	ErrMessageDisplayed = false;
 	ReadStatus = true;
-	PipeMutex = new CMutex(FALSE,"KMotionPipe",0);
+	PipeMutex = new CMutex(FALSE, _T("KMotionPipe"), NULL);
 
 	ConsoleHandler = NULL;
-	ErrMsgHandlerW = NULL;
 	ErrMsgHandler = NULL;
 	use_tcp = false;
 	remote_tcp = false;
@@ -195,7 +194,7 @@ int CKMotionDLL::WaitToken(bool display_msg, int TimeOut_ms, const char *CallerI
 	CHiResTimer Timer;
 	int result;
 
-//tktk
+//
 // 	if (ErrMessageDisplayed) 
 //		return KMOTION_NOT_CONNECTED;
 
@@ -280,11 +279,14 @@ int CKMotionDLL::SetErrMsgCallback(ERRMSG_HANDLER *ch)
 	return 0;
 }
 
-int CKMotionDLL::SetErrMsgCallbackW(ERRMSG_HANDLER_WIDE* ch)
+#ifdef _UNICODE
+int CKMotionDLL::LoadCoff(int Thread, const char* Name, int PackToFlash)
 {
-	ErrMsgHandlerW = ch;
-	return 0;
+	CString wName = Name;
+
+	return LoadCoff(Thread, wName, PackToFlash);
 }
+#endif
 
 void CKMotionDLL::Console(const char *buf)
 {
@@ -294,9 +296,9 @@ void CKMotionDLL::Console(const char *buf)
 
 // Note: ALL User Thread Numbers start with 1
 
-int CKMotionDLL::LoadCoff(int Thread, const char *Name, int PackToFlash)
+int CKMotionDLL::LoadCoff(int Thread, const TCHAR *Name, int PackToFlash)
 {
-	char s[50];
+	CStringA s;
 	unsigned int EntryPoint;
 
 	if (Thread==0) return 1;
@@ -317,7 +319,7 @@ int CKMotionDLL::LoadCoff(int Thread, const char *Name, int PackToFlash)
 
 	if (result)
 	{
-		MessageBoxW(NULL, Translate("error loading file"), L"KMotion", MB_OK | MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("error loading file"), _T("KMotion"), MB_OK | MB_SYSTEMMODAL);
 		return result;
 	}
 
@@ -505,8 +507,8 @@ int CKMotionDLL::Pipe(const char *s, int n, char *r, int *m)
 				
 				// because callback might throw an exception, delay doing the User Callback
 				// until everything is received back from the Server and we clean up
-				
-				ErrorMsg=r+1;
+
+				ErrorMsg = (TCHAR*)(r + 2);
 				ReceivedErrMsg=true;
 			}
 			else
@@ -554,7 +556,7 @@ int CKMotionDLL::Pipe(const char *s, int n, char *r, int *m)
 
 	if (ReceivedErrMsg)
 	{
-		DoErrMsg(Trans.Translate(ErrorMsg));
+		DoErrMsg(Trans.Translate((CString)ErrorMsg));
 	}
 	
 	return 0;
@@ -611,6 +613,9 @@ int CKMotionDLL::LaunchServer()
 	CString cmd;  // build command line
 
 	cmd = MainPathDLL64 + "\\KMotionServer.exe";
+
+	if (NoEthernet)
+		cmd += " -no_ethernet";	
 	
 	if (!CreateProcess (
 		NULL,
@@ -621,8 +626,8 @@ int CKMotionDLL::LaunchServer()
 		&si, &pi))
 	{
 		ServerMessDisplayed = true;
-		CStringW Errmsg;
-		Errmsg.Format("Unable to execute:\r\r" + (CStringW)cmd + Translate("\r\rTry re-installing software or copy this file to the same location as KMotion.exe or Calling Application"));
+		CString Errmsg;
+		Errmsg.Format("Unable to execute:\r\r" + cmd + Translate("\r\rTry re-installing software or copy this file to the same location as KMotion.exe or Calling Application"));
 		DoErrMsg(Errmsg);
 		exit(1);
 	}
@@ -637,19 +642,22 @@ int CKMotionDLL::LaunchServer()
 	return 0;
 }
 
-int CKMotionDLL::CompileAndLoadCoff(const char *Name, int Thread)
+int CKMotionDLL::CompileAndLoadCoff(const TCHAR *Name, int Thread)
 {
-	return CompileAndLoadCoff(Name, Thread, (char *)NULL, 0);
+	return CompileAndLoadCoff(Name, Thread, (TCHAR *)NULL, 0);
 }
 
-int CKMotionDLL::CompileAndLoadCoff(const char* Name, int Thread, char *Err, int MaxErrLen)
+
+int CKMotionDLL::CompileAndLoadCoff(const TCHAR* Name, int Thread, TCHAR* Err, int MaxErrLen)
 {
 	int result,BoardType;
 	char OutFile[MAX_PATH];
 
 	if (Thread<=0 || Thread>7) 
 	{
-		if(Err) snprintf(Err, MaxErrLen, "Invalid Thread Number %d Valid Range (1-7)",Thread);
+		CString s;
+		s.Format(Translate("Invalid Thread Number %d Valid Range (1-7)"),Thread);
+		_tcscpy_s(Err, MaxErrLen, s);
 		return 1;
 	}
 	
@@ -657,8 +665,10 @@ int CKMotionDLL::CompileAndLoadCoff(const char* Name, int Thread, char *Err, int
 
 	if (CheckKMotionVersion(&BoardType)) 
 	{
-		if(Err) snprintf(Err, MaxErrLen, "Board type mismatch");
-	    return 1;
+		if (MaxErrLen > 0)
+			_tcscpy_s(Err, MaxErrLen, Translate("Unable to determine Controller Board Type"));
+
+		return 1;
 	}
 
 	// Compile the C File
@@ -676,7 +686,7 @@ int CKMotionDLL::CompileAndLoadCoff(const char* Name, int Thread, char *Err, int
 	return 0;
 }
 
-int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardType, int Thread, char *Err, int MaxErrLen)
+int CKMotionDLL::Compile(const TCHAR* Name, const TCHAR* OutFile, const int BoardType, int Thread, TCHAR* Err, int MaxErrLen)
 {
 #ifndef _KMOTIONX
 	SECURITY_ATTRIBUTES sa          = {0};
@@ -688,7 +698,7 @@ int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardTy
 	HANDLE              hPipeInputWrite  = NULL;
 	BOOL                bTest = 0;
 	DWORD               dwNumberOfBytesRead = 0;
-	wchar_t             szMsg[100];
+	TCHAR             szMsg[100];
 
 	CString Errors;
 
@@ -696,21 +706,22 @@ int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardTy
 
 	// Check for #Pragma TI_COMPILER
 
-	FILE *f=fopen(Name, "rt");
+	FILE* f;
+	_tfopen_s(&f, Name, _T("rt,ccs=UTF-8"));
 
 	if (f)
 	{
 		CString s;
-		fgets(s.GetBufferSetLength(200), 200, f);
+		_fgetts(s.GetBufferSetLength(200), 200, f);
 		s.ReleaseBuffer();
 		fclose(f);
 
 		RemoveComments(s);
 		s.TrimLeft();
-		int i = s.Find("#pragma");
+		int i = s.Find(_T("#pragma"));
 		if (i >= 0)
 		{
-			int k = s.Find("TI_COMPILER",i);
+			int k = s.Find(_T("TI_COMPILER"),i);
 			if (k > i)
 			{
 				return CompileTI(Name, OutFile, BoardType, Thread, Err, MaxErrLen);
@@ -723,17 +734,19 @@ int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardTy
 	CString Compiler = MainPathDLL + COMPILER;
 	CString OFile=OutFile;
 
-	f=fopen(Compiler,"r");  // try where the KMotionDLL was first
+
+	_tfopen_s(&f, Compiler, _T("rt,ccs=UTF-8")); // try in the DLL directory first
 
 	if (f==NULL)
 	{
-		Compiler = MainPath + "\\Release" + COMPILER;
+		Compiler = MainPath + "\\Release" + COMPILER;  // try in the Release directory next
 	
-		f=fopen(Compiler,"r");  // try in the released directory next
+		_tfopen_s(&f, Compiler, _T("rt,ccs=UTF-8"));
 		if (f==NULL)
 		{
-			Compiler = MainPath + "\\Debug" + COMPILER;
-			f=fopen(Compiler,"r");  // try in the debug directory next
+			Compiler = MainPath + "\\Debug" + COMPILER;  // try in the Debug directory next
+
+			_tfopen_s(&f, Compiler, _T("rt,ccs=UTF-8")); 
 			if (f==NULL)
 			{
 				DoErrMsg(Translate("Error Locating TCC67.exe Compiler"));
@@ -823,11 +836,12 @@ int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardTy
 	}
 	else
 	{
-		char *s = Errors.GetBuffer(10001);
+		CStringA ErrorsA;
+		char *s = ErrorsA.GetBuffer(10001);
 		
 		bTest=ReadFile(
 			hPipeOutputRead,      // handle of the read end of our pipe
-			s,					  // address of buffer that receives data
+			s,                    // address of buffer that receives data
 			10000,                // number of bytes to read
 			&dwNumberOfBytesRead, // address of number of bytes read
 			NULL                  // non-overlapped.
@@ -836,14 +850,15 @@ int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardTy
 		
 		if (!bTest)
 		{
-			wsprintfW(szMsg, Translate("Error #%d reading compiler output."),GetLastError());
+			wsprintf(szMsg, Translate("Error #%d reading compiler output."),GetLastError());
 			DoErrMsg(szMsg);
 			return 1;
 		}
 
 		// do something with data.
 		s[dwNumberOfBytesRead] = 0;  // null terminate
-		Errors.ReleaseBuffer();
+		ErrorsA.ReleaseBuffer();
+		Errors = ErrorsA;  // convert to wide char
 	}
 
 
@@ -856,14 +871,13 @@ int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardTy
 	
 	/*----------Console application (CONSPAWN.EXE) code------*/
 
-	CStringW ErrorsW = Errors;
 	if (Err)
 	{
 		if (MaxErrLen > 0)
 		{
-			if (ErrorsW.GetLength() >= MaxErrLen-1) // too large to return?
-				ErrorsW = ErrorsW.Left(MaxErrLen-1); // yes, trim excess
-			wcscpy_s(Err, MaxErrLen, ErrorsW);
+			if (Errors.GetLength() >= MaxErrLen-1) // too large to return?
+				Errors = Errors.Left(MaxErrLen-1); // yes, trim excess
+			_tcscpy_s(Err, MaxErrLen, Errors);
 		}
 	}
 
@@ -917,16 +931,16 @@ int CKMotionDLL::Compile(const char*Name, const char* OutFile, const int BoardTy
 #ifndef _KMOTIONX
 void CKMotionDLL::RemoveComments(CString &s)
 {
-	int i = s.Find("//");
+	int i = s.Find(_T("//"));
 	if (i >= 0)
 		s = s.Left(i);
 
-	i = s.Find("/*");
+	i = s.Find(_T("/*"));
 	if (i >= 0)
 	{
 		s = s.Left(s.GetLength() - i);
 
-		int k = s.Find("*/", i);
+		int k = s.Find(_T("*/"), i);
 
 		if (k > i)
 		{   // both found remove section
@@ -938,8 +952,224 @@ void CKMotionDLL::RemoveComments(CString &s)
 		}
 	}
 }
+
+
+// Convert all isolated CR to CR LF
+int CKMotionDLL::ConvertCRToCRLF(const CString filePath)
+{
+	try
+	{
+		// Open the file for reading
+		CFile file;
+		if (!file.Open(filePath, CFile::modeRead | CFile::typeBinary))
+		{
+			CString errorMsg;
+			errorMsg.Format(_T("Failed to open the file: %s"), filePath);
+			DoErrMsg(errorMsg);
+			return 1; // Failed to open the file
+		}
+
+		// Get the file size and allocate a buffer
+		UINT fileSize = (UINT)file.GetLength();
+		char* buffer = new char[fileSize];
+		file.Read(buffer, fileSize);
+		file.Close();
+
+		// Allocate a temporary buffer for the updated content
+		// Assume the worst case where every character is '\r' and needs an additional '\n'
+		char* updatedBuffer = new char[fileSize * 2];
+		UINT updatedSize = 0;
+
+		// Process the content to replace isolated CR with CR LF
+		for (size_t i = 0; i < fileSize; ++i)
+		{
+			if (buffer[i] == '\r')
+			{
+				// Check if the next character is not LF
+				if (i + 1 >= fileSize || buffer[i + 1] != '\n')
+				{
+					updatedBuffer[updatedSize++] = '\r';
+					updatedBuffer[updatedSize++] = '\n'; // Add LF after CR
+				}
+				else
+				{
+					updatedBuffer[updatedSize++] = '\r'; // Keep CR as is
+				}
+			}
+			else
+			{
+				updatedBuffer[updatedSize++] = buffer[i]; // Copy other characters
+			}
+		}
+
+		if (updatedSize != fileSize)
+		{
+			CString errorMsg;
+			errorMsg.Format(Translate("File contains line endings not CR LF.  Change Line Endings?\r\r%s"), filePath);
+			if (MessageBox(NULL, errorMsg, _T("KMotion"), MB_YESNO | MB_SYSTEMMODAL) == IDYES)
+			{
+				// User chose to proceed with the conversion
+				// Open the file for writing
+				if (!file.Open(filePath, CFile::modeWrite | CFile::modeCreate | CFile::typeBinary))
+				{
+					delete[] buffer;
+					delete[] updatedBuffer;
+					MessageBox(NULL, Translate("Failed to open the file for writing"), _T("KMotion"), MB_OK | MB_SYSTEMMODAL);
+					return 2; // Failed to open the file for writing
+				}
+
+				// Write the updated content back to the file
+				file.Write(updatedBuffer, updatedSize);
+				file.Close();
+			}
+		}
+
+		// Clean up
+		delete[] buffer;
+		delete[] updatedBuffer;
+
+		return 0; // Success
+	}
+	catch (...)
+	{
+		CString errorMsg;
+		errorMsg.Format(_T("Failed to open the file: %s"), filePath);
+		DoErrMsg(errorMsg);
+		return 3;
+	}
+}
+
+// Function to remove UTF-8 BOM from a file
+int CKMotionDLL::RemoveUTF8BOM(const CString filePath)
+{
+	// Define the UTF-8 BOM
+	unsigned char BOM[3] = { 0xEF, 0xBB, 0xBF };
+
+	// Open the file for reading in binary mode
+	FILE* file = _tfopen(filePath, _T("rb"));
+	if (!file)
+	{
+		CString errorMsg;
+		errorMsg.Format(_T("Failed to open the file: %s"), filePath);
+		DoErrMsg(errorMsg);
+		return 1;
+	}
+
+	// Read the first 3 bytes
+	unsigned char buffer[3];
+	size_t bytesRead = fread(buffer, 1, 3, file);
+	if (bytesRead < 3)
+	{
+		fclose(file);
+		return 0;  // no BOM found
+	}
+
+	// Check if the file contains a UTF-8 BOM
+	if (memcmp(buffer, BOM, 3) == 0)
+	{
+		// Get the file size
+		fseek(file, 0, SEEK_END);
+		long fileSize = ftell(file);
+		fseek(file, 3, SEEK_SET); // Skip the BOM
+
+		// Allocate buffer for the rest of the file
+		unsigned char* fileContent = new unsigned char[fileSize - 3];
+		bytesRead = fread(fileContent, 1, fileSize - 3, file);
+		fclose(file);
+
+		if (bytesRead != fileSize - 3)
+		{
+			delete[] fileContent;
+			return 1;
+		}
+
+		// Open the file for writing in binary mode
+		file = _tfopen(filePath, _T("wb"));
+		if (!file)
+		{
+			CString errorMsg;
+			errorMsg.Format(_T("Failed to open the file for writing to remove UTF-8 BOM: %s"), filePath);
+			DoErrMsg(errorMsg);
+			delete[] fileContent;
+			return 1;
+		}
+
+		// Write the file content without the BOM
+		size_t bytesWritten = fwrite(fileContent, 1, bytesRead, file);
+		fclose(file);
+		delete[] fileContent;
+
+		if (bytesWritten != bytesRead)
+		{
+			return 1;
+		}
+	}
+	else
+	{
+		// Close the file if no BOM is found
+		fclose(file);
+	}
+	return 0;
+}
+
+
+// Function to remove UTF-8 BOM from all included files in a given C++ file
+int CKMotionDLL::RemoveBOMandIncludedFiles(const CString& FilePath, const CList<CString, CString&>& IncludePaths)
+{
+	if (RemoveUTF8BOM(FilePath)) return 1;
+	if (ConvertCRToCRLF(FilePath)) return 1;
+
+	FILE* cFile = _tfopen(FilePath, _T("r"));
+	if (!cFile)
+	{
+		CString errorMsg;
+		errorMsg.Format(_T("Failed to open file: %s"), FilePath);
+		DoErrMsg(errorMsg);
+		return 1;
+	}
+
+	char line[1024];
+	char includePrefix[] = "#include \"";
+	size_t includePrefixLen = strlen(includePrefix);
+
+	while (fgets(line, sizeof(line), cFile))
+	{
+		if (strncmp(line, includePrefix, includePrefixLen) == 0)
+		{
+			char* start = line + includePrefixLen;
+			char* end = strchr(start, '"');
+			if (end)
+			{
+				*end = '\0';
+				CString includedFile = start;
+
+				// Iterate through the include paths to find the full path of the included file
+				POSITION pos = IncludePaths.GetHeadPosition();
+				while (pos != NULL)
+				{
+					CString includePath = IncludePaths.GetNext(pos);
+					CString fullPath = includePath + _T("\\") + includedFile;
+
+					if (_taccess(fullPath, 0) == 0) // Check if the file exists
+					{
+						if (RemoveBOMandIncludedFiles(fullPath, IncludePaths))
+						{
+							fclose(cFile);
+							return 1;
+						}
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	fclose(cFile);
+	return 0;
+}
+
 #endif
-int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int BoardType, int Thread, wchar_t * Err, int MaxErrLen)
+int CKMotionDLL::CompileTI(const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread, TCHAR * Err, int MaxErrLen)
 {
 #ifndef _KMOTIONX
 	SECURITY_ATTRIBUTES sa = { 0 };
@@ -951,9 +1181,11 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	HANDLE              hPipeInputWrite = NULL;
 	BOOL                bTest = 0;
 	DWORD               dwNumberOfBytesRead = 0;
-	wchar_t             szMsg[100];
+	TCHAR             szMsg[100];
 
-	CStringW Errors;
+	CString Errors;
+
+	CList <CString, CString&> IncludePaths;
 
 	int Opt = 0; // default no optimization
 	int MaxSize, BoardMaxSize;
@@ -961,70 +1193,70 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	if (BoardType == BOARD_TYPE_KFLOP)
 	{
 		MaxSize = MAX_USER_PROG_SIZE_KFLOP;
-		BoardMaxSize = 11 * 0x10000;
-		if (Thread == 7) MaxSize *= 5;
+		BoardMaxSize = MAX_USER_PROG_SIZE_KFLOP * (7 - Thread) + MAX_USER_PROG_SIZE_KFLOP_7;
+		if (Thread == 7) MaxSize = MAX_USER_PROG_SIZE_KFLOP_7;
 	}
 	else
 	{
 		MaxSize = MAX_USER_PROG_SIZE_KOGNA;
-		BoardMaxSize = 10 * 0x40000;
-		if (Thread == 7) MaxSize *= 4;
-
+		BoardMaxSize = MAX_USER_PROG_SIZE_KOGNA * (7 - Thread) + MAX_USER_PROG_SIZE_KOGNA_7;
+		if (Thread == 7) MaxSize = MAX_USER_PROG_SIZE_KOGNA_7;
 	}
 
-	FILE *f = fopen(Name, "rt");
+
+	FILE *f = _tfopen(Name, _T("rt"));
 
 	if (f)
 	{
 		CString s;
-		fgets(s.GetBufferSetLength(200), 200, f);
+		_fgetts(s.GetBufferSetLength(200), 200, f);
 		s.ReleaseBuffer();
 		fclose(f);
 
 		RemoveComments(s);
 		s.TrimLeft();
-		int i = s.Find("#pragma");
+		int i = s.Find(_T("#pragma"));
 		if (i >= 0)
 		{
-			int k = s.Find("TI_COMPILER", i);
+			int k = s.Find(_T("TI_COMPILER"), i);
 			if (k > i)
 			{
 				CString sOpt, sMaxSize;
 				int r1 = 1, r2 = 1, i1, i2, i3, i0;
-				i0 = s.Find("(", k);  // look for (Opt) or (Opt,MaxSize)
+				i0 = s.Find(_T("("), k);  // look for (Opt) or (Opt,MaxSize)
 				if (i0 > k)
 				{
-					i1 = s.Find(",", i0);  // look for (Opt) or (Opt,MaxSize)
+					i1 = s.Find(_T(","), i0);  // look for (Opt) or (Opt,MaxSize)
 					if (i1 > i0)
 					{
-						i2 = s.Find(")", i1);  //  (Opt,MaxSize)
+						i2 = s.Find(_T(")"), i1);  //  (Opt,MaxSize)
 						if (i2 > i1)
 						{
 							sOpt = s.Mid(i0 + 1, i1 - i0 - 1);
-							r1 = sscanf(sOpt, "%d", &Opt);
+							r1 = _stscanf(sOpt, _T("%d"), &Opt);
 							sMaxSize = s.Mid(i1 + 1, i2 - i1 - 1);
 
-							i3 = sMaxSize.Find("0x");
+							i3 = sMaxSize.Find(_T("0x"));
 							if (i3 >= 0)
 							{	// hex value
 								sMaxSize = sMaxSize.Right(sMaxSize.GetLength() - i3 - 2);
-								r2 = sscanf(sMaxSize, "%x", &MaxSize);
+								r2 = _stscanf(sMaxSize, _T("%x"), &MaxSize);
 							}
 							else
 							{	// decimal value  
 								sMaxSize = s.Mid(i1 + 1, i2 - i1 - 1);
-								r2 = sscanf(sMaxSize, "%d", &MaxSize);
+								r2 = _stscanf(sMaxSize, _T("%d"), &MaxSize);
 							}
 						}
 					}
 					else
 					{
 						r1 = 0;
-						i1 = s.Find(")", i0);  // (Opt)
+						i1 = s.Find(_T(")"), i0);  // (Opt)
 						if (i1 > i0)
 						{
 							sOpt = s.Mid(i0 + 1, i1 - i0 - 1);
-							r1 = sscanf(sOpt, "%d", &Opt);
+							r1 = _stscanf(sOpt, _T("%d"), &Opt);
 						}
 					}
 				}
@@ -1034,19 +1266,19 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 				{
 					// invalid format pragma TI_COMPILER
 
-					Errors = Translate("Error Line :1: invalid TI_COMPILER pragma \n") + (CStringW) s +
+					Errors = Translate("Error Line :1: invalid TI_COMPILER pragma \n") + s +
 						Translate("\n Expected format:\n#pragma TI_COMPILER\n#pragma TI_COMPILER(opt level 0-3)\n#pragma TI_COMPILER(opt level 0-3, Max Thread Space - hex or decimal)");
 
 					if (MaxSize > BoardMaxSize)
 						Errors += "\n\nInvalid Max Thread Space";
 
-					CStringW ErrorsW = Errors;
-					wcscpy_s(Err, MaxErrLen, ErrorsW);
+					_tcscpy_s(Err, MaxErrLen, Errors);
 					return 1;
 				}
 			}
 		}
 	}
+
 
 	CString CompilerTI;
 	if (BoardType == BOARD_TYPE_KFLOP)
@@ -1063,7 +1295,7 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	CString Compiler = MainPathRoot + CompilerTI;
 	CString OFile = OutFile;
 
-	f = fopen(Compiler, "r");  // try where the KMotionDLL was first
+	_tfopen_s(&f, Compiler, _T("rt,ccs=UTF-8"));
 
 	if (f == NULL)
 	{
@@ -1106,21 +1338,38 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	if (BoardType == BOARD_TYPE_KOGNA)
 	{
 		FileType = "--abi=eabi";
-		IncSrcPath1 = "-i \"" + MainPathRoot + "\\DSP_KOGNA\" ";
+		IncSrcPath1 = MainPathRoot + "\\DSP_KOGNA";
 	}
 	else
 	{
-		IncSrcPath1 = "-i \"" + MainPathRoot + "\\DSP_KFLOP\" ";
+		IncSrcPath1 = MainPathRoot + "\\DSP_KFLOP";
 	}
 
-	IncSrcPath2 = "-i \"" + ExtractPath(Name) + "\" ";
+	IncSrcPath2 = ExtractPath(Name);
 
-	IncSrcPath3 = "-i \"" + MainPathRoot + "\\C Programs\" ";
+	IncSrcPath3 = MainPathRoot + "\\C Programs";
+
+	IncludePaths.AddTail(IncSrcPath1);
+	IncludePaths.AddTail(IncSrcPath2);
+	IncludePaths.AddTail(IncSrcPath3);
+	if (RemoveBOMandIncludedFiles(Name, IncludePaths)) return 1;
 
 // must use far data model as User programs call Firmware that uses its Near Data Pointer
-	cmd.Format(" %s -k -q -as --diag_suppress=163 --mem_model:data=far "
-		+ IncSrcPath1 + IncSrcPath2 + IncSrcPath3 + "-mu -ml3 -mv6710 -o%d", FileType, Opt);
+	cmd.Format(_T(" %s -k -q -as --diag_suppress=163 --mem_model:data=far ")
+		"-i \"" + IncSrcPath1 + "\" -i \"" + IncSrcPath2 + "\" -i \"" + IncSrcPath3 + "\" -mu -ml3 -mv6710 -o%d", FileType, Opt);
 	cmd = Compiler + cmd + " \"" + Name + "\" --obj_directory=\"" + ExtractPath(Name) + "\" --asm_directory=\"" + ExtractPath(Name) + "\"";
+
+
+	// Check for non-ANCII characters in the command line
+	int nUTF8Length = W2UTF8(cmd, cmd.GetLength()).GetLength();
+
+	if (nUTF8Length != cmd.GetLength())
+	{
+		DoErrMsg(Translate("Error non-ANCI filenames or folder names not supported by TI Compiler"));
+		return 1;
+	}
+
+
 
 	CreateProcess(
 		NULL,
@@ -1147,7 +1396,7 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	// hPipeOutputRead.  Could also write to DOS application
 	// standard input by writing to hPipeInputWrite.
 
-	CString cs;
+	CStringA cs;
 	char *s = cs.GetBuffer(10001);
 	dwNumberOfBytesRead = 0;
 
@@ -1162,7 +1411,8 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	// do something with data.
 	s[dwNumberOfBytesRead] = 0;  // null terminate
 	cs.ReleaseBuffer();
-	Errors = cs;
+	Errors = UTF82W(cs, cs.GetLength());
+
 
 	// Close all remaining handles
 	CloseHandle(pi.hProcess);
@@ -1170,9 +1420,9 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	CloseHandle(hPipeOutputRead);
 	CloseHandle(hPipeInputWrite);
 
-	if (!bTest && GetLastError() != ERROR_BROKEN_PIPE) // Note broken pipe just means there was nothing to read
+	if (!bTest && GetLastError() != ERROR_BROKEN_PIPE && GetLastError() != ERROR_INVALID_PARAMETER) // Note broken pipe just means there was nothing to read
 	{
-		wsprintfW(szMsg, Translate("Error #%d reading compiler output."), GetLastError());
+		wsprintf(szMsg, Translate("Error #%d reading compiler output."), GetLastError());
 		DoErrMsg(szMsg);
 		return 1;
 	}
@@ -1180,7 +1430,7 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 
 	if (exitcode == 0)  // compile successful ?
 	{
-		CStringW LinkMessages;
+		CString LinkMessages;
 		exitcode = LinkTI(Compiler, Name, OutFile, BoardType, Thread, LinkMessages.GetBufferSetLength(2000), 2000, MaxSize);
 		LinkMessages.ReleaseBuffer();
 
@@ -1195,7 +1445,7 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 	{
 		if (Errors.GetLength() >= MaxErrLen - 1) // too large to return?
 			Errors = Errors.Left(MaxErrLen - 1); // yes, trim excess
-		wcscpy_s(Err, MaxErrLen, Errors);
+		_tcscpy_s(Err, MaxErrLen, Errors);
 	}
 
 
@@ -1205,7 +1455,7 @@ int CKMotionDLL::CompileTI(const char * Name, const char * OutFile, const int Bo
 #endif
 }
 
-int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * OutFile, const int BoardType, int Thread, wchar_t * Err, int MaxErrLen, int MaxSize)
+int CKMotionDLL::LinkTI(const TCHAR * Linker, const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread, TCHAR * Err, int MaxErrLen, int MaxSize)
 {
 #ifndef _KMOTIONX
 	SECURITY_ATTRIBUTES sa = { 0 };
@@ -1217,9 +1467,9 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 	HANDLE              hPipeInputWrite = NULL;
 	BOOL                bTest = 0;
 	DWORD               dwNumberOfBytesRead = 0;
-	wchar_t                szMsg[100];
+	TCHAR                szMsg[100];
 
-	CStringW Errors;
+	CString Errors;
 
 	CString OFile = OutFile;
 
@@ -1269,18 +1519,21 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 	CString cmd;  // build command line
 	cmd = (CString)Linker + " -z " + "\"" + MainPathRoot + LinkCmd + "\"";
 
+	CStringA LinkTemplateDataA;
 	CString LinkTemplateData;
-	
-	FILE *f = fopen(MainPathRoot + LinkTemplate, "rt");
-	
+
+	FILE *f;
+	_tfopen_s(&f, MainPathRoot + LinkTemplate, _T("rt"));
+
 	if (!f)
 	{
-		DoErrMsg(Translate("Unable to open TI Link Template.\n\n") + (CStringW)MainPathRoot + (CStringW)LinkTemplate);
+		DoErrMsg(Translate("Unable to open TI Link Template.\n\n") + MainPathRoot + LinkTemplate);
 		return 1;
 	}
 
-	int n = (int)fread_s(LinkTemplateData.GetBufferSetLength(100000), 100000, 1, 100000, f);
-	LinkTemplateData.ReleaseBufferSetLength(n);
+	int n = (int)fread_s(LinkTemplateDataA.GetBufferSetLength(100000), 100000, 1, 100000, f);
+	LinkTemplateDataA.ReleaseBufferSetLength(n);
+	LinkTemplateData = LinkTemplateDataA;
 	fclose(f);
 
 
@@ -1292,13 +1545,14 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 
 
 	// Find IRAM_END in symbols file
-	f = fopen(MainPathRoot + Symbols, "rt");
+	_tfopen_s(&f, MainPathRoot + Symbols, _T("rt"));
+
 	if (!f)
 	{
-		DoErrMsg(Translate("Error unable to open DSP Symbol file.\n\n") + (CStringW)MainPathRoot + (CStringW)Symbols);
+		DoErrMsg(Translate("Error unable to open DSP Symbol file.\n\n") + MainPathRoot + Symbols);
 		return 1;
 	}
-	CString SymbolsData;
+	CStringA SymbolsData;
 	n = (int)fread_s(SymbolsData.GetBufferSetLength(100000), 100000, 1, 100000, f);
 	SymbolsData.ReleaseBufferSetLength(n);
 	fclose(f);
@@ -1319,7 +1573,7 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 
 	CString IramEnd = SymbolsData.Mid(i0+11, i1 - i0);
 	int iRamEnd;
-	int r = sscanf(IramEnd, "%x", &iRamEnd);
+	int r = _stscanf(IramEnd, _T("%x"), &iRamEnd);
 	if (r != 1)
 	{
 		DoErrMsg(Translate("Error unable to find IRAM_END sysmbol to determine IRAM size"));
@@ -1328,36 +1582,38 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 
 //ExcludeTranslate
 	CString IR,IRL,TS,TL;
-	IR.Format("0x%08x", iRamEnd);
+	IR.Format(_T("0x%08x"), iRamEnd);
 	if (BoardType == BOARD_TYPE_KFLOP)
-		IRL.Format("0x%08x", 0x10020000-iRamEnd);
+		IRL.Format(_T("0x%08x"), 0x10020000-iRamEnd);
 	else
-		IRL.Format("0x%08x", 0x11840000 - iRamEnd);
-	TS.Format("0x%08x", GetLoadAddress(Thread, BoardType));
-	TL.Format("0x%08x", MaxSize);
+		IRL.Format(_T("0x%08x"), 0x11840000 - iRamEnd);
+	TS.Format(_T("0x%08x"), GetLoadAddress(Thread, BoardType));
+	TL.Format(_T("0x%08x"), MaxSize);
 
-	LinkTemplateData.Replace("{OBJECTFILE}", "\"" + ObjFile + "\"");
-	LinkTemplateData.Replace("{MAPFILE}", "\"" + MapFile + "\"");
-	LinkTemplateData.Replace("{OUTPUTFILE}", "\"" + (CString)OutFile + "\"");
-	LinkTemplateData.Replace("{IRAMSTART}", IR);
-	LinkTemplateData.Replace("{IRAMLENGTH}", IRL);
-	LinkTemplateData.Replace("{THREADSTART}", TS);
-	LinkTemplateData.Replace("{THREADLENGTH}", TL);
+	LinkTemplateData.Replace(_T("{OBJECTFILE}"), "\"" + ObjFile + "\"");
+	LinkTemplateData.Replace(_T("{MAPFILE}"), "\"" + MapFile + "\"");
+	LinkTemplateData.Replace(_T("{OUTPUTFILE}"), "\"" + (CString)OutFile + "\"");
+	LinkTemplateData.Replace(_T("{IRAMSTART}"), IR);
+	LinkTemplateData.Replace(_T("{IRAMLENGTH}"), IRL);
+	LinkTemplateData.Replace(_T("{THREADSTART}"), TS);
+	LinkTemplateData.Replace(_T("{THREADLENGTH}"), TL);
 	if (BoardType == BOARD_TYPE_KFLOP)
-		LinkTemplateData.Replace("{DSP_KFLOP_PATH}", MainPathRoot + "\\DSP_KFLOP\\");
+		LinkTemplateData.Replace(_T("{DSP_KFLOP_PATH}"), MainPathRoot + "\\DSP_KFLOP\\");
 	else
-		LinkTemplateData.Replace("{DSP_KFLOP_PATH}", MainPathRoot + "\\DSP_KOGNA\\");
+		LinkTemplateData.Replace(_T("{DSP_KFLOP_PATH}"), MainPathRoot + "\\DSP_KOGNA\\");
 //ResumeTranslate
 
-	f = fopen(MainPathRoot + LinkCmd, "wt");
+	_tfopen_s(&f, MainPathRoot + LinkCmd, _T("wt"));
 
 	if (!f)
 	{
-		DoErrMsg(Translate("Unable to open TI Link Command File") + (CStringW)MainPathRoot + (CStringW)LinkCmd);
+		DoErrMsg(Translate("Unable to open TI Link Command File") + MainPathRoot + LinkCmd);
 		return 1;
 	}
 
-	n = (int)fwrite(LinkTemplateData,LinkTemplateData.GetLength(), 1, f);
+	LinkTemplateDataA = W2UTF8(LinkTemplateData, LinkTemplateData.GetLength());
+
+	fputs(LinkTemplateDataA, f);
 	fclose(f);
 
 	CreateProcess(
@@ -1385,7 +1641,7 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 	// hPipeOutputRead.  Could also write to DOS application
 	// standard input by writing to hPipeInputWrite.
 
-	CString cs;
+	CStringA cs;
 	char *s = cs.GetBuffer(10001);
 
 	bTest = ReadFile(
@@ -1399,7 +1655,7 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 
 	if (!bTest)
 	{
-		wsprintfW(szMsg, Translate("Error #%d reading compiler output."), GetLastError());
+		wsprintf(szMsg, Translate("Error #%d reading compiler output."), GetLastError());
 		DoErrMsg(szMsg);
 		return 1;
 	}
@@ -1422,7 +1678,7 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 	{
 		if (Errors.GetLength() >= MaxErrLen - 1) // too large to return?
 			Errors = Errors.Left(MaxErrLen - 1); // yes, trim excess
-		wcscpy_s(Err, MaxErrLen, Errors);
+		_tcscpy_s(Err, MaxErrLen, Errors);
 	}
 
 	return exitcode;
@@ -1431,7 +1687,7 @@ int CKMotionDLL::LinkTI(const char * Linker, const char * Name, const char * Out
 #endif
 }
 
-int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
+int CKMotionDLL::ValidateC(const TCHAR *Name, TCHAR *Err, int MaxErrLen, int BoardType)
 {
 #ifndef _KMOTIONX
 	SECURITY_ATTRIBUTES sa = { 0 };
@@ -1443,20 +1699,57 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 	HANDLE              hPipeInputWrite = NULL;
 	BOOL                bTest = 0;
 	DWORD               dwNumberOfBytesRead = 0;
-	wchar_t             szMsg[100];
+	TCHAR             szMsg[100];
 
 
+	// check if User program is valid C with a main function (not some include file)
+	FILE* f;  
+	_tfopen_s(&f, Name, _T("rt,ccs=UTF-8"));
 
-	// Try and locate splint
+	if (f != NULL)
+	{
+		bool found = false;
+		while (!feof(f))
+		{
+			CString s;
+			_fgetts(s.GetBufferSetLength(2000), 2000, f);
+			s.ReleaseBuffer();
+			RemoveComments(s);
+			int i = s.Find(_T("main"));
+			if (i >= 0)
+			{
+				// remove up to main
+				s = s.Mid(i+4);
+				// skip over white space
+				s = s.TrimLeft();
+				if (s.GetLength() >0 && s[0] == '(')
+				{
+					// found main function
+					found = true;
+					break;
+				}
+			}
+		}
+		fclose(f);
+		if (!found)
+		{
+			DoErrMsg(Translate("No main() function in file.  Only Programs can be Validated not #include files."));
+			return 1;
+		}
+	}
 
-	CStringW Errors;
+
+	// Try and locate clang-tidy
+
+	CString Errors;
 	CString Compiler = MainPathRoot + VALIDATOR;
 
-	FILE *f = fopen(Compiler, "r");  // try where the KMotionDLL was irst
+	// Check in clang folder
+	_tfopen_s(&f, Compiler, _T("rt,ccs=UTF-8"));
 
 	if (f == NULL)
 	{
-		DoErrMsg(Translate("Error Locating Cppcheck.exe code validator"));
+		DoErrMsg(Translate("Error Locating clang-tidy.exe code validator"));
 		return 1;
 	}
 	fclose(f);
@@ -1493,17 +1786,31 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 	si.hStdError = hPipeOutputWrite;
 //ExcludeTranslate
 
-	CString cmd;  // build command line
-	CString BindTo, IncSrcPath1, IncSrcPath2, IncSrcPath3, Susppress, opts, templ;
 
-	IncSrcPath1 = "-I \"" + MainPathRoot + "\\DSP_KFLOP\" ";
-	IncSrcPath2 = "-I \"" + ExtractPath(Name) + "\" ";
-	IncSrcPath3 = "-I \"" + MainPathRoot + "\\C Programs\" ";
-	Susppress = "--suppressions-list=\"" + MainPathRoot + VALIDATOR_SUPPRESS + "\" ";
-	opts = "--enable=all ";
-	templ = "--template=\"{file}, line {line} : {severity} {id}\n{message}\n{code}\n\" ";
-	
-	cmd = Compiler + " \"" + Name + "\" " + opts + IncSrcPath1 + IncSrcPath2 + IncSrcPath3 + Susppress + templ;
+
+	CString cmd;  // build command line
+	CString BindTo, IncSrcPath1, IncSrcPath2, IncSrcPath3, Susppress, opts, checks;
+
+	// add any addition User Options to the command line
+	_tfopen_s(&f, MainPathRoot + VALIDATEOPTIONS, _T("rt,ccs=UTF-8"));
+
+	if (f != NULL)
+	{
+		_fgetts(opts.GetBufferSetLength(2000), 2000, f);
+		opts.ReleaseBuffer();
+		fclose(f);
+	}
+
+
+	if (BoardType == BOARD_TYPE_KOGNA)
+		IncSrcPath1 = "-I\"" + MainPathRoot + "\\DSP_KOGNA\" ";
+	else
+		IncSrcPath1 = "-I\"" + MainPathRoot + "\\DSP_KFLOP\" ";
+	IncSrcPath2 = "-I\"" + ExtractPath(Name) + "\" ";
+	IncSrcPath3 = "-I\"" + MainPathRoot + "\\C Programs\" ";
+	checks = " --config-file=\"" + MainPathRoot + VALIDATECHECKS + "\" ";
+
+	cmd = Compiler + " \"" + Name + "\"" + checks + opts + " " + IncSrcPath1 + IncSrcPath2 + IncSrcPath3;
 
 //ResumeTranslate
 
@@ -1530,7 +1837,7 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 		// Wait for CONSPAWN to finish.
 		Timeout = WaitForSingleObject(pi.hProcess, 3000);  // timeout in 30 seconds
 
-		Done = Timeout == WAIT_OBJECT_0 || MessageBoxW(NULL, Translate("splint taking a long time for validation.  Continue waiting?"), L"KMotion", MB_YESNO) == IDNO;
+		Done = Timeout == WAIT_OBJECT_0 || MessageBox(NULL, Translate("splint taking a long time for validation.  Continue waiting?"), _T("KMotion"), MB_YESNO) == IDNO;
 	} while (!Done);
 
 	DWORD exitcode;
@@ -1546,7 +1853,7 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 	// hPipeOutputRead.  Could also write to DOS application
 	// standard input by writing to hPipeInputWrite.
 
-	CString cs;
+	CStringA cs;
 	char *s = cs.GetBuffer(10001);
 
 	bTest = ReadFile(
@@ -1558,9 +1865,9 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 	);
 
 
-	if (!bTest)
+	if (!bTest && GetLastError() != ERROR_BROKEN_PIPE)
 	{
-		wsprintfW(szMsg, Translate("Error #%d reading Validation output."), GetLastError());
+		wsprintf(szMsg, Translate("Error #%d reading Validation output."), GetLastError());
 		DoErrMsg(szMsg);
 		return 1;
 	}
@@ -1568,11 +1875,17 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 	// do something with data.
 	s[dwNumberOfBytesRead] = 0;  // null terminate
 	cs.ReleaseBuffer();
-	Errors = cs;
 
-	if (exitcode != 0)
+	Errors = UTF82W(cs, cs.GetLength());
+
+	if (exitcode != 0 && Errors == "")
 	{
 		Errors = Translate("Validation Failed!\n") + Errors;
+	}
+	
+	if (Errors == "")
+	{
+		Errors = Translate("Validation found no Issues\n");
 	}
 
 
@@ -1592,7 +1905,7 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 	{
 		if (Errors.GetLength() >= MaxErrLen - 1) // too large to return?
 			Errors = Errors.Left(MaxErrLen - 1); // yes, trim excess
-		wcscpy_s(Err, MaxErrLen, Errors);
+		_tcscpy_s(Err, MaxErrLen, Errors);
 	}
 
 	return exitcode;
@@ -1601,8 +1914,71 @@ int CKMotionDLL::ValidateC(const char *Name, wchar_t *Err, int MaxErrLen)
 #endif
 }
 
+CStringA CKMotionDLL::W2UTF8(const TCHAR* pszText, int nLength)
+{
+#ifndef _UNICODE
+	// Multibyte build: the text already is UTF-8 (or the local character set)
+	return nLength == -1 ? CStringA(pszText) : CStringA(pszText, nLength);
+#else
+	//First call the function to determine how much space we need to allocate
+	int nUTF8Length = WideCharToMultiByte(CP_UTF8, 0, pszText, nLength, NULL, 0, NULL, NULL);
 
-void CKMotionDLL::ConvertToOut(int thread, const char *InFile, char *OutFile, int MaxLength)
+	//If the calculated length is zero, then ensure we have at least room for a NULL terminator
+	if (nUTF8Length == 0)
+		nUTF8Length = 1;
+
+	//Now recall with the buffer to get the converted text
+	CStringA sUTF;
+	char* pszUTF8Text = sUTF.GetBuffer(nUTF8Length + 1); //include an extra byte because we may be null terminating the string ourselves
+	int nCharsWritten = WideCharToMultiByte(CP_UTF8, 0, pszText, nLength, pszUTF8Text, nUTF8Length, NULL, NULL);
+
+	//Ensure we NULL terminate the text if WideCharToMultiByte doesn't do it for us
+	if (nLength != -1)
+	{
+		AFXASSUME(nCharsWritten <= nUTF8Length);
+		pszUTF8Text[nCharsWritten] = '\0';
+	}
+
+	sUTF.ReleaseBuffer();
+
+	return sUTF;
+#endif
+}
+
+
+CString CKMotionDLL::UTF82W(const char* pszText, int nLength)
+{
+#ifndef _UNICODE
+	return nLength == -1 ? CString(pszText) : CString(pszText, nLength);
+#else
+	//First call the function to determine how much space we need to allocate
+	int nWideLength = MultiByteToWideChar(CP_UTF8, 0, pszText, nLength, NULL, 0);
+
+	//If the calculated length is zero, then ensure we have at least room for a NULL terminator
+	if (nWideLength == 0)
+		nWideLength = 1;
+
+	//Now recall with the buffer to get the converted text
+	CString sWideString;
+	TCHAR* pszWText = sWideString.GetBuffer(nWideLength + 1); //include an extra byte because we may be null terminating the string ourselves
+	int nCharsWritten = MultiByteToWideChar(CP_UTF8, 0, pszText, nLength, pszWText, nWideLength);
+
+	//Ensure we NULL terminate the text if MultiByteToWideChar doesn't do it for us
+	if (nLength != -1)
+	{
+		AFXASSUME(nCharsWritten <= nWideLength);
+		pszWText[nCharsWritten] = '\0';
+	}
+
+	sWideString.ReleaseBuffer();
+
+	return sWideString;
+#endif
+}
+
+
+
+void CKMotionDLL::ConvertToOut(int thread, const TCHAR *InFile, TCHAR *OutFile, int MaxLength)
 {
 	int OFileMaxLength;
 	char *OFile;
@@ -1675,10 +2051,10 @@ unsigned int CKMotionDLL::GetLoadAddress(int thread, int BoardType)
 int CKMotionDLL::CheckKMotionVersion(int *type, bool GetBoardTypeOnly, bool Wait) 
 {
 	int result;
-	char BoardVersion[MAX_LINE];
-	char CoffVersion[81];
-	char OutFile[MAX_PATH];
-	char ms[MAX_LINE];
+	CStringA BoardVersion;
+	CStringA CoffVersion;
+	CString OutFile;
+	CString ms;
 
 	if (type) *type = BOARD_TYPE_UNKNOWN;
 
@@ -1717,11 +2093,12 @@ int CKMotionDLL::CheckKMotionVersion(int *type, bool GetBoardTypeOnly, bool Wait
 
 		if (GetBoardTypeOnly) return 0;
 
-		int result = ExtractCoffVersionString(OutFile,CoffVersion);
+		result = ExtractCoffVersionString(OutFile,CoffVersion.GetBuffer(81));	
+		CoffVersion.ReleaseBuffer();
 
 		if (result)
 		{
-			snprintf(ms, MAX_LINE, "Error Extracting Version Information from file" LINE_BREAK LINE_BREAK " %s",OutFile);
+			ms.Format(Translate("Error Extracting Version Information from file\r\r") + _T(" %s"),	OutFile);
 			DoErrMsg(ms);
 			return 1;
 		}
@@ -1730,24 +2107,19 @@ int CKMotionDLL::CheckKMotionVersion(int *type, bool GetBoardTypeOnly, bool Wait
 		
 
 		// check if they match exactly
-		if (strcmp(CoffVersion,BoardVersion) == 0) return 0;
-		//TODO check for first 4 charachters not just anywhere in string
-		if(strstr(BoardVersion,"KFLOP") != NULL)
-			snprintf(ms, MAX_LINE, "DSP_KFLOP.out Date Stamp Doesn't match KFLOP Firmware" LINE_BREAK LINE_BREAK
-				" Before compiling programs please use Flash/Config Screen and select:" LINE_BREAK
-				" Download New Version.  This will install compatible Firmware with" LINE_BREAK
-				" this version of software" LINE_BREAK LINE_BREAK
-				" %s  KFLOP Firmware" LINE_BREAK
-				" %s  DSP_KFLOP.out file",
+
+		if (CoffVersion == BoardVersion) return 0;
+
+		if (BoardVersion.Find("KOGNA") == 0)
+			ms.Format(Translate("DSP_KOGNA.out Date Stamp Doesn't match KOGNA Firmware\r\r Before compiling programs please use Flash/Config Screen and select:\r Download New Version.  This will install compatible Firmware with\r this version of software\r\r %hs  KOGNA Firmware\r %hs  DSP_KOGNA.out file"),
+				BoardVersion,
+				CoffVersion);
+		else if (BoardVersion.Find("KFLOP") == 0)
+			ms.Format(Translate("DSP_KFLOP.out Date Stamp Doesn't match KFLOP Firmware\r\r Before compiling programs please use Flash/Config Screen and select:\r Download New Version.  This will install compatible Firmware with\r this version of software\r\r %hs  KFLOP Firmware\r %hs  DSP_KFLOP.out file"),
 				BoardVersion,
 				CoffVersion);
 		else
-			snprintf(ms, MAX_LINE, "DSP_KMotion.out Date Stamp Doesn't match KMotion Firmware" LINE_BREAK LINE_BREAK
-				" Before compiling programs please use Flash/Config Screen and select:" LINE_BREAK
-				" Download New Version.  This will install compatible Firmware with" LINE_BREAK
-				" this version of software" LINE_BREAK LINE_BREAK
-				" %s  KMotion Firmware" LINE_BREAK
-				" %s  DSP_KMotion.out file",
+			ms.Format(Translate("DSP_KMotion.out Date Stamp Doesn't match KMotion Firmware\r\r Before compiling programs please use Flash/Config Screen and select:\r Download New Version.  This will install compatible Firmware with\r this version of software\r\r %hs  KMotion Firmware\r %hs  DSP_KMotion.out file"),
 				BoardVersion,
 				CoffVersion);
 
@@ -1765,7 +2137,7 @@ int CKMotionDLL::CheckKMotionVersion(int *type, bool GetBoardTypeOnly, bool Wait
 
 // return size of coff file sections
 
-int CKMotionDLL::CheckCoffSize(const char *InFile, int *size_text, int *size_bss, int *size_data, int *size_total)
+int CKMotionDLL::CheckCoffSize(const TCHAR *InFile, int *size_text, int *size_bss, int *size_data, int *size_total)
 {
 	FILE *f;
 	unsigned int str_size;
@@ -1781,7 +2153,7 @@ int CKMotionDLL::CheckCoffSize(const char *InFile, int *size_text, int *size_bss
 
 	*size_text = *size_bss = *size_data = *size_total = 0;
 	
-	f = fopen(InFile,"rb");
+	f = _tfopen(InFile,_T("rb"));
 
 	if (!f) return 1;
 
@@ -1807,13 +2179,13 @@ int CKMotionDLL::CheckCoffSize(const char *InFile, int *size_text, int *size_bss
 	#endif
 
 	if (file_hdr.f_opthdr == AOUTSZ) { 
-		if (fread(&o_filehdr, AOUTSZ, 1, f) != 1) return 1;
+		if (fread(&o_filehdr, AOUTSZ, 1, f) != 1) {fclose(f); return 1;}
 		have_aout = 1;
 	}
 
 	// first read the string table
 
-	if (fseek(f,file_hdr.f_symptr + file_hdr.f_nsyms * SYMESZ,SEEK_SET)) return 1;
+	if (fseek(f,file_hdr.f_symptr + file_hdr.f_nsyms * SYMESZ,SEEK_SET)) {fclose(f); return 1;}
 	if (fread(&str_size, sizeof(str_size), 1, f) != 1) { 
 		// No strings.  Since don't support -g compiler option on Linux, a lot of 
 		// things can be missing.  We won't find the start/stop symbols either. 
@@ -1822,7 +2194,7 @@ int CKMotionDLL::CheckCoffSize(const char *InFile, int *size_text, int *size_bss
     else { 
 		Coff_str_table = (char *)malloc(str_size); 
  
-		if (fread(Coff_str_table, str_size-4, 1, f) != 1) {free(Coff_str_table); return 1;}; 
+		if (fread(Coff_str_table, str_size-4, 1, f) != 1) {free(Coff_str_table); fclose(f); return 1;}; 
 	} 
 
 	// read/process all the symbols
@@ -1831,11 +2203,11 @@ int CKMotionDLL::CheckCoffSize(const char *InFile, int *size_text, int *size_bss
 
 	if (file_hdr.f_nsyms) {
 
-		if (fseek(f,file_hdr.f_symptr,SEEK_SET)) {free(Coff_str_table); return 1;};
+		if (fseek(f,file_hdr.f_symptr,SEEK_SET)) {free(Coff_str_table); fclose(f); return 1;};
 
 		for (i=0; i< file_hdr.f_nsyms; i++)
 		{
-			if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); return 1;};
+			if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); fclose(f); return 1;};
 
 			if (csym._n._n_n._n_zeroes == 0)
 			{
@@ -1869,7 +2241,7 @@ int CKMotionDLL::CheckCoffSize(const char *InFile, int *size_text, int *size_bss
 
 			if (csym.n_numaux == 1)
 			{
-				if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); return 1;};
+				if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); fclose(f); return 1;};
 				i++;
 			}
 		 }
@@ -1936,7 +2308,7 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 
 	// find the offset to the string table
 	// read in the String section header
-	if (fseek(f, file_hdr.e_shoff + file_hdr.e_shstrndx * file_hdr.e_shentsize, SEEK_SET)) return 1;
+	if (fseek(f, file_hdr.e_shoff + file_hdr.e_shstrndx * file_hdr.e_shentsize, SEEK_SET)) {fclose(f); return 1;}
 	if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) return 1;
 
 	int HeaderStringsOffset = sect_hdr.sh_offset;
@@ -1950,7 +2322,7 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 	//find 3 section headers
 	const_hdr.sh_name = strtab_hdr.sh_name = symbol_hdr.sh_name = 0;
 
-	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) return 1;  // seek to section headers
+	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) {fclose(f); return 1;}  // seek to section headers
 	for (i = 0; i < file_hdr.e_shnum; i++)
 	{
 		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  return 1; }
@@ -2028,7 +2400,7 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 //
 
 
-int CKMotionDLL::ExtractElfVersionString(const char *InFile, char *Version)
+int CKMotionDLL::ExtractElfVersionString(const TCHAR *InFile, char *Version)
 {
 	FILE *f;
 	int i;
@@ -2037,32 +2409,32 @@ int CKMotionDLL::ExtractElfVersionString(const char *InFile, char *Version)
 	Elf32_Shdr sect_hdr, const_hdr, symbol_hdr, strtab_hdr;
 
 
-	f = fopen(InFile, "rb");
+	f = _tfopen(InFile, _T("rb"));
 
 
 	if (!f) return 1;
 
-	if (fread(&file_hdr, sizeof(file_hdr), 1, f) != 1) return 1;
+	if (fread(&file_hdr, sizeof(file_hdr), 1, f) != 1) {fclose(f); return 1;}
 
 	// find the offset to the string table
 	// read in the String section header
-	if (fseek(f, file_hdr.e_shoff + file_hdr.e_shstrndx * file_hdr.e_shentsize, SEEK_SET)) return 1;
-	if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) return 1;
+	if (fseek(f, file_hdr.e_shoff + file_hdr.e_shstrndx * file_hdr.e_shentsize, SEEK_SET)) {fclose(f); return 1;}
+	if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) {fclose(f); return 1;}
 
 	int HeaderStringsOffset = sect_hdr.sh_offset;
 	int HeaderStringTableSize = sect_hdr.sh_size;
 
 	char *HeaderStringTable = (char *)malloc(HeaderStringTableSize + 1);
-	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  return 1; }
-	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable;  return 1; }
+	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  fclose(f); return 1; }
+	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable; fclose(f); return 1; }
 
 	//find 3 section headers
 	const_hdr.sh_name = strtab_hdr.sh_name = symbol_hdr.sh_name = 0;
 
-	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) return 1;  // seek to section headers
+	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) {delete HeaderStringTable; fclose(f); return 1;}  // seek to section headers
 	for (i = 0; i < file_hdr.e_shnum; i++)
 	{
-		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  return 1; }
+		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  fclose(f); return 1; }
 
 		if (strcmp(HeaderStringTable + sect_hdr.sh_name, ".const") == 0)
 			const_hdr = sect_hdr;
@@ -2076,20 +2448,20 @@ int CKMotionDLL::ExtractElfVersionString(const char *InFile, char *Version)
 
 	delete HeaderStringTable;
 
-	if (i == file_hdr.e_shnum) return 1;
+	if (i == file_hdr.e_shnum) {fclose(f); return 1;}
 
 	// Read in main String table
 	int StringsOffset = strtab_hdr.sh_offset;
 	int StringTableSize = strtab_hdr.sh_size;
 
 	char *StringTable = (char *)malloc(StringTableSize + 1);
-	if (fseek(f, StringsOffset, SEEK_SET)) { delete StringTable;  return 1; }
-	if (fread(StringTable, StringTableSize, 1, f) != 1) { delete StringTable;  return 1; }
+	if (fseek(f, StringsOffset, SEEK_SET)) { delete StringTable;  fclose(f); return 1; }
+	if (fread(StringTable, StringTableSize, 1, f) != 1) { delete StringTable;  fclose(f); return 1; }
 
 	// read in all symbols
 	Elf32_Sym *Syms = (Elf32_Sym *)malloc(symbol_hdr.sh_size * sizeof(Elf32_Sym));
-	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  return 1; }  // seek to symbols
-	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { delete StringTable; delete Syms;  return 1; }
+	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  fclose(f); return 1; }  // seek to symbols
+	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { delete StringTable; delete Syms;  fclose(f); return 1; }
 
 	// go through the symbols looking for the Version 
 	for (i = 0; i < (int)(symbol_hdr.sh_size / sizeof(Elf32_Sym)); i++)
@@ -2098,9 +2470,10 @@ int CKMotionDLL::ExtractElfVersionString(const char *InFile, char *Version)
 		{
 			// found it
 			// seek to it in .const
-			if (fseek(f, Syms[i].st_value - const_hdr.sh_addr + const_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  return 1; }
+			if (fseek(f, Syms[i].st_value - const_hdr.sh_addr + const_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  fclose(f); return 1; }
 			// read it
-			if (fread(Version, 50, 1, f) != 1) { delete StringTable; delete Syms;  return 1; }
+			if (fread(Version, 50, 1, f) != 1) { delete StringTable; delete Syms;  fclose(f); return 1; }
+			fclose(f);
 			delete StringTable;
 			delete Syms;
 			return 0;
@@ -2109,11 +2482,12 @@ int CKMotionDLL::ExtractElfVersionString(const char *InFile, char *Version)
 
 	delete StringTable;
 	delete Syms;
+	fclose(f);
 	return 0;
 }
 
 
-int CKMotionDLL::ExtractCoffVersionString(const char *InFile, char *Version)
+int CKMotionDLL::ExtractCoffVersionString(const TCHAR *InFile, char *Version)
 {
 	FILE *f;
 	unsigned int str_size;
@@ -2126,13 +2500,13 @@ int CKMotionDLL::ExtractCoffVersionString(const char *InFile, char *Version)
 	FILHDR  file_hdr;                       /* FILE HEADER STRUCTURE              */
 	AOUTHDR o_filehdr;                      /* OPTIONAL (A.OUT) FILE HEADER       */
 
-	f = fopen(InFile,"rb");
+	f = _tfopen(InFile, _T("rb"));
 
 	if (!f) return 1;
 
-	if (fread(&file_hdr, FILHSZ, 1, f) != 1) return 1;
+	if (fread(&file_hdr, FILHSZ, 1, f) != 1) {fclose(f); return 1;}
 
-	if (fread(&o_filehdr, sizeof(o_filehdr), 1, f) != 1) return 1;
+	if (fread(&o_filehdr, sizeof(o_filehdr), 1, f) != 1) {fclose(f); return 1;}
 
 	// check for ELF file
 	char *p = (char*)&file_hdr;
@@ -2146,32 +2520,32 @@ int CKMotionDLL::ExtractCoffVersionString(const char *InFile, char *Version)
 
 	for (i=0; i<file_hdr.f_nscns; i++)
 	{
-		if (fread(&sect_hdr, SCNHSZ, 1, f) != 1) return 1;
+		if (fread(&sect_hdr, SCNHSZ, 1, f) != 1) {fclose(f); return 1;}
 
 		if (strcmp(".const",sect_hdr.s_name)==0) break;  // found it?
 	}
 
-	if (i==file_hdr.f_nscns) return 1;
+	if (i==file_hdr.f_nscns) {fclose(f); return 1;}
 
 
 	// now read the string table
 
-	if (fseek(f,file_hdr.f_symptr + file_hdr.f_nsyms * SYMESZ,SEEK_SET)) return 1;
-	if (fread(&str_size, sizeof(int), 1, f) != 1) return 1;
+	if (fseek(f,file_hdr.f_symptr + file_hdr.f_nsyms * SYMESZ,SEEK_SET)) {fclose(f); return 1;}
+	if (fread(&str_size, sizeof(int), 1, f) != 1) {fclose(f); return 1;}
 
 	Coff_str_table = (char *)malloc(str_size);
 
-	if (fread(Coff_str_table, str_size-4, 1, f) != 1) {free(Coff_str_table); return 1;};
+	if (fread(Coff_str_table, str_size-4, 1, f) != 1) {free(Coff_str_table); fclose(f); return 1; }
 
 	// read/process all the symbols
 
 	// seek back to symbols
 
-	if (fseek(f,file_hdr.f_symptr,SEEK_SET)) {free(Coff_str_table); return 1;};
+	if (fseek(f,file_hdr.f_symptr,SEEK_SET)) {free(Coff_str_table); fclose(f); return 1; }
 
 	for (i=0; i< file_hdr.f_nsyms; i++)
 	{
-		if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); return 1;};
+		if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); fclose(f); return 1; }
 
 		if (csym._n._n_n._n_zeroes == 0)
 		{
@@ -2204,7 +2578,7 @@ int CKMotionDLL::ExtractCoffVersionString(const char *InFile, char *Version)
 
 		if (csym.n_numaux == 1)
 		{
-			if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); return 1;};
+			if (fread(&csym, SYMESZ, 1, f) != 1) {free(Coff_str_table); fclose(f); return 1; }
 			i++;
 		}
 	}
@@ -2212,7 +2586,7 @@ int CKMotionDLL::ExtractCoffVersionString(const char *InFile, char *Version)
 
 	free(Coff_str_table); 
 
-	if (VersionAddress==0) return 1;
+	if (VersionAddress==0) {fclose(f); return 1;}
 
 	// compute file offset for the string
 
@@ -2220,11 +2594,11 @@ int CKMotionDLL::ExtractCoffVersionString(const char *InFile, char *Version)
 		(VersionAddress - sect_hdr.s_paddr); // plus offset - physical address
 
 
-	if (fseek(f,offset,SEEK_SET)) return 1;
+	if (fseek(f,offset,SEEK_SET)) {fclose(f); return 1;}
 	
 	for (i=0; i<80; i++)
 	{
-		if (fread(Version+i, sizeof(char), 1, f) != 1) return 1;
+		if (fread(Version+i, sizeof(char), 1, f) != 1) {fclose(f); return 1;}
 		if (Version[i]==0) break;
 	}
 
@@ -2236,7 +2610,7 @@ int CKMotionDLL::ExtractCoffVersionString(const char *InFile, char *Version)
 }
 
 
-int CKMotionDLL::ElfLoad(const char *InFile, unsigned int *EntryPoint, int PackToFlash)
+int CKMotionDLL::ElfLoad(const TCHAR *InFile, unsigned int *EntryPoint, int PackToFlash)
 {
 	FILE *f;
 	int i;
@@ -2245,11 +2619,11 @@ int CKMotionDLL::ElfLoad(const char *InFile, unsigned int *EntryPoint, int PackT
 	Elf32_Shdr sect_hdr, LoadSections[MAX_SECTIONS];
 	int iLoadSections = 0;
 
-	f = fopen(InFile, "rb");
+	f = _tfopen(InFile, _T("rb"));
 
 	if (!f) return 1;
 
-	if (fread(&file_hdr, sizeof(file_hdr), 1, f) != 1) return 1;
+	if (fread(&file_hdr, sizeof(file_hdr), 1, f) != 1) {fclose(f); return 1;}
 
 	// check for ELF file
 	char *p = (char*)&file_hdr;
@@ -2261,31 +2635,33 @@ int CKMotionDLL::ElfLoad(const char *InFile, unsigned int *EntryPoint, int PackT
 
 	// find the offset to the string table
 	// read in the String section header
-	if (fseek(f, file_hdr.e_shoff + file_hdr.e_shstrndx * file_hdr.e_shentsize, SEEK_SET)) return 1;
-	if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) return 1;
+	if (fseek(f, file_hdr.e_shoff + file_hdr.e_shstrndx * file_hdr.e_shentsize, SEEK_SET)) {fclose(f); return 1;}
+	if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) {fclose(f); return 1;}
 
 	int HeaderStringsOffset = sect_hdr.sh_offset;
 	int HeaderStringTableSize = sect_hdr.sh_size;
 
 	char *HeaderStringTable = (char *)malloc(HeaderStringTableSize + 1);
-	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  return 1; }
-	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable;  return 1; }
+	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  fclose(f); return 1; }
+	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable;  fclose(f); return 1; }
 
 
 	*EntryPoint = file_hdr.e_entry; // return the entry point
 
 	//identify all the sections that have data to be placed in memory
 
-	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) return 1;  // seek to section headers
+	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) { delete HeaderStringTable; fclose(f); return 1;}  // seek to section headers
 	for (i = 0; i < file_hdr.e_shnum; i++)
 	{
-		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  return 1; }
+		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  fclose(f); return 1; }
 
 		if (sect_hdr.sh_type == SHT_PROGBITS && (sect_hdr.sh_flags & SHF_ALLOC) == SHF_ALLOC)
 		{
 			if (iLoadSections == MAX_SECTIONS)
 			{
-				MessageBoxW(NULL, Translate("Too many Sections in ELF File"), L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+				MessageBox(NULL, Translate("Too many Sections in ELF File"), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+				delete HeaderStringTable;  
+				fclose(f);
 				return 1;
 			}
 			LoadSections[iLoadSections++] = sect_hdr;
@@ -2297,13 +2673,13 @@ int CKMotionDLL::ElfLoad(const char *InFile, unsigned int *EntryPoint, int PackT
 	// now load them all
 	for (i = 0; i < iLoadSections; i++)
 	{
-		if (fseek(f, LoadSections[i].sh_offset, SEEK_SET)) return 1;  // seek to data
+		if (fseek(f, LoadSections[i].sh_offset, SEEK_SET)) {fclose(f); return 1;}  // seek to data
 
 		// allocate memory for data
 		unsigned char *buffer = (unsigned char *)malloc(LoadSections[i].sh_size);
 		if (!buffer)
 		{
-			MessageBoxW(NULL, Translate("Memory Allocation Error for ELF File"), L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, Translate("Memory Allocation Error for ELF File"), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			fclose(f);
 			return 1;
 		}
@@ -2317,26 +2693,22 @@ int CKMotionDLL::ElfLoad(const char *InFile, unsigned int *EntryPoint, int PackT
 		delete buffer;
 	}
 
+	fclose(f);
 	return 0;
 }
 
-void CKMotionDLL::DoErrMsg(const char* s)
-{
-	std::wstring t = kmx::strtowstr(s);
-	DoErrMsg(t.c_str());
-}
 
-void CKMotionDLL::DoErrMsg(const wchar_t *s)
+void CKMotionDLL::DoErrMsg(const TCHAR *s)
 {
 
 	if (!ErrMessageDisplayed)
 	{
 		ErrMessageDisplayed=true;
-		if (ErrMsgHandlerW)
+		if (ErrMsgHandler)
 		{
 			try
 			{
-				ErrMsgHandlerW(s);
+				ErrMsgHandler(s);
 			}
 			catch (...)
 			{
@@ -2345,7 +2717,7 @@ void CKMotionDLL::DoErrMsg(const wchar_t *s)
 		}
 		else
 		{
-			MessageBoxW(NULL,s,L"KMotion",MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+			MessageBox(NULL,s,_T("KMotion"),MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 		}
 		ErrMessageDisplayed=false;
 	}
@@ -2455,10 +2827,16 @@ int CKMotionDLL::GetStatus(MAIN_STATUS& status, bool lock)
 	return 0;
 }
 
-
+#ifdef _UNICODE
+int CKMotionDLL::FlashKognaCOM(const char* Com)
+{
+	CString ComW = Com;
+	return FlashKognaCOM(ComW);
+}
+#endif
 #define FLASHWRITER "\\DSP_KOGNA\\ti_tools\\flash_writer\\sfh_OMAP-L138.exe"
 //c:\KMotionSrcKogna\DSP_KOGNA\ti_tools\flash_writer\sfh_OMAP-L138.exe -targettype C6748_LCDK -flashtype NAND -v -p COM10 -flash_noubl C:\KMotionSrcKogna\DSP_KOGNA\Debug\DSPKOGNA.bin
-int CKMotionDLL::FlashKognaCOM(const char* Com)
+int CKMotionDLL::FlashKognaCOM(const TCHAR* Com)
 {
 #ifndef _KMOTIONX
 	SECURITY_ATTRIBUTES sa = { 0 };
@@ -2470,7 +2848,7 @@ int CKMotionDLL::FlashKognaCOM(const char* Com)
 	HANDLE              hPipeInputWrite = NULL;
 	BOOL                bTest = 0;
 	DWORD               dwNumberOfBytesRead = 0;
-	wchar_t             szMsg[100];
+	TCHAR             szMsg[100];
 
 	CString Errors;
 
@@ -2479,7 +2857,7 @@ int CKMotionDLL::FlashKognaCOM(const char* Com)
 	// Try and locate the TI Flash Writer
 	CString FlashWriter = MainPathRoot + FLASHWRITER;
 
-	FILE *f = fopen(FlashWriter, "r");  // try rel where the KMotionDLL is
+	FILE *f = _tfopen(FlashWriter, _T("r"));  // try rel where the KMotionDLL is
 
 	if (f == NULL)
 	{
@@ -2505,7 +2883,7 @@ int CKMotionDLL::FlashKognaCOM(const char* Com)
 	CString cmd;  // build command line
 	CString BindTo, IncSrcPath1, IncSrcPath2, IncSrcPath3;
 
-	cmd.Format(" -targettype C6748_LCDK -flashtype NAND -v -p %s -flash_noubl %s\\DSP_KOGNA\\DSPKOGNA.bin", Com, MainPathRoot);
+	cmd.Format(_T(" -targettype C6748_LCDK -flashtype NAND -v -p %s -flash_noubl %s\\DSP_KOGNA\\DSPKOGNA.bin"), Com, MainPathRoot);
 	cmd = FlashWriter + cmd;
 
 	CreateProcess(
@@ -2529,7 +2907,7 @@ int CKMotionDLL::FlashKognaCOM(const char* Com)
 
 	if (exitcode != 0)
 	{
-		wsprintfW(szMsg, Translate("Error #%d Executing Flash over COM Port\r\rMake sure %s is present and not in use by another App"), GetLastError(), (CStringW)Com);
+		wsprintf(szMsg, Translate("Error #%d Executing Flash over COM Port\r\rMake sure %s is present and not in use by another App"), GetLastError(), Com);
 		DoErrMsg(szMsg);
 		return 1;
 	}
@@ -2539,7 +2917,7 @@ int CKMotionDLL::FlashKognaCOM(const char* Com)
 #endif
 }
 
-std::wstring CKMotionDLL::Translate(std::string s)
+CString CKMotionDLL::Translate(CString s)
 {
 		return Trans.Translate(s);
 }

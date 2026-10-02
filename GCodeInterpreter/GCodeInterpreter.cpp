@@ -1,3 +1,4 @@
+#include "GCodeInterpreter.h"
 // GCodeInterpreter.cpp : Defines the entry point for the DLL application.
 //
 
@@ -39,6 +40,7 @@ CGCodeInterpreter::CGCodeInterpreter(CCoordMotion *CoordM)
 
 	p_setup = &_setup;
 	m_Resume=false;
+	m_BypassGCodeStatusString = false;
 	CoordMotion->m_realtime_Sequence_number_valid=ExecutionInProgress=false;
 
 	for (int i=0; i<MAX_MCODE_ACTIONS; i++)
@@ -53,8 +55,10 @@ CGCodeInterpreter::CGCodeInterpreter(CCoordMotion *CoordM)
 
 	p_setup->length_units=CANON_UNITS_INCHES;
 	p_setup->length_units_of_origin = CANON_UNITS_UNDEFINED;
+	p_setup->length_units_of_axis_offset = CANON_UNITS_UNDEFINED;
 	p_setup->origin_index=1;
 	p_setup->tool_table_index=1;
+	p_setup->AllowConcaveCorners = FALSE;
 
 	m_InitializeOnExecute = true; // make sure we initialize at least once
 	m_ReadToolFile = true; // make sure we read the tool file at least once
@@ -73,7 +77,7 @@ CGCodeInterpreter::~CGCodeInterpreter()
 
 int CGCodeInterpreter::Interpret(
 			  int board_type,
-		      const char *fname,
+		      const TCHAR *fname,
 			  int start, int end,
 			  int restart,
               G_STATUS_CALLBACK *StatusFn,
@@ -94,7 +98,7 @@ int CGCodeInterpreter::Interpret(
 	m_CompleteFn=CompleteFn;
 	m_StatusFn=StatusFn;
 	m_InFile=fname;
-	m_Halt=m_HaltNextLine=false;
+	m_Halt = m_HaltNextLine = false;
 	CoordMotion->ClearHalt();
 
 	if (LaunchExecution()) GCodeThreadDone();
@@ -178,24 +182,24 @@ bool CGCodeInterpreter::GetAbort()
 	return CoordMotion->GetAbort();
 }
 
-void CGCodeInterpreter::SetToolFile(char *f)
+void CGCodeInterpreter::SetToolFile(TCHAR *f)
 {
-	strncpy(ToolFile,f,MAX_PATH);
+	_tcsncpy(ToolFile,f,MAX_PATH);
 }
 
-void CGCodeInterpreter::SetSetupFile(char *f)
+void CGCodeInterpreter::SetSetupFile(TCHAR *f)
 {
-	strncpy(SetupFile,f,MAX_PATH);
+	_tcsncpy(SetupFile,f,MAX_PATH);
 }
 
-void CGCodeInterpreter::SetVarsFile(char *f)
+void CGCodeInterpreter::SetVarsFile(TCHAR *f)
 {
-	strncpy(VarsFile,f,MAX_PATH);
+	_tcsncpy(VarsFile,f,MAX_PATH);
 }
 
 int CGCodeInterpreter::rs274ErrorExit(int status)
 {
-	std::wstring ErrDescr;
+	CString ErrDescr;
 
 	rs274ngc_close();
 
@@ -228,12 +232,15 @@ int CGCodeInterpreter::rs274ErrorExit(int status)
 int CGCodeInterpreter::ReadSetupFile()
 {
 	int status = RS274NGC_OK;
-	
+
 	if (SetupFile[0]!=0)
 	{
 		status = read_setup_file(SetupFile, &_setup);
+		// the setup file may raw-flip length_units (KeepOffsets files):
+		// re-derive the G92 offsets from their units stamp
+		rs274ngc_resync_axis_offset_units();
 	}
-	
+
 	return status;
 }
 
@@ -250,7 +257,7 @@ int CGCodeInterpreter::InitializeInterp(void)
 
 	CoordMotion->SetTPParams();
 
-	CoordMotion->DownloadInit();  // intialize download/look ahead variables  
+	CoordMotion->DownloadInit();  // intialize download/look ahead variables
 	
 	status = rs274ngc_init();
 	if (status != RS274NGC_OK)	return rs274ErrorExit(status);
@@ -266,8 +273,12 @@ int CGCodeInterpreter::InitializeInterp(void)
 	{
 		status = read_setup_file(SetupFile, &_setup);
 		if (status != RS274NGC_OK)	return rs274ErrorExit(status);
+		// the setup file may raw-flip length_units (KeepOffsets files):
+		// re-derive the G92 offsets from their units stamp
+		rs274ngc_resync_axis_offset_units();
 	}
 	CoordMotion->m_PreviouslyStopped = STOPPED_NONE;
+	p_setup->ConcaveDefered = FALSE;
 	m_InitializeOnExecute = false;
 	return 0;
 }
@@ -278,8 +289,8 @@ int CGCodeInterpreter::InitializeInterp(void)
 int CGCodeInterpreter::DoExecute()
 {
 	int status;
-	char trash[INTERP_TEXT_SIZE];
-	char * read_ok;
+	TCHAR trash[INTERP_TEXT_SIZE];
+	TCHAR * read_ok;
 	int program_status;
 	//CString OutputCRLF;
 
@@ -297,6 +308,13 @@ int CGCodeInterpreter::DoExecute()
 //  SET_CANON_DEVICE(device);
 
 	if (DoResumeSafe()) return 1;  // check for re-position motions
+
+	// the segment log truncates when execution starts from the TOP of
+	// the program (a fresh run - note M30 rewinds m_CurrentLine to 0
+	// without setting m_restart); starting mid-file (single stepping,
+	// resume) appends to the same log
+	if (m_restart || m_InitializeOnExecute || m_CurrentLine == 0)
+		CoordMotion->SegLogNewRun();
 
 	// initialize everything if we are starting at the beginning
 
@@ -372,7 +390,7 @@ int CGCodeInterpreter::DoExecute()
 			
 	for( ; m_GCodeReads<m_CurrentLine ; m_GCodeReads++)
 	{
-		read_ok = fgets(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
+		read_ok = _fgetts(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
 		if (!read_ok) 
 		{
 			ErrorOutput=kmx::wstrtostr(CoordMotion->KMotionDLL->Translate("Error while reading GCode file "));
@@ -396,15 +414,11 @@ int CGCodeInterpreter::DoExecute()
 		_setup.current_line = m_CurrentLine = m_GCodeReads;
 
 		StateSaved=false;  // remember we should save the state at some point
-		
-		// give output to caller
-#ifndef _KMOTIONX
-		//not needed on linux
-		CString tmpStr = Output.c_str();
-		tmpStr.Replace("\n","\r\n");
-		strcpy(Output, tmpStr);
-#endif
-		m_StatusFn(m_CurrentLine,Output.c_str());
+
+		// give output to caller			
+		Output.Replace(_T("\n"), _T("\r\n"));
+
+		m_StatusFn(m_CurrentLine,Output);
 		
 		Output="";  // clear it
 
@@ -484,6 +498,18 @@ int CGCodeInterpreter::DoExecuteComplete()
 		}
 	}
 
+	// An Abort or Halt skips ExecutionStop above, which is what normally
+	// closes the log files at the end of a run - after a following error /
+	// axis-disable abort they stayed open (unopenable by the Log Plotter)
+	// until the next run.  Close them here, on the interpreter thread that
+	// writes them.  On a Halt only the segment log is closed (it reopens
+	// in append on resume); the TP3 timeline stays open so a resumed run
+	// keeps appending to the same timeline.
+	if (CoordMotion->GetAbort())
+		CoordMotion->CloseLogs();
+	else
+		CoordMotion->SegLogClose();
+
 	if (CoordMotion->m_Stopping != STOPPED_NONE)
 	{
 		// if we were previously stopped then restore the state
@@ -552,7 +578,7 @@ int CGCodeInterpreter::LaunchExecution()
 
 volatile bool InvokeInterpComplete;
 
-void InvokeCompleteCallback(int status, int lineno, int sequence_number, const char *err)
+void InvokeCompleteCallback(int status, int lineno, int sequence_number, const TCHAR *err)
 {
 	if (status)
 	{
@@ -561,7 +587,7 @@ void InvokeCompleteCallback(int status, int lineno, int sequence_number, const c
 	InvokeInterpComplete=true;
 }
 
-void InvokeStatusCallback(int line_no, const char *msg)
+void InvokeStatusCallback(int line_no, const TCHAR *msg)
 {
 }
 
@@ -619,7 +645,7 @@ int CGCodeInterpreter::InvokeAction(int i, BOOL FlushBeforeUnbufferedOperation, 
 
 			if (Timer.Elapsed_Seconds() > 10.0)
 			{
-				CoordMotion->KMotionDLL->DoErrMsg("Timeout waiting on Action to complete");
+				CoordMotion->KMotionDLL->DoErrMsg(_T("Timeout waiting on Action to complete"));
 				return 1;
 			}
 		}
@@ -656,6 +682,12 @@ int CGCodeInterpreter::InvokeAction(int i, BOOL FlushBeforeUnbufferedOperation, 
 			params,						 /* argument to thread function   */
 			0,                           /* use default creation flags    */
 			&params->GC->m_InvokeThreadID);
+
+		// the thread runs detached (completion is signaled through
+		// m_InvokeThreadID) - without this every M-code Action leaked a
+		// thread HANDLE for the life of the process
+		if (Thread) CloseHandle(Thread);
+
 #endif
 		return 0;
 	}
@@ -694,7 +726,8 @@ DWORD DoInvokeShell(LPDWORD lpdwParam)
 
 int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOperation, MCODE_ACTION *p)
 {
-	char s[MAX_LINE]; char s0[32]; char e[MAX_PATH];
+	CStringA s;
+	CString w, w0, e;
 	double value;
 	int ivalue,ipersist,result;
 	bool MCode;
@@ -908,48 +941,42 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 	
 			// If a C File is specified then Compile and load it
 	
-			if(e[0] != '\0' && strcmp(e,".out")==0)
+			if (e.Right(4) == ".out")
 			{
+				CString FileName = p->String;
 #ifdef _KMOTIONX
-				char FileName[MAX_PATH];
-				strcpy(FileName, p->String);
-				if(strchr(FileName,PATH_SEPARATOR) - FileName > -1){
-					snprintf(FileName, MAX_PATH, "%s%s%s", CoordMotion->MainPathRoot, C_PROGRAMS_DIR,  p->String);
-				}
+				if (FileName.Find(PATH_SEPARATOR) == -1)  // if no Path in File name add in the default path
 #else
-				CString FileName = p->String; 
-				if (FileName.Find("\\\\") == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
+				if (FileName.Find(_T("\\\\")) == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
+#endif
 				{
 					FileName = CoordMotion->MainPathRoot + ((CString)C_PROGRAMS_DIR) + FileName;
 				}
-#endif
 
 				if (CoordMotion->KMotionDLL->LoadCoff((int)p->dParams[0], FileName))
 				{
-					CoordMotion->KMotionDLL->DoErrMsg(CoordMotion->KMotionDLL->Translate("Error Loading KMotion Coff Program\r\r") + kmx::strtowstr(p->String) + L"\r\r");
+					CoordMotion->KMotionDLL->DoErrMsg(CoordMotion->KMotionDLL->Translate("Error Loading KMotion Coff Program\r\r") + p->String + "\r\r");
 					return 1;
 				}
 			}
 			else if (p->String[0])
 			{
-				char Err[500];
+				CString Err;
 
-#ifdef _KMOTIONX
-				char FileName[MAX_PATH];
-				strcpy(FileName, p->String);
-				if(strchr(FileName,PATH_SEPARATOR) == NULL){
-					snprintf(FileName, MAX_PATH, "%s%s%s", CoordMotion->MainPathRoot, C_PROGRAMS_DIR,  p->String);
-				}
-#else
 				CString FileName = p->String; 
-				if (FileName.Find("\\\\") == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
+#ifdef _KMOTIONX
+				if (FileName.Find(PATH_SEPARATOR) == -1)  // if no Path in File name add in the default path
+#else
+				if (FileName.Find(_T("\\\\")) == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
+#endif
 				{
 					FileName = CoordMotion->MainPathRoot + ((CString)C_PROGRAMS_DIR) + FileName;
 				}
-#endif
-				if (CoordMotion->KMotionDLL->CompileAndLoadCoff(FileName, (int)p->dParams[0], Err, 499))
+
+				if (CoordMotion->KMotionDLL->CompileAndLoadCoff(FileName, (int)p->dParams[0], Err.GetBuffer(500), 499))
 				{
-					CoordMotion->KMotionDLL->DoErrMsg(CoordMotion->KMotionDLL->Translate("Error Compiling and Loading KMotion Program\r\r") + kmx::strtowstr(FileName) + L"\r\r" + kmx::strtowstr(Err));
+					Err.ReleaseBuffer();
+					CoordMotion->KMotionDLL->DoErrMsg(CoordMotion->KMotionDLL->Translate("Error Compiling and Loading KMotion Program\r\r") + FileName + "\r\r" + Err);
 					return 1;
 				}
 			}
@@ -961,7 +988,7 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 	
 			if (p->Action == M_Action_Program_wait || p->Action == M_Action_Program_wait_sync)
 			{
-				char response[MAX_LINE];
+				CStringA response;
 	
 				int count=0;
 	
@@ -1033,15 +1060,15 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 		}
 
 		// we will be executing a PC Program pass any related parameters
-		s[0]='\0'; //s="";
+		w="";
 		if (i==6)  // tool change
 		{
-			snprintf(s, MAX_LINE, " %d",p_setup->selected_tool_slot);
+			w.Format(_T(" %d"),p_setup->selected_tool_slot);
 		}
 		else if (i==10)  // set speed
 		{
 			float fspeed = (float)(p_setup->speed * CoordMotion->GetSpindleRateOverride());
-			snprintf(s, MAX_LINE, " %f",fspeed);
+			w.Format(_T(" %f"),fspeed);
 		}
 		else
 		{
@@ -1050,32 +1077,31 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 
 			if (p_setup->block1.p_flag)
 			{
-				snprintf(s0, 32, " %f", p_setup->block1.p_number);
-				strcat(s,s0);
+				w0.Format(_T(" %f"), p_setup->block1.p_number);
+				w=w+w0;
 			}
 
 			if (p_setup->block1.q_flag)
 			{
-				snprintf(s0, 32, " %f", p_setup->block1.q_number);
-				strcat(s,s0);
+				w0.Format(_T(" %f"), p_setup->block1.q_number);
+				w=w+w0;
 			}
 
 			if (p_setup->block1.r_flag)
 			{
-				snprintf(s0, 32, " %f", p_setup->block1.r_number);
-				strcat(s,s0);
+				w0.Format(_T(" %f"), p_setup->block1.r_number);
+				w=w+w0;
 			}
 		}
-		char pcCmd[MAX_LINE];
-		snprintf(pcCmd, MAX_LINE, "%s%s",p->String,s);
-		result = ExecutePC(pcCmd);  // call the executable with parameters
+
+		result = ExecutePC(p->String+w);  // call the executable with parameters
 		if (result)
 		{
-			wchar_t Err[350];
+			CString Err;
 
-			swprintf(Err, 350, CoordMotion->KMotionDLL->Translate("Error Executing PC Program:\r\r%s\r\rReturn code = %d\r\rAbort?").c_str(),p->String,result);
+			Err.Format(CoordMotion->KMotionDLL->Translate("Error Executing PC Program:\r\r%s\r\rReturn code = %d\r\rAbort?"), p->String, result);
 
-			if (MessageBoxW(NULL, Err, L"KMotion", MB_YESNO) == IDYES) Abort();
+			if (MessageBox(NULL, Err, _T("KMotion"), MB_YESNO) == IDYES) Abort();
 		};
 		break;
 
@@ -1092,7 +1118,7 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 }
 
 
-int CGCodeInterpreter::ExecutePC(const char *Name, bool NoWait)
+int CGCodeInterpreter::ExecutePC(const TCHAR *Name, bool NoWait)
 {
 #ifdef _KMOTIONX
 	int exitcode;
@@ -1379,15 +1405,15 @@ int CGCodeInterpreter::ChangeFixtureNumber(int fixture)
 {
 	switch (fixture)
 	{
-	case 1:	return rs274ngc_execute("G54");
-	case 2:	return rs274ngc_execute("G55");
-	case 3:	return rs274ngc_execute("G56");
-	case 4:	return rs274ngc_execute("G57");
-	case 5:	return rs274ngc_execute("G58");
-	case 6:	return rs274ngc_execute("G59");
-	case 7:	return rs274ngc_execute("G59.1");
-	case 8:	return rs274ngc_execute("G59.2");
-	case 9:	return rs274ngc_execute("G59.3");
+	case 1:	return rs274ngc_execute(_T("G54"));
+	case 2:	return rs274ngc_execute(_T("G55"));
+	case 3:	return rs274ngc_execute(_T("G56"));
+	case 4:	return rs274ngc_execute(_T("G57"));
+	case 5:	return rs274ngc_execute(_T("G58"));
+	case 6:	return rs274ngc_execute(_T("G59"));
+	case 7:	return rs274ngc_execute(_T("G59.1"));
+	case 8:	return rs274ngc_execute(_T("G59.2"));
+	case 9:	return rs274ngc_execute(_T("G59.3"));
 	}
 	return 0;
 }
@@ -1409,7 +1435,10 @@ int CGCodeInterpreter::SetOrigin(int index, double x, double y, double z, double
 	p_setup->parameters[k + 4] = a;
 	p_setup->parameters[k + 5] = b;
 	p_setup->parameters[k + 6] = c;
-	
+
+	if (index == 0)  // G92 values: applied in the interpreter's current units - stamp them so
+		::rs274ngc_stamp_axis_offset_units();
+
 	return 0;
 }
 
@@ -1430,6 +1459,9 @@ int CGCodeInterpreter::SetOrigin(int index, double x, double y, double z, double
 	p_setup->parameters[k + 6] = c;
 	p_setup->parameters[k + 7] = u;
 	p_setup->parameters[k + 8] = v;
+
+	if (index == 0)  // G92 values: applied in the interpreter's current units - stamp them so
+		::rs274ngc_stamp_axis_offset_units();
 
 	return 0;
 }
@@ -1584,10 +1616,13 @@ void CGCodeInterpreter::SetScreenScriptCallback(G_SCREENSCRIPT_CALLBACK *UserFn)
 
 int CGCodeInterpreter::rs274ngc_save_parameters()
 {
-	char file[MAX_PATH+1];
+	TCHAR file[MAX_PATH+1];
 	GET_EXTERNAL_PARAMETER_FILE_NAME(file, MAX_PATH);
 	return ::rs274ngc_save_parameters(file,p_setup->parameters);
 }
+
+void CGCodeInterpreter::StampAxisOffsetUnits()  { ::rs274ngc_stamp_axis_offset_units(); }
+void CGCodeInterpreter::ResyncAxisOffsetUnits() { ::rs274ngc_resync_axis_offset_units(); }
 
 bool CGCodeInterpreter::rs274ngc_save_parameters_changed(void)
 {
@@ -1596,12 +1631,12 @@ bool CGCodeInterpreter::rs274ngc_save_parameters_changed(void)
 
 
 
-int CGCodeInterpreter::DoReverseSearch(const char * InFile, int CurrentLine)
+int CGCodeInterpreter::DoReverseSearch(const TCHAR * InFile, int CurrentLine)
 {
 	int GCodeReads,status;
-	char trash[INTERP_TEXT_SIZE];
-	char * read_ok;
-	char s[MAX_LINE];
+	TCHAR trash[INTERP_TEXT_SIZE];
+	TCHAR * read_ok;
+	CString s;
 
 	if (CurrentLine==0) return 0;  // should always be ok to set the first line
 
@@ -1670,12 +1705,12 @@ int CGCodeInterpreter::DoReverseSearch(const char * InFile, int CurrentLine)
 
 	for( ; GCodeReads<=CurrentLine ; GCodeReads++)
 	{
-		read_ok = fgets(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
+		read_ok = _fgetts(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
 		if (!read_ok) 
 		{
 			rs274ngc_close();
 			CLEAN_ARRAY;
-			MessageBoxW(NULL, L"Error while reading GCode file ", L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, CoordMotion->KMotionDLL->Translate("Error while reading GCode file "), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			return 1;
 		}
 #ifdef _KMOTIONX
@@ -1800,23 +1835,29 @@ int CGCodeInterpreter::DoReverseSearch(const char * InFile, int CurrentLine)
 	{
 		if (Units==G_20 && p_setup->length_units!=CANON_UNITS_INCHES)
 		{
-			if (AfxMessageBox("Backward scan found G20 Inches Mode.  Switch to Inches?" ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
+			if (AfxMessageBox(_T("Backward scan found G20 Inches Mode.  Switch to Inches?") ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
 			{
 				p_setup->length_units=CANON_UNITS_INCHES;
+				// wholesale raw adoption (user-approved): offsets now read
+				// as inch numbers
+				p_setup->length_units_of_axis_offset = CANON_UNITS_INCHES;
 			}
 		}
 		if (Units==G_21 && p_setup->length_units!=CANON_UNITS_MM)
 		{
-			if (AfxMessageBox("Backward scan found G21 MM Mode.  Switch to MM?" ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
+			if (AfxMessageBox(_T("Backward scan found G21 MM Mode.  Switch to MM?") ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
 			{
 				p_setup->length_units=CANON_UNITS_MM;
+				// wholesale raw adoption (user-approved): offsets now read
+				// as mm numbers
+				p_setup->length_units_of_axis_offset = CANON_UNITS_MM;
 			}
 		}
 	}
 
 	if (block0.motion_to_be == -1)
 	{
-		snprintf(s, MAX_LINE, "New Line does not contain a G mode.  Backward scan found:\r\rG%d\r\rUse this mode?", G / 10);
+		s.Format(_T("New Line does not contain a G mode.  Backward scan found:\r\rG%d\r\rUse this mode?"), G / 10);
 
 		if (AfxMessageBox(s, MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL) == IDNO)
 		{
@@ -1862,7 +1903,7 @@ int CGCodeInterpreter::DoReverseSearch(const char * InFile, int CurrentLine)
 	{
 		if (FoundF)
 		{
-			snprintf(s, MAX_LINE, "New Line does not contain a Feedrate F command.  Backward scan found:\r\rF%g\r\rUse this feedrate?",f);
+			s.Format(_T("New Line does not contain a Feedrate F command.  Backward scan found:\r\rF%g\r\rUse this feedrate?"),f);
 			// Ask if not already set to that value
 			if (p_setup->feed_rate == f || AfxMessageBox(s,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
 			{
@@ -1875,7 +1916,7 @@ int CGCodeInterpreter::DoReverseSearch(const char * InFile, int CurrentLine)
 		}
 		else
 		{
-			MessageBoxW(NULL, CoordMotion->KMotionDLL->Translate("New Line does not contain a Feedrate F command.  Unable to determine previous feedrate"), L"KMotion", MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+			MessageBox(NULL, CoordMotion->KMotionDLL->Translate("New Line does not contain a Feedrate F command.  Unable to determine previous feedrate"), _T("KMotion"), MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 		}
 	}
 	else
@@ -1919,15 +1960,15 @@ int CGCodeInterpreter::DoReverseSearch(const char * InFile, int CurrentLine)
 		else
 			strcpy(s,"Backward scan found prior position as:\r\r");
 
-		if (CoordMotion->x_axis >= 0) { snprintf(v, 128, " X%g", xprep); strcat(s, v); }
-		if (CoordMotion->y_axis >= 0) { snprintf(v, 128, " Y%g", yprep); strcat(s, v); }
-		if (CoordMotion->z_axis >= 0) { snprintf(v, 128, " Z%g", zprep); strcat(s, v); }
-		if (CoordMotion->a_axis >= 0) { snprintf(v, 128, " A%g", aprep); strcat(s, v); }
-		if (CoordMotion->b_axis >= 0) { snprintf(v, 128, " B%g", bprep); strcat(s, v); }
-		if (CoordMotion->c_axis >= 0) { snprintf(v, 128, " C%g", cprep); strcat(s, v); }
-		if (CoordMotion->u_axis >= 0) { snprintf(v, 128, " U%g", uprep); strcat(s, v); }
-		if (CoordMotion->v_axis >= 0) { snprintf(v, 128, " V%g", vprep); strcat(s, v); }
-		strcat(s,"\r\rShould a Safe Z move be made to these coordinates?");
+		if (CoordMotion->x_axis >= 0) { v.Format(_T(" X%g"), xprep); s = s + v; }
+		if (CoordMotion->y_axis >= 0) { v.Format(_T(" Y%g"), yprep); s = s + v; }
+		if (CoordMotion->z_axis >= 0) { v.Format(_T(" Z%g"), zprep); s = s + v; }
+		if (CoordMotion->a_axis >= 0) { v.Format(_T(" A%g"), aprep); s = s + v; }
+		if (CoordMotion->b_axis >= 0) { v.Format(_T(" B%g"), bprep); s = s + v; }
+		if (CoordMotion->c_axis >= 0) { v.Format(_T(" C%g"), cprep); s = s + v; }
+		if (CoordMotion->u_axis >= 0) { v.Format(_T(" U%g"), uprep); s = s + v; }
+		if (CoordMotion->v_axis >= 0) { v.Format(_T(" V%g"), vprep); s = s + v; }
+		s=s+"\r\rShould a Safe Z move be made to these coordinates?";
 		if (AfxMessageBox(s,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDNO)
 		{
 			return 1;
@@ -1969,7 +2010,7 @@ int CGCodeInterpreter::DoReverseSearch(const char * InFile, int CurrentLine)
 
 int CGCodeInterpreter::SetCSS(int mode)  // set CSS mode
 {
-	char s[64];
+	CStringA s;
 
 	if (CoordMotion->m_Simulate) return 0;
 
@@ -2039,7 +2080,17 @@ int CGCodeInterpreter::ReadToolFile()
 }
 
 // Global function for language translation
-std::wstring Translate(std::string s)
+CString Translate(CString s)
 {
 	return CM->KMotionDLL->Translate(s);
 }
+
+
+int CGCodeInterpreter::convert_tool_length_offset(int g_code, int Tool)
+{
+	block dummy_block;
+
+	dummy_block.h_number = Tool;
+
+	return ::convert_tool_length_offset(g_code, &dummy_block, &_setup);
+}

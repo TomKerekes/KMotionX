@@ -29,7 +29,7 @@ CKMotionIO::CKMotionIO()
 {
 	ConsoleHandler=NULL;
 
-	Mutex = new CMutex(FALSE,"KMotionIO",NULL);
+	Mutex = new CMutex(FALSE, _T("KMotionIO"), NULL);
 
 	m_Connected=false;
 	ConnectSocket = NULL;
@@ -56,12 +56,13 @@ CKMotionIO::~CKMotionIO()
 }
 
 
-SOCKET CKMotionIO::ConnectToKognaSocket(std::wstring* pReason, unsigned long ipAddress, int port)
+
+SOCKET CKMotionIO::ConnectToKognaSocket(CString* pReason, unsigned long ipAddress, int port)
 {
 	unsigned char DynoMAC[6] = { 0x8c, 0x1f, 0x64, 0x15, 0xe0, 0x00 }; // dymotion purchased MAC base address
 	unsigned char DynoMask[6] = { 0xff, 0xff, 0xff, 0xff, 0xf0, 0x00 }; // high 36 bit mask
 
-	wchar_t ErrorMessage[64]; 		//----------------------
+	TCHAR ErrorMessage[64]; 		//----------------------
 	// Create a SOCKET for connecting to server
 	WORD wVersionRequested;
 	WSADATA wsaData;
@@ -78,7 +79,7 @@ SOCKET CKMotionIO::ConnectToKognaSocket(std::wstring* pReason, unsigned long ipA
 	if (err != 0) {
 		/* Tell the user that we could not find a usable */
 		/* Winsock DLL.                                  */
-		_swprintf_p(ErrorMessage, 64, Translate("WSAStartup failed with error: %d\n"), err);
+		_stprintf_p(ErrorMessage, 64, Translate("WSAStartup failed with error: %d\n"), err);
 		if (pReason)
 			*pReason = ErrorMessage;
 		return NULL;
@@ -136,7 +137,7 @@ DWORD ConnectThread(LPDWORD lpdwParam)
 // the connection in a worker Thread and keep returning no connection until
 // the worker thread successfully connects
 
-SOCKET CKMotionIO::TryConnectToSocket(std::wstring* pReason, unsigned long ipAddress, int port)
+SOCKET CKMotionIO::TryConnectToSocket(CString* pReason, unsigned long ipAddress, int port)
 {
 	HANDLE Thread = NULL;
 	bool wait = false;
@@ -285,7 +286,7 @@ int CKMotionIO::connect_with_timeout(SOCKET sockfd, const struct sockaddr* addr,
 
 
 
-bool CKMotionIO::RequestedDeviceAvail(std::wstring *Reason)
+bool CKMotionIO::RequestedDeviceAvail(CString *Reason)
 {
 	int i;
 	bool TryKogna = Requested_ID == 0 || Requested_ID >  MAX_USB_ID;
@@ -392,7 +393,7 @@ bool CKMotionIO::RequestedDeviceAvail(std::wstring *Reason)
 
 int CKMotionIO::Connect()
 {
-	std::wstring reason;
+	CString reason;
 	CHiResTimer Timer;
 
 	FT_STATUS ftStatus;
@@ -627,8 +628,8 @@ int CKMotionIO::ReadBytesAvailable(char *RxBuffer, int maxbytes, DWORD *BytesRec
 				}
 				else
 				{
-					wchar_t ErrMsg[1024];
-					_swprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
+					TCHAR ErrMsg[1024];
+					_stprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
 					ErrorMessageBox(ErrMsg);
 					closesocket(ConnectSocket);
 					ConnectSocket = NULL;
@@ -920,6 +921,11 @@ int CKMotionIO::ReadLineTimeOutRaw(char *buf, int TimeOutms)
 
 		if (!NO_KMOTION_TIMEOUT && !Done && Timer.Elapsed_Seconds() * 1000.0 > TimeOutms)
 		{
+			// keep whatever partial line has arrived for the next call instead of
+			// dropping it.  The board transmits print/fprintf output whenever its
+			// 1460 byte TX buffer fills, so a line can straddle two transmissions
+			// that are far apart in time; losing the first half corrupted files.
+			if (TotalBytes > 0) strcpy(m_SaveChars, buf);
 			Mutex->Unlock();
 			return 2;  // return with timeout indication
 		}
@@ -974,29 +980,63 @@ int CKMotionIO::WriteLineWithEcho(const char *s)
 
 int CKMotionIO::SendSocketNonBlock(char *s2, int length)
 {
-	DWORD BytesWritten;
+	// Bound a stalled write even when select wakes early.
+	// Successful partial sends restart this no-progress timeout.
+	const ULONGLONG sendStallTimeoutMs = 20000;
+	ULONGLONG blockedSinceMs = 0;
+	bool waitingForProgress = false;
 
 	do
 	{
-		BytesWritten = send(ConnectSocket, s2, length, 0);  // non blocking call
-
-		if (BytesWritten == SOCKET_ERROR)
+		int BytesWritten = send(ConnectSocket, s2, length, 0);  // non blocking call
+		// Capture Winsock's error before another API call can overwrite it.
+		int error = BytesWritten == SOCKET_ERROR ? WSAGetLastError() : 0;
+		if (BytesWritten == 0 && length > 0) error = WSAECONNRESET;
+		if (error)
 		{
-			int error = WSAGetLastError();
-			if (error != WSAEWOULDBLOCK)
+			if (error == WSAEWOULDBLOCK)
 			{
-				wchar_t ErrMsg[1024];
-				_swprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
-				ErrorMessageBox(ErrMsg);
-				closesocket(ConnectSocket);
-				ConnectSocket = NULL;
-				Failed();
-				Mutex->Unlock();
-				return 1;
+				if (!waitingForProgress)
+				{
+					blockedSinceMs = GetTickCount64();
+					waitingForProgress = true;
+				}
+
+				ULONGLONG elapsedMs = GetTickCount64() - blockedSinceMs;
+				if (elapsedMs >= sendStallTimeoutMs)
+				{
+					error = WSAETIMEDOUT;
+				}
+				else
+				{
+					// Let Winsock wake us when buffer space is available instead of
+					// repeatedly calling send on a full socket. select modifies its sets.
+					fd_set writable;
+					FD_ZERO(&writable);
+					FD_SET(ConnectSocket, &writable);
+					DWORD remainingMs = (DWORD)(sendStallTimeoutMs - elapsedMs);
+					timeval timeout;
+					timeout.tv_sec = remainingMs / 1000;
+					timeout.tv_usec = (remainingMs % 1000) * 1000;
+					int ready = select(0, NULL, &writable, NULL, &timeout);
+					int selectError = ready == SOCKET_ERROR ? WSAGetLastError() : 0;
+					if (ready > 0) continue;  // Retry send; readiness is not a byte count.
+					error = ready == 0 ? WSAETIMEDOUT : selectError;
+				}
 			}
+
+			TCHAR ErrMsg[1024];
+			_stprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
+			ErrorMessageBox(ErrMsg);
+			closesocket(ConnectSocket);
+			ConnectSocket = NULL;
+			Failed();
+			Mutex->Unlock();
+			return 1;
 		}
 		else
 		{
+			waitingForProgress = false;
 			length -= BytesWritten;
 			s2 += BytesWritten;
 
@@ -1009,6 +1049,7 @@ int CKMotionIO::SendSocketNonBlock(char *s2, int length)
 	
 	return 0;
 }
+
 int CKMotionIO::SetLatency(UCHAR LatencyTimer)
 {
 	FT_STATUS ftStatus;
@@ -1500,24 +1541,46 @@ int CKMotionIO::ReadSendNextLine(FILE *fr)
 
 int CKMotionIO::ServiceConsole()
 {
-	int nbytes, timeout;
+	int nbytes, saved, result, lines = 0;
 	char b[MAX_LINE];
+	CHiResTimer Timer;
 
 	if (KMotionLock("Service Console") == KMOTION_LOCKED)  // quick check if it is available
 	{
-		if (!NumberBytesAvailToRead(&nbytes, false) && nbytes>0)
+		// Drain everything the board has already sent.  Print/fprintf output is
+		// transmitted whenever the board's 1460 byte TX buffer fills and then
+		// waits in our socket buffer until something reads it; one line per call
+		// (the previous behavior) left a heavy fprintf loop stalled between
+		// status polls with the board's 64KB print queue full.  Disk escape
+		// codes are handled here too (they used to be sent to the console when
+		// this routine, rather than a command's ReadLineTimeOut, read them).
+		// Bounded so the token is not held long; anything left is picked up by
+		// the next call or by the next command's ReadLineTimeOut.
+
+		Timer.Start();
+
+		for (;;)
 		{
-			// some data in the buffer
+			if (NumberBytesAvailToRead(&nbytes, false)) break;   // counts m_SaveChars too
+			saved = (int)strlen(m_SaveChars);
+			if (nbytes <= saved && strchr(m_SaveChars, '\n') == NULL) break;  // nothing new, no complete line waiting
 
-			timeout = ReadLineTimeOutRaw(b,100);
+			// short timeout: a partial tail is kept (ReadLineTimeOutRaw) and
+			// completed when the board sends more
+			result = ReadLineTimeOutRaw(b, 2);
+			if (result) break;
 
-			if (!timeout)
+			if (b[0] == 0x1b)
 			{
-				if (b[0]==0x1b)                       // skip over esc if there is one    
-					LogToConsole(b+1);
+				if (b[1] >= 1 && b[1] <= 7)
+					HandleDiskIO(b + 1);      // fopen/fprintf/fclose/... from a User program
 				else
-					LogToConsole(b);
+					LogToConsole(b + 1);      // console text, skip the esc
 			}
+			else
+				LogToConsole(b);
+
+			if (++lines >= 2000 || Timer.Elapsed_Seconds() > 0.05) break;
 		}
 
 		ReleaseToken();
@@ -1548,7 +1611,7 @@ int CKMotionIO::SetConsoleCallback(SERVER_CONSOLE_HANDLER *ch)
 
 // save the error message to be piped back to caller
 
-int CKMotionIO::ErrorMessageBox(const wchar_t *s)
+int CKMotionIO::ErrorMessageBox(const TCHAR *s)
 {
 	ErrMsg = s;
 	return 0;
