@@ -982,7 +982,11 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 // first streaming run when the 3rd Order planner is active AND the Tool
 // Setup "Log" option (MP->LogSegments) is selected - the same switch that
 // enables the segment log; all logging no-ops when the file is closed.
+#ifdef _KMOTIONX
+#define TP3_TIMELINE_FILE "/tmp/TP3_Timeline.log"
+#else
 #define TP3_TIMELINE_FILE "c:\\Temp\\TP3_Timeline.log"
+#endif
 #include <string>
 static FILE *tp3Log = NULL;
 static CHiResTimer tp3LogTimer;
@@ -1189,7 +1193,11 @@ static void TP3AddWaypointThrottled(CCoordMotion *CM, CTP3FeedRun *r,
 					_T("trajectory written.  If this was not a user feedhold, the controller is\r\n")
 					_T("stuck in a data-end feedhold.  Downloading will continue without\r\n")
 					_T("throttling.  With the Trajectory Planner Log option selected the event\r\n")
+#ifdef _KMOTIONX
+					_T("timeline is recorded in /tmp/TP3_Timeline.log."),
+#else
 					_T("timeline is recorded in c:\\Temp\\TP3_Timeline.log."),
+#endif
 					lastE, r->sp->getTotalTimeWritten());
 				CM->KMotionDLL->DoErrMsg(s);
 				break;
@@ -3007,7 +3015,11 @@ static void SegBegCADPoint(SEGMENT *p, double *px, double *py, double *pz,
 // segments after the same kinematics transform the download applies to
 // their endpoints.  Legacy arcs stay CAD (see SegLogSegment).
 
+#ifdef _KMOTIONX
+#define TP_SEGLOG_FILE "/tmp/TPSegLog.csv"
+#else
 #define TP_SEGLOG_FILE "c:\\Temp\\TPSegLog.csv"
+#endif
 #define FQ(x) ((double)(float)(x))   // downloaded (float) resolution
 
 void CCoordMotion::SegLogClose()
