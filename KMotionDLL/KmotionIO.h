@@ -90,7 +90,7 @@ protected:
 
 	SERVER_CONSOLE_HANDLER *ConsoleHandler;
 private:
-	int ErrorMessageBox(const wchar_t *s);
+	int ErrorMessageBox(const TCHAR *s);
 	int m_FirmwareVersion;
 	int m_ConnectThreadState;
 	unsigned long ipAddress_Thread;

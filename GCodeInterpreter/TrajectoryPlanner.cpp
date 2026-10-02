@@ -2441,8 +2441,8 @@ int tp_calc_seg_trip_states(int i)
 	if (VM==0 || A==0 || D==0)
 	{
 		CString s;
-		s.Format(L"Vel = %f Accel = %f Decel = %f",VM,A,D);
-		MessageBoxW(NULL, Translate("Trajectory Planner has Invalid Velocity or Acceleration ") + s, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		s.Format(_T("Vel = %f Accel = %f Decel = %f"),VM,A,D);
+		MessageBox(NULL, Translate("Trajectory Planner has Invalid Velocity or Acceleration ") + s, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 

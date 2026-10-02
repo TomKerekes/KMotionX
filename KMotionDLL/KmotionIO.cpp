@@ -29,7 +29,7 @@ CKMotionIO::CKMotionIO()
 {
 	ConsoleHandler=NULL;
 
-	Mutex = new CMutex(FALSE, L"KMotionIO", NULL);
+	Mutex = new CMutex(FALSE, _T("KMotionIO"), NULL);
 
 	m_Connected=false;
 	ConnectSocket = NULL;
@@ -57,7 +57,7 @@ SOCKET CKMotionIO::ConnectToKognaSocket(CString* pReason, unsigned long ipAddres
 	unsigned char DynoMAC[6] = { 0x8c, 0x1f, 0x64, 0x15, 0xe0, 0x00 }; // dymotion purchased MAC base address
 	unsigned char DynoMask[6] = { 0xff, 0xff, 0xff, 0xff, 0xf0, 0x00 }; // high 36 bit mask
 
-	wchar_t ErrorMessage[64]; 		//----------------------
+	TCHAR ErrorMessage[64]; 		//----------------------
 	// Create a SOCKET for connecting to server
 	WORD wVersionRequested;
 	WSADATA wsaData;
@@ -74,7 +74,7 @@ SOCKET CKMotionIO::ConnectToKognaSocket(CString* pReason, unsigned long ipAddres
 	if (err != 0) {
 		/* Tell the user that we could not find a usable */
 		/* Winsock DLL.                                  */
-		_swprintf_p(ErrorMessage, 64, Translate("WSAStartup failed with error: %d\n"), err);
+		_stprintf_p(ErrorMessage, 64, Translate("WSAStartup failed with error: %d\n"), err);
 		if (pReason)
 			*pReason = ErrorMessage;
 		return NULL;
@@ -618,8 +618,8 @@ int CKMotionIO::ReadBytesAvailable(char *RxBuffer, int maxbytes, DWORD *BytesRec
 				}
 				else
 				{
-					wchar_t ErrMsg[1024];
-					_swprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
+					TCHAR ErrMsg[1024];
+					_stprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
 					ErrorMessageBox(ErrMsg);
 					closesocket(ConnectSocket);
 					ConnectSocket = NULL;
@@ -1015,8 +1015,8 @@ int CKMotionIO::SendSocketNonBlock(char *s2, int length)
 				}
 			}
 
-			wchar_t ErrMsg[1024];
-			_swprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
+			TCHAR ErrMsg[1024];
+			_stprintf_p(ErrMsg, 1024, Translate("SOCKET ERROR: %d"), error);
 			ErrorMessageBox(ErrMsg);
 			closesocket(ConnectSocket);
 			ConnectSocket = NULL;
@@ -1601,7 +1601,7 @@ int CKMotionIO::SetConsoleCallback(SERVER_CONSOLE_HANDLER *ch)
 
 // save the error message to be piped back to caller
 
-int CKMotionIO::ErrorMessageBox(const wchar_t *s)
+int CKMotionIO::ErrorMessageBox(const TCHAR *s)
 {
 	ErrMsg = s;
 	return 0;

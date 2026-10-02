@@ -61,12 +61,12 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	// after ~10 seconds, so no modal message.
 	for (int i = 1; i < __argc; i++)
 	{
-		LPCWSTR pszParam = __targv[i];
-		if (pszParam != NULL && (_wcsicmp(pszParam, L"/no_ethernet") == 0 ||
-			                     _wcsicmp(pszParam, L"-no_ethernet") == 0))
+		LPCTSTR pszParam = __targv[i];
+		if (pszParam != NULL && (_tcsicmp(pszParam, _T("/no_ethernet")) == 0 ||
+			                     _tcsicmp(pszParam, _T("-no_ethernet")) == 0))
 		{
 			NoEthernet = true;
-			OutputDebugStringW(L"KMotionServer: No Ethernet mode enabled (Kogna scan disabled)\n");
+			OutputDebugString(_T("KMotionServer: No Ethernet mode enabled (Kogna scan disabled)\n"));
 		}
 	}
 

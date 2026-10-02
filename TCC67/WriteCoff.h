@@ -4,7 +4,7 @@
 //
 //
 //
-int WriteCoff(TCCState *s1, const wchar_t*OutFile);
+int WriteCoff(TCCState *s1, const TCHAR*OutFile);
 int ReadCoff(TCCState *s1, const char *InFile);
 int InitializeExternalC67Intrinsics();
 

@@ -38,7 +38,7 @@ CKinematics5AxisTableAGimbalB::~CKinematics5AxisTableAGimbalB()
 int CKinematics5AxisTableAGimbalB::Initialize()
 {
 	// Check if parameters exist in Kinematics.txt, if so update them
-	GetParameter(L"PivotToChuckLength", &PivotToChuckLength);
+	GetParameter(_T("PivotToChuckLength"), &PivotToChuckLength);
 	return 0;
 }
 

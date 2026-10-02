@@ -511,7 +511,7 @@ controller.
 An attempt to move an axis while it is clamped should result in an
 error condition in the controller. */
 
-extern void COMMENT(const wchar_t *s);
+extern void COMMENT(const TCHAR *s);
 
 /* This function has no physical effect. If commands are being printed or
 logged, the comment command is printed or logged, including the string
@@ -527,7 +527,7 @@ extern void FLOOD_OFF();
 extern void FLOOD_ON();
 /* Turn flood coolant on. */
 
-extern void MESSAGE(wchar_t *s);
+extern void MESSAGE(TCHAR *s);
 
 extern void MIST_OFF();
 /* Turn mist coolant off. */
@@ -648,7 +648,7 @@ extern double GET_EXTERNAL_ORIGIN_Z();
 // returns nothing but copies the name of the parameter file into
 // the filename array, stopping at max_size if the name is longer
 // An empty string may be placed in filename.
-extern void GET_EXTERNAL_PARAMETER_FILE_NAME(wchar_t *filename, int max_size);
+extern void GET_EXTERNAL_PARAMETER_FILE_NAME(TCHAR *filename, int max_size);
 
 // returns the currently active plane
 extern CANON_PLANE GET_EXTERNAL_PLANE();
@@ -735,7 +735,7 @@ extern double GET_EXTERNAL_TRAVERSE_RATE();
 extern FILE *_outfile;		/* where to print, set in main */
 extern CANON_TOOL_TABLE _tools[];	/* in canon.cc */
 extern int _tool_max;		/* in canon.cc */
-extern wchar_t _parameter_file_name[];	/* in canon.cc */
+extern TCHAR _parameter_file_name[];	/* in canon.cc */
 #define PARAMETER_FILE_NAME_LENGTH 100
 
 extern int CHECK_INIT_ON_EXE();

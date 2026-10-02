@@ -194,7 +194,7 @@ static void ReportScanFailure()
         LastScanError, LastScanWSAError,
         LastScanErrorAdapterIP & 0xff, (LastScanErrorAdapterIP >> 8) & 0xff,
         (LastScanErrorAdapterIP >> 16) & 0xff, (LastScanErrorAdapterIP >> 24) & 0xff);
-    MessageBoxW(NULL, s, L"KMotion", MB_ICONEXCLAMATION | MB_OK | MB_TOPMOST | MB_SETFOREGROUND);
+    MessageBox(NULL, s, _T("KMotion"), MB_ICONEXCLAMATION | MB_OK | MB_TOPMOST | MB_SETFOREGROUND);
 }
 
 
@@ -212,7 +212,7 @@ DWORD ScanAdapters(LPDWORD lpdwParam)
             // a fatal error might mean Winsock is in a bad state - restart it
             WSACleanup();
             if (WSAStartup(MAKEWORD(1, 1), &wsd) != 0)
-                MessageBoxW(NULL, Translate("Winsock Startup Failed"), L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+                MessageBox(NULL, Translate("Winsock Startup Failed"), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
         }
         if (nKognas > 0)  // tktk after a Kogna has been found update infrequently for testing
             Sleep(10000);

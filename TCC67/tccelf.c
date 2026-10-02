@@ -18,8 +18,8 @@
  *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-char* ConvertToUTF8(const wchar_t* wstr);
-wchar_t* ConvertToWideChar(const char* str);
+char* ConvertToUTF8(const TCHAR* wstr);
+TCHAR* ConvertToWideChar(const char* str);
 
 static int put_elf_str(Section *s, const char *sym)
 {
@@ -879,7 +879,7 @@ static char elf_interp[] = "/lib/ld-linux.so.2";
 
 /* output an ELF file */
 /* XXX: suppress unneeded sections */
-int tcc_output_file(TCCState *s1, const wchar_t*filename)
+int tcc_output_file(TCCState *s1, const TCHAR*filename)
 {
 #if (!DO_C67)
     int mode, fd, size, offset;

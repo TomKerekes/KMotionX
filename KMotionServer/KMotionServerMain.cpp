@@ -43,7 +43,7 @@ CMutex *ClientListMutex;
 
 void MyErrExit(char *s)
 {
-	MessageBox(NULL,(CString)s,L"KMotion Server",MB_ICONSTOP|MB_OK|MB_SYSTEMMODAL);
+	MessageBox(NULL,(CString)s,_T("KMotion Server"),MB_ICONSTOP|MB_OK|MB_SYSTEMMODAL);
 	exit(1);
 }
 
@@ -54,9 +54,9 @@ void ServerMain(LPVOID lpvParam)
    BOOL fConnected; 
    DWORD dwThreadId; 
    HANDLE hPipe, hThread; 
-   LPTSTR lpszPipename = L"\\\\.\\pipe\\kmotionpipe"; 
+   LPTSTR lpszPipename = _T("\\\\.\\pipe\\kmotionpipe"); 
 
-   ClientListMutex = new CMutex(FALSE, L"KMotionClentList", NULL);
+   ClientListMutex = new CMutex(FALSE, _T("KMotionClentList"), NULL);
 
 
    KMotionDLL.FindKognas(TheFrame->NoEthernet);  // setup background Thread to find/keep track of on-line Kognas
@@ -357,7 +357,7 @@ void GetAnswerToRequest(char *chRequest, DWORD nInBytes, char *chReply, DWORD *c
 
 			s.Insert(0,DEST_CONSOLE);
 
-			cbReplyBytes = (s.GetLength() + 1 + 1) * sizeof(wchar_t);  // + Term Null + DEST code
+			cbReplyBytes = (s.GetLength() + 1 + 1) * sizeof(TCHAR);  // + Term Null + DEST code
 
 			// Write the message to the pipe. 
 			fSuccess = WriteFile( 
@@ -398,7 +398,7 @@ void GetAnswerToRequest(char *chRequest, DWORD nInBytes, char *chReply, DWORD *c
 
 		s.Insert(0,DEST_ERRMSG);
 
-		cbReplyBytes = (s.GetLength()+1+1) * sizeof(wchar_t);  // + Term Null + DEST code
+		cbReplyBytes = (s.GetLength()+1+1) * sizeof(TCHAR);  // + Term Null + DEST code
 
 		// Write the message to the pipe. 
 		fSuccess = WriteFile( 

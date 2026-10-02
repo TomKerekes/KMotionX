@@ -29,7 +29,7 @@ CString CTranslate::Translate(CString w)
 
 	if (!CheckedForList)
 	{
-		wchar_t wcsString[4001];
+		TCHAR wcsString[4001];
 
 		CheckedForList = true;
 
@@ -44,17 +44,17 @@ CString CTranslate::Translate(CString w)
 		bool bReadData;
 		do
 		{
-			bReadData = (NULL != fgetws(wcsString, 4000, fStream));
+			bReadData = (NULL != _fgetts(wcsString, 4000, fStream));
 
 			sRead = wcsString;
 
 			sRead.Remove('\n');
 
 			// for some reason slashes are changed to double slashes
-			sRead.Replace(L"\\r", L"\r");
+			sRead.Replace(_T("\\r"), _T("\r"));
 
 			// file format is English Left ..#.. Translated Right
-			int i = sRead.Find(L"    ..#..    ", 0);
+			int i = sRead.Find(_T("    ..#..    "), 0);
 
 			Eng = sRead.Left(i);
 			Trans = sRead.Right(sRead.GetLength() - i - 13);

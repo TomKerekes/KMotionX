@@ -70,8 +70,8 @@
 #define RS274NGC_ACTIVE_SETTINGS 3
 
 // name of parameter file for saving/restoring interpreter variables
-#define RS274NGC_PARAMETER_FILE_NAME_DEFAULT L"rs274ngc.var"
-#define RS274NGC_PARAMETER_FILE_BACKUP_SUFFIX L".bak"
+#define RS274NGC_PARAMETER_FILE_NAME_DEFAULT _T("rs274ngc.var")
+#define RS274NGC_PARAMETER_FILE_BACKUP_SUFFIX _T(".bak")
 
 // max number of m codes on one line
 #define MAX_EMS  4
@@ -231,7 +231,7 @@ typedef struct block_struct {
 	double u_number;
 	ON_OFF v_flag;
 	double v_number;
-	wchar_t comment[256];
+	TCHAR comment[256];
     int d_number;
     double f_number;
     int g_modes[15];
@@ -420,18 +420,18 @@ typedef struct setup_struct {
 	// or shouldn't change within continuous execution
 	
     int line_length;		// length of line last read
-    wchar_t linetext[RS274NGC_TEXT_SIZE];	// text of most recent line read
-    wchar_t filename[RS274NGC_TEXT_SIZE];	// name of currently open NC code
+    TCHAR linetext[RS274NGC_TEXT_SIZE];	// text of most recent line read
+    TCHAR filename[RS274NGC_TEXT_SIZE];	// name of currently open NC code
     // file
     FILE *file_pointer;		// file pointer for open NC code file
     int parameter_occurrence;	// parameter buffer index
     int parameter_numbers[50];	// parameter number buffer
     double parameter_values[50];	// parameter value buffer
-    wchar_t stack[50][80];		// stack of calls for error reporting
+    TCHAR stack[50][80];		// stack of calls for error reporting
     int stack_index;		// index into the stack
     CANON_TOOL_TABLE tool_table[CANON_TOOL_MAX + 1];	// index is slot
 	block block1;		// parsed next block
-    wchar_t blocktext[RS274NGC_TEXT_SIZE];	// linetext downcased, white space
+    TCHAR blocktext[RS274NGC_TEXT_SIZE];	// linetext downcased, white space
 	int n_ParamChanges;
 	int ParamChanges[MAX_PARAM_CHANGES];
 	CANON_UNITS length_units_of_axis_offset; // units the in-memory G92 axis
@@ -447,7 +447,7 @@ typedef struct setup_struct {
 typedef setup *setup_pointer;
 
 // pointer to function that reads
-typedef int (*read_function_pointer) (wchar_t *, int *, block_pointer, double *);
+typedef int (*read_function_pointer) (TCHAR *, int *, block_pointer, double *);
 
 /*************************************************************************/
 /*
@@ -465,7 +465,7 @@ int AccumToolWearStats(setup_pointer settings, int ToolIndex, bool ForceSave);
 extern int rs274ngc_close();
 
 // execute a line of NC code
-extern int rs274ngc_execute(const wchar_t *command = 0);
+extern int rs274ngc_execute(const TCHAR *command = 0);
 
 // stop running
 extern int rs274ngc_exit();
@@ -477,19 +477,19 @@ extern int rs274ngc_init();
 extern int rs274ngc_load_tool_table();
 
 // open a file of NC code
-extern int rs274ngc_open(const wchar_t *filename);
+extern int rs274ngc_open(const TCHAR *filename);
 
 // read the mdi or the next line of the open NC code file
-extern int rs274ngc_read(const wchar_t *mdi = 0);
+extern int rs274ngc_read(const TCHAR *mdi = 0);
 
 // reset yourself
 extern int rs274ngc_reset();
 
 // restore interpreter variables from a file
-extern int rs274ngc_restore_parameters(const wchar_t *filename);
+extern int rs274ngc_restore_parameters(const TCHAR *filename);
 
 // save interpreter variables to file
-extern int rs274ngc_save_parameters(const wchar_t *filename,
+extern int rs274ngc_save_parameters(const TCHAR *filename,
     const double parameters[]);
 
 extern bool rs274ngc_save_parameters_changed(void);
@@ -526,19 +526,19 @@ extern void rs274ngc_active_settings(double *settings);
 
 // copy the text of the error message whose number is error_code into the
 // error_text array, but stop at max_size if the text is longer.
-extern void rs274ngc_error_text(int error_code, wchar_t *error_text,
+extern void rs274ngc_error_text(int error_code, TCHAR *error_text,
     int max_size);
 
 // copy the name of the currently open file into the file_name array,
 // but stop at max_size if the name is longer
-extern void rs274ngc_file_name(wchar_t *file_name, int max_size);
+extern void rs274ngc_file_name(TCHAR *file_name, int max_size);
 
 // return the length of the most recently read line
 extern int rs274ngc_line_length();
 
 // copy the text of the most recently read line into the line_text array,
 // but stop at max_size if the text is longer
-extern void rs274ngc_line_text(wchar_t *line_text, int max_size);
+extern void rs274ngc_line_text(TCHAR *line_text, int max_size);
 
 // return the current sequence number (how many lines read)
 extern int rs274ngc_sequence_number();
@@ -546,24 +546,24 @@ extern int rs274ngc_sequence_number();
 // copy the function name from the stack_index'th position of the
 // function call stack at the time of the most recent error into
 // the function name string, but stop at max_size if the name is longer
-extern void rs274ngc_stack_name(int stack_index, wchar_t *function_name,
+extern void rs274ngc_stack_name(int stack_index, TCHAR *function_name,
     int max_size);
 
 // Get the parameter file name from the ini file.
-extern int rs274ngc_ini_load(const wchar_t *filename);
+extern int rs274ngc_ini_load(const TCHAR *filename);
 static inline int rs274ngc_line()
 {
     return rs274ngc_sequence_number();
 }
-static inline const wchar_t *rs274ngc_command()
+static inline const TCHAR *rs274ngc_command()
 {
-    static wchar_t buf[100];
+    static TCHAR buf[100];
     rs274ngc_line_text(buf, 100);
     return buf;
 }
-static inline const wchar_t *rs274ngc_file()
+static inline const TCHAR *rs274ngc_file()
 {
-    static wchar_t buf[100];
+    static TCHAR buf[100];
     rs274ngc_file_name(buf, 100);
     return buf;
 }

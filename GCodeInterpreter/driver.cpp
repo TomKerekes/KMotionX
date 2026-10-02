@@ -35,10 +35,10 @@ extern int ConvertToolToIndex(setup_pointer settings,int number,int *index);
 /* note that the message must be a string with a %ls in it */
 #define DRIVER_ERROR(message,item) if(1)		\
 	{											\
-		wchar_t s[256];							\
-		swprintf(s, 255, message, item);		        \
+		TCHAR s[256];							\
+		_sntprintf_s(s, 255, _TRUNCATE, message, item);		        \
 		ErrorOutput += s;						\
-		swprintf(s, 255, L"\n");						\
+		_sntprintf_s(s, 255, _TRUNCATE, _T("\n"));						\
 		ErrorOutput += s;						\
 		return RS274NGC_ERROR;					\
 	}							                \
@@ -48,11 +48,11 @@ extern int ConvertToolToIndex(setup_pointer settings,int number,int *index);
 
 #define DRIVER_ERROR_CF(message,item) if(1)		\
 	{											\
-		wchar_t s[256];							\
+		TCHAR s[256];							\
 		fclose(setup_file_port);				\
-		swprintf(s, 255, message, item);		        \
+		_sntprintf_s(s, 255, _TRUNCATE, message, item);		        \
 		ErrorOutput += s;						\
-		swprintf(s, 255, L"\n");						\
+		_sntprintf_s(s, 255, _TRUNCATE, _T("\n"));						\
 		ErrorOutput += s;						\
 		return RS274NGC_ERROR;					\
 	}							                \
@@ -60,19 +60,19 @@ extern int ConvertToolToIndex(setup_pointer settings,int number,int *index);
 
 #define DRIVER_ERROR_CF2(message,item) if(1)	\
 	{											\
-		wchar_t s[256];							\
+		TCHAR s[256];							\
 		fclose(tool_file_port);					\
-		swprintf(s, 255, message, item);		        \
+		_sntprintf_s(s, 255, _TRUNCATE, message, item);		        \
 		ErrorOutput += s;						\
-		swprintf(s, 255, L"\n");						\
+		_sntprintf_s(s, 255, _TRUNCATE, _T("\n"));						\
 		ErrorOutput += s;						\
 		return RS274NGC_ERROR;					\
 	}							                \
 	else
 
 extern setup _setup;
-extern wchar_t  _interpreter_linetext[];
-extern wchar_t  _interpreter_blocktext[];
+extern TCHAR  _interpreter_linetext[];
+extern TCHAR  _interpreter_blocktext[];
 
 /*********************************************************************/
 
@@ -91,9 +91,9 @@ potentially running past the end of the destination string.
 
 */
 
-static wchar_t * strip_terminal_newline(wchar_t *string)
+static TCHAR * strip_terminal_newline(TCHAR *string)
 {
-  int index = (int)wcslen(string) - 1;
+  int index = (int)_tcslen(string) - 1;
 
   while (index >= 0) {
     if (string[index] == '\n' ||
@@ -149,14 +149,14 @@ The manual [NCMS] says nothing about case or spaces and tabs.
 */
 
 int close_and_down( /* ARGUMENT VALUES             */
- wchar_t * line)       /* string: one line of NC code */
+ TCHAR * line)       /* string: one line of NC code */
 {
   int m;
   int n;
   int comment;
-  wchar_t item;
+  TCHAR item;
   comment SET_TO 0;
-  for (n SET_TO 0, m SET_TO 0; (item SET_TO line[m]) ISNT (wchar_t) NULL; m++)
+  for (n SET_TO 0, m SET_TO 0; (item SET_TO line[m]) ISNT (TCHAR) NULL; m++)
     {
       if (comment)
         {
@@ -166,14 +166,14 @@ int close_and_down( /* ARGUMENT VALUES             */
               comment SET_TO 0;
             }
           else if (item IS '(')
-            DRIVER_ERROR(L"Nested comment found%ls", L"");
+            DRIVER_ERROR(_T("Nested comment found%s"), _T(""));
         }
       else if ((item IS ' ') OR (item IS '\t') OR (item IS '\r'));
                                       /* don't copy blank or tab  or CR */
       else if (item IS '\n')          /* don't copy newline             */
         {                             /* but check null follows         */
           if (line[m+1] ISNT 0)
-            DRIVER_ERROR(L"Null missing after newline%ls", L"");
+            DRIVER_ERROR(_T("Null missing after newline%s"), _T(""));
         }
       else if ((64 < item) AND (item < 91)) /* downcase upper case letters */
         {
@@ -190,9 +190,9 @@ int close_and_down( /* ARGUMENT VALUES             */
         }
     }
   if (m IS (INTERP_TEXT_SIZE - 1)) /* line was too long */
-    DRIVER_ERROR(L"Command too long%ls", L"");
+    DRIVER_ERROR(_T("Command too long%s"), _T(""));
   else if (comment)
-    DRIVER_ERROR(L"Unclosed comment found%ls", L"");
+    DRIVER_ERROR(_T("Unclosed comment found%s"), _T(""));
   line[n] SET_TO 0;
   return RS274NGC_OK;
 }
@@ -219,20 +219,20 @@ end of the line by strip_terminal_newline().
 */
 
 int read_keyboard_line( /* ARGUMENT VALUES                 */
- wchar_t * raw_line,       /* array to write into             */
- wchar_t * line,           /* array in which to process text  */
+ TCHAR * raw_line,       /* array to write into             */
+ TCHAR * line,           /* array in which to process text  */
  int * length)          /* pointer to an integer to be set */
 {
-  wchar_t * returned_value;
+  TCHAR * returned_value;
 
-  returned_value SET_TO fgetws(raw_line, INTERP_TEXT_SIZE, stdin);
+  returned_value SET_TO _fgetts(raw_line, INTERP_TEXT_SIZE, stdin);
   strip_terminal_newline(raw_line);
   if (returned_value IS NULL)
-    DRIVER_ERROR(L"fgetws failed%ls", L"");
-  wcscpy(line, raw_line);
+    DRIVER_ERROR(_T("fgetws failed%s"), _T(""));
+  _tcscpy(line, raw_line);
   if (close_and_down(line) IS RS274NGC_ERROR)
     return RS274NGC_ERROR;
-  *length SET_TO (int)wcslen(line);
+  *length SET_TO (int)_tcslen(line);
   return RS274NGC_OK;
 }
 
@@ -279,205 +279,205 @@ attribute name will cause an error.
 */
 
 int read_setup_file(     /* ARGUMENT VALUES             */
-					wchar_t * setup_file,      /* name of setup file          */
+					TCHAR * setup_file,      /* name of setup file          */
 					setup_pointer settings) /* pointer to machine settings */
 {
-	static wchar_t name[] SET_TO L"read_setup_file";
+	static TCHAR name[] SET_TO _T("read_setup_file");
 	FILE * setup_file_port;
-	wchar_t buffer[1000];
-	wchar_t attribute[100];
-	wchar_t value[100];
+	TCHAR buffer[1000];
+	TCHAR attribute[100];
+	TCHAR value[100];
 
 	_tfopen_s(&setup_file_port, setup_file, _T("rt,ccs=UTF-8"));
 
 	if (setup_file_port IS NULL)
-		DRIVER_ERROR(L"Cannot open setup file: %ls", setup_file);
+		DRIVER_ERROR(_T("Cannot open setup file: %s"), setup_file);
 	for(;;)    /* read and discard header, checking for blank line */
 	{
-		if (fgetws(buffer, 1000, setup_file_port) IS NULL)
-			DRIVER_ERROR_CF(L"Bad %ls file format", L"setup");
+		if (_fgetts(buffer, 1000, setup_file_port) IS NULL)
+			DRIVER_ERROR_CF(_T("Bad %s file format"), _T("setup"));
 		else if (buffer[0] IS '\n')
 			break;
 	}
 
 	for (;;)
 	{
-		if (fgetws(buffer, 1000, setup_file_port) IS NULL)
+		if (_fgetts(buffer, 1000, setup_file_port) IS NULL)
 			break;
-		if (swscanf(buffer, L"%ls%ls", attribute, value) IS 0)
-			DRIVER_ERROR_CF(L"Bad input line \"%ls\" in setup file", buffer);
-		if (wcscmp(attribute, L"block_delete") IS 0)
+		if (_stscanf(buffer, _T("%s%s"), attribute, value) IS 0)
+			DRIVER_ERROR_CF(_T("Bad input line \"%s\" in setup file"), buffer);
+		if (_tcscmp(attribute, _T("block_delete")) IS 0)
 		{
-			if (wcscmp(value, L"ON") IS 0)
+			if (_tcscmp(value, _T("ON")) IS 0)
 				settings->block_delete SET_TO ON;
-			else if (wcscmp(value, L"OFF") IS 0)
+			else if (_tcscmp(value, _T("OFF")) IS 0)
 				settings->block_delete SET_TO OFF;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for block_delete in setup file", value);
+				DRIVER_ERROR_CF(_T("Bad value %s for block_delete in setup file"), value);
 		}
-		else if (wcscmp(attribute, L"current_x") IS 0)
-			settings->current_x SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"current_y") IS 0)
-			settings->current_y SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"current_z") IS 0)
-			settings->current_z SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"cutter_radius_comp") IS 0)
+		else if (_tcscmp(attribute, _T("current_x")) IS 0)
+			settings->current_x SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("current_y")) IS 0)
+			settings->current_y SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("current_z")) IS 0)
+			settings->current_z SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("cutter_radius_comp")) IS 0)
 		{
-			if (wcscmp(value, L"OFF") IS 0)
+			if (_tcscmp(value, _T("OFF")) IS 0)
 				settings->cutter_radius_compensation SET_TO OFF;
-			else if (wcscmp(value, L"LEFT") IS 0)
+			else if (_tcscmp(value, _T("LEFT")) IS 0)
 				settings->cutter_radius_compensation SET_TO LEFT;
-			else if (wcscmp(value, L"RIGHT") IS 0)
+			else if (_tcscmp(value, _T("RIGHT")) IS 0)
 				settings->cutter_radius_compensation SET_TO RIGHT;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for cutter_radius_comp in setup file",
+				DRIVER_ERROR_CF(_T("Bad value %s for cutter_radius_comp in setup file"),
 				value);
 		}
-		else if (wcscmp(attribute, L"cycle_i") IS 0)
-			settings->cycle_i SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"cycle_j") IS 0)
-			settings->cycle_j SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"cycle_k") IS 0)
-			settings->cycle_k SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"cycle_l") IS 0)
-			settings->cycle_l SET_TO _wtoi(value);
-		else if (wcscmp(attribute, L"cycle_p") IS 0)
-			settings->cycle_p SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"cycle_q") IS 0)
-			settings->cycle_q SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"cycle_r") IS 0)
-			settings->cycle_r SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"cycle_z") IS 0)
-			settings->cycle_z SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"distance_mode") IS 0)
+		else if (_tcscmp(attribute, _T("cycle_i")) IS 0)
+			settings->cycle_i SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("cycle_j")) IS 0)
+			settings->cycle_j SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("cycle_k")) IS 0)
+			settings->cycle_k SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("cycle_l")) IS 0)
+			settings->cycle_l SET_TO _ttoi(value);
+		else if (_tcscmp(attribute, _T("cycle_p")) IS 0)
+			settings->cycle_p SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("cycle_q")) IS 0)
+			settings->cycle_q SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("cycle_r")) IS 0)
+			settings->cycle_r SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("cycle_z")) IS 0)
+			settings->cycle_z SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("distance_mode")) IS 0)
 		{
-			if (wcscmp(value, L"ABSOLUTE") IS 0)
+			if (_tcscmp(value, _T("ABSOLUTE")) IS 0)
 				settings->distance_mode SET_TO MODE_ABSOLUTE;
-			else if (wcscmp(value, L"INCREMENTAL") IS 0)
+			else if (_tcscmp(value, _T("INCREMENTAL")) IS 0)
 				settings->distance_mode SET_TO MODE_INCREMENTAL;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for distance_mode in setup file",
+				DRIVER_ERROR_CF(_T("Bad value %s for distance_mode in setup file"),
 				value);
 		}
-		else if (wcscmp(attribute, L"feed_mode") IS 0)
+		else if (_tcscmp(attribute, _T("feed_mode")) IS 0)
 		{
-			if (wcscmp(value, L"PER_MINUTE") IS 0)
+			if (_tcscmp(value, _T("PER_MINUTE")) IS 0)
 				settings->feed_mode SET_TO UNITS_PER_MINUTE;
-			else if (wcscmp(value, L"INVERSE_TIME") IS 0)
+			else if (_tcscmp(value, _T("INVERSE_TIME")) IS 0)
 				settings->feed_mode SET_TO INVERSE_TIME;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for feed_mode in setup file", value);
+				DRIVER_ERROR_CF(_T("Bad value %s for feed_mode in setup file"), value);
 		}
-		else if (wcscmp(attribute, L"feed_rate") IS 0)
-			settings->feed_rate SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"flood") IS 0)
+		else if (_tcscmp(attribute, _T("feed_rate")) IS 0)
+			settings->feed_rate SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("flood")) IS 0)
 		{
-			if (wcscmp(value, L"OFF") IS 0)
+			if (_tcscmp(value, _T("OFF")) IS 0)
 				settings->flood SET_TO OFF;
-			else if (wcscmp(value, L"ON") IS 0)
+			else if (_tcscmp(value, _T("ON")) IS 0)
 				settings->flood SET_TO ON;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for flood in setup file", value);
+				DRIVER_ERROR_CF(_T("Bad value %s for flood in setup file"), value);
 		}
-		else if (wcscmp(attribute, L"length_units") IS 0)
+		else if (_tcscmp(attribute, _T("length_units")) IS 0)
 		{
-			if (wcscmp(value, L"MILLIMETERS") IS 0)
+			if (_tcscmp(value, _T("MILLIMETERS")) IS 0)
 				settings->length_units SET_TO CANON_UNITS_MM;
-			else if (wcscmp(value, L"INCHES") IS 0)
+			else if (_tcscmp(value, _T("INCHES")) IS 0)
 				settings->length_units SET_TO CANON_UNITS_INCHES;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for length_units in setup file", value);
+				DRIVER_ERROR_CF(_T("Bad value %s for length_units in setup file"), value);
 		}
-		else if (wcscmp(attribute, L"comp_entry_style") IS 0)
+		else if (_tcscmp(attribute, _T("comp_entry_style")) IS 0)
 		{
-			if (wcscmp(value, L"EMC_COMP_ENTRY_STYLE") IS 0)
+			if (_tcscmp(value, _T("EMC_COMP_ENTRY_STYLE")) IS 0)
 				settings->CompEntryStyle SET_TO EMC_COMP_ENTRY_STYLE;
-			else if (wcscmp(value, L"FANUC_COMP_ENTRY_STYLE") IS 0)
+			else if (_tcscmp(value, _T("FANUC_COMP_ENTRY_STYLE")) IS 0)
 				settings->CompEntryStyle SET_TO FANUC_COMP_ENTRY_STYLE;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for comp_entry_style in setup file", value);
+				DRIVER_ERROR_CF(_T("Bad value %s for comp_entry_style in setup file"), value);
 		}
-		else if (wcscmp(attribute, L"mist") IS 0)
+		else if (_tcscmp(attribute, _T("mist")) IS 0)
 		{
-			if (wcscmp(value, L"OFF") IS 0)
+			if (_tcscmp(value, _T("OFF")) IS 0)
 				settings->mist SET_TO OFF;
-			else if (wcscmp(value, L"ON") IS 0)
+			else if (_tcscmp(value, _T("ON")) IS 0)
 				settings->mist SET_TO ON;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for mist in setup file", value);
+				DRIVER_ERROR_CF(_T("Bad value %s for mist in setup file"), value);
 		}
-		else if (wcscmp(attribute, L"motion_mode") IS 0)
-			settings->motion_mode SET_TO _wtoi(value);
-		else if (wcscmp(attribute, L"plane") IS 0)
+		else if (_tcscmp(attribute, _T("motion_mode")) IS 0)
+			settings->motion_mode SET_TO _ttoi(value);
+		else if (_tcscmp(attribute, _T("plane")) IS 0)
 		{
-			if (wcscmp(value, L"XY") IS 0)
+			if (_tcscmp(value, _T("XY")) IS 0)
 				settings->plane SET_TO CANON_PLANE_XY;
-			else if (wcscmp(value, L"YZ") IS 0)
+			else if (_tcscmp(value, _T("YZ")) IS 0)
 				settings->plane SET_TO CANON_PLANE_YZ;
-			else if (wcscmp(value, L"XZ") IS 0)
+			else if (_tcscmp(value, _T("XZ")) IS 0)
 				settings->plane SET_TO CANON_PLANE_XZ;
-			else if (wcscmp(value, L"ZX") IS 0)
+			else if (_tcscmp(value, _T("ZX")) IS 0)
 				settings->plane SET_TO CANON_PLANE_XZ;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for plane in setup file", value);
+				DRIVER_ERROR_CF(_T("Bad value %s for plane in setup file"), value);
 		}
-		else if (wcscmp(attribute, L"axis_offset_x") IS 0)
-			settings->axis_offset_x SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"axis_offset_y") IS 0)
-			settings->axis_offset_y SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"axis_offset_z") IS 0)
-			settings->axis_offset_z SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"origin_offset_x") IS 0)
-			settings->origin_offset_x SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"origin_offset_y") IS 0)
-			settings->origin_offset_y SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"origin_offset_z") IS 0)
-			settings->origin_offset_z SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"slot_for_length_offset") IS 0)
-			settings->length_offset_index SET_TO _wtoi(value);
-		else if (wcscmp(attribute, L"slot_for_radius_comp") IS 0)
-			settings->tool_table_index SET_TO _wtoi(value);
-		else if (wcscmp(attribute, L"slot_in_use") IS 0)
-			settings->current_slot SET_TO _wtoi(value);
-		else if (wcscmp(attribute, L"slot_selected") IS 0)
+		else if (_tcscmp(attribute, _T("axis_offset_x")) IS 0)
+			settings->axis_offset_x SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("axis_offset_y")) IS 0)
+			settings->axis_offset_y SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("axis_offset_z")) IS 0)
+			settings->axis_offset_z SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("origin_offset_x")) IS 0)
+			settings->origin_offset_x SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("origin_offset_y")) IS 0)
+			settings->origin_offset_y SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("origin_offset_z")) IS 0)
+			settings->origin_offset_z SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("slot_for_length_offset")) IS 0)
+			settings->length_offset_index SET_TO _ttoi(value);
+		else if (_tcscmp(attribute, _T("slot_for_radius_comp")) IS 0)
+			settings->tool_table_index SET_TO _ttoi(value);
+		else if (_tcscmp(attribute, _T("slot_in_use")) IS 0)
+			settings->current_slot SET_TO _ttoi(value);
+		else if (_tcscmp(attribute, _T("slot_selected")) IS 0)
 		{
-			if (ConvertToolToIndex(settings,_wtoi(value),&settings->selected_tool_slot))
+			if (ConvertToolToIndex(settings,_ttoi(value),&settings->selected_tool_slot))
 				settings->selected_tool_slot SET_TO 0;
 		}
-		else if (wcscmp(attribute, L"spindle_speed") IS 0)
-			settings->speed SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"speed_feed_mode") IS 0)
+		else if (_tcscmp(attribute, _T("spindle_speed")) IS 0)
+			settings->speed SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("speed_feed_mode")) IS 0)
 		{
-			if (wcscmp(value, L"INDEPENDENT") IS 0)
+			if (_tcscmp(value, _T("INDEPENDENT")) IS 0)
 				settings->speed_feed_mode SET_TO CANON_INDEPENDENT;
-			else if (wcscmp(value, L"SYNCHED") IS 0)
+			else if (_tcscmp(value, _T("SYNCHED")) IS 0)
 				settings->speed_feed_mode SET_TO CANON_SYNCHED;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for speed_feed_mode in setup file",
+				DRIVER_ERROR_CF(_T("Bad value %s for speed_feed_mode in setup file"),
 				value);
 		}
-		else if (wcscmp(attribute, L"spindle_turning") IS 0)
+		else if (_tcscmp(attribute, _T("spindle_turning")) IS 0)
 		{
-			if (wcscmp(value, L"STOPPED") IS 0)
+			if (_tcscmp(value, _T("STOPPED")) IS 0)
 				settings->spindle_turning SET_TO CANON_STOPPED;
-			else if (wcscmp(value, L"CLOCKWISE") IS 0)
+			else if (_tcscmp(value, _T("CLOCKWISE")) IS 0)
 				settings->spindle_turning SET_TO CANON_CLOCKWISE;
-			else if (wcscmp(value, L"COUNTERCLOCKWISE") IS 0)
+			else if (_tcscmp(value, _T("COUNTERCLOCKWISE")) IS 0)
 				settings->spindle_turning SET_TO CANON_COUNTERCLOCKWISE;
 			else
-				DRIVER_ERROR_CF(L"Bad value %ls for spindle_turning in setup file",
+				DRIVER_ERROR_CF(_T("Bad value %s for spindle_turning in setup file"),
 				value);
 		}
-		else if (wcscmp(attribute, L"tool_length_offset") IS 0)
-			settings->tool_length_offset SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"tool_xoffset") IS 0)
-			settings->tool_xoffset SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"tool_yoffset") IS 0)
-			settings->tool_yoffset SET_TO _wtof(value);
-		else if (wcscmp(attribute, L"traverse_rate") IS 0)
-			settings->traverse_rate SET_TO _wtof(value);
+		else if (_tcscmp(attribute, _T("tool_length_offset")) IS 0)
+			settings->tool_length_offset SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("tool_xoffset")) IS 0)
+			settings->tool_xoffset SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("tool_yoffset")) IS 0)
+			settings->tool_yoffset SET_TO _tstof(value);
+		else if (_tcscmp(attribute, _T("traverse_rate")) IS 0)
+			settings->traverse_rate SET_TO _tstof(value);
 		else
-			DRIVER_ERROR_CF(L"Unknown attribute %ls in setup file", attribute);
+			DRIVER_ERROR_CF(_T("Unknown attribute %s in setup file"), attribute);
 	}
 	fclose(setup_file_port);
 
@@ -543,7 +543,7 @@ valid slot number.
 */
 
 int read_tool_file(      /* ARGUMENT VALUES             */
-				   wchar_t * tool_file,       /* name of tool file           */
+				   TCHAR * tool_file,       /* name of tool file           */
 				   setup_pointer settings) /* pointer to machine settings */
 {
 	FILE * tool_file_port;
@@ -556,50 +556,50 @@ int read_tool_file(      /* ARGUMENT VALUES             */
 	double yoffset = 0;
 	double FeedTime = 0;
 	double FeedDist = 0;
-	wchar_t buffer[1000];
+	TCHAR buffer[1000];
 	CString Comment,Image;
 
 	_tfopen_s(&tool_file_port, tool_file, _T("rt,ccs=UTF-8"));
 
 	if (tool_file_port IS NULL)
-		DRIVER_ERROR(L"Cannot open tool file: %ls", tool_file);
+		DRIVER_ERROR(_T("Cannot open tool file: %s"), tool_file);
 	for(;;)    /* read and discard header, checking for blank line */
 	{
-		if (fgetws(buffer, 1000, tool_file_port) IS NULL)
-			DRIVER_ERROR_CF2(L"Bad %ls file format", L"tool");
+		if (_fgetts(buffer, 1000, tool_file_port) IS NULL)
+			DRIVER_ERROR_CF2(_T("Bad %s file format"), _T("tool"));
 		else if (buffer[0] IS '\n')
 			break;
 
-		if (wcsstr(buffer, L"IMAGE") != NULL) Revision = 1;  // new format has xy offset 
-		if (wcsstr(buffer, L"FEEDTIME") != NULL) Revision = 2;  // newer format also has tool time and distance 
+		if (_tcsstr(buffer, _T("IMAGE")) != NULL) Revision = 1;  // new format has xy offset 
+		if (_tcsstr(buffer, _T("FEEDTIME")) != NULL) Revision = 2;  // newer format also has tool time and distance 
 	}
 
 	index=0;
 	for (;;)
 	{
-		if (fgetws(buffer, 1000, tool_file_port) IS NULL)
+		if (_fgetts(buffer, 1000, tool_file_port) IS NULL)
 			break;
 
 		if (Revision==0)
 		{
-			if (swscanf(buffer, L"%d %d %lf %lf", &slot,
+			if (_stscanf(buffer, _T("%d %d %lf %lf"), &slot,
 				&tool_id, &offset, &diameter) IS 0)
-				DRIVER_ERROR_CF2(L"Bad input line \"%ls\" in tool file", buffer);
+				DRIVER_ERROR_CF2(_T("Bad input line \"%s\" in tool file"), buffer);
 
 		}
 		else
 		{
 			if (Revision == 1)
 			{
-				if (swscanf(buffer, L"%d %d %lf %lf %lf %lf%n", &slot,
+				if (_stscanf(buffer, _T("%d %d %lf %lf %lf %lf%n"), &slot,
 					&tool_id, &offset, &diameter, &xoffset, &yoffset, &n) IS 0)
-					DRIVER_ERROR_CF2(L"Bad input line \"%ls\" in tool file", buffer);
+					DRIVER_ERROR_CF2(_T("Bad input line \"%s\" in tool file"), buffer);
 			}
 			else
 			{
-				if (swscanf(buffer, L"%d %d %lf %lf %lf %lf %lf %lf%n", &slot,
+				if (_stscanf(buffer, _T("%d %d %lf %lf %lf %lf %lf %lf%n"), &slot,
 					&tool_id, &offset, &diameter, &xoffset, &yoffset, &FeedTime, &FeedDist, &n) IS 0)
-					DRIVER_ERROR_CF2(L"Bad input line \"%ls\" in tool file", buffer);
+					DRIVER_ERROR_CF2(_T("Bad input line \"%s\" in tool file"), buffer);
 			}
 
 			CString s = buffer;
@@ -643,12 +643,12 @@ int read_tool_file(      /* ARGUMENT VALUES             */
 			}
 			if(!bImageSuccess)
 			{
-				DRIVER_ERROR_CF2(L"Bad input line \"%ls\" in tool file, no quotation marks for comment", buffer);
+				DRIVER_ERROR_CF2(_T("Bad input line \"%s\" in tool file, no quotation marks for comment"), buffer);
 			}
 
 			if (!bCommentSuccess)
 			{
-				DRIVER_ERROR_CF2(L"Bad input line \"%ls\" in tool file, no matching quotation marks for tool image filename", buffer);
+				DRIVER_ERROR_CF2(_T("Bad input line \"%s\" in tool file, no matching quotation marks for tool image filename"), buffer);
 			}
 		}
 
@@ -681,7 +681,7 @@ int read_tool_file(      /* ARGUMENT VALUES             */
 }
 
 
-int save_tool_file(const wchar_t* File)
+int save_tool_file(const TCHAR* File)
 {
 	static CHiResTimer Timer;
 
@@ -710,25 +710,25 @@ int save_tool_file(const wchar_t* File)
 	return 0;
 }
 
-int save_tool_file_0(const wchar_t* File)
+int save_tool_file_0(const TCHAR* File)
 {
 	FILE* f;
 	_tfopen_s(&f, File, _T("wt,ccs=UTF-8"));
 
 	if (!f)
 	{
-		MessageBoxW(NULL, L"Unable to write Tool Table file:\r\r" + (CString)File, L"KMotion", MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+		MessageBox(NULL, _T("Unable to write Tool Table file:\r\r") + (CString)File, _T("KMotion"), MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	fwprintf(f, L"SLOT    ID        LENGTH         DIAMETER        XOFFSET        YOFFSET        FEEDTIME        FEEDDIST   COMMENT     IMAGE\n");
-	fwprintf(f, L"\n");
+	_ftprintf(f, _T("SLOT    ID        LENGTH         DIAMETER        XOFFSET        YOFFSET        FEEDTIME        FEEDDIST   COMMENT     IMAGE\n"));
+	_ftprintf(f, _T("\n"));
 
 	for (int i = 0; i < CANON_TOOL_MAX; i++)
 	{
 		CANON_TOOL_TABLE* T = &_setup.tool_table[i];
 
-		if (T->slot || T->id) fwprintf(f, L"%3d %6d %15.6f %15.6f %15.6f %15.6f %15.1f %15.1f \"%ls\" \"%ls\"\n",
+		if (T->slot || T->id) _ftprintf(f, _T("%3d %6d %15.6f %15.6f %15.6f %15.6f %15.1f %15.1f \"%s\" \"%s\"\n"),
 			T->slot, T->id, T->length, T->diameter, T->xoffset, T->yoffset, T->FeedTime, T->FeedDist, T->Comment.GetBuffer(), T->ToolImage.GetBuffer());
 	}
 	fclose(f);
@@ -779,16 +779,16 @@ would be to use fgetpos and fsetpos.
 */
 
 int interpret_from_file( /* ARGUMENT VALUES                   */
- wchar_t * filename,        /* string: name of the rs274kt file  */
- wchar_t * tool_file,       /* name of tool file                 */
- wchar_t * setup_file,      /* name of setup file                */
+ TCHAR * filename,        /* string: name of the rs274kt file  */
+ TCHAR * tool_file,       /* name of tool file                 */
+ TCHAR * setup_file,      /* name of setup file                */
  int no_stop)            /* switch which is ON or OFF         */
 {
   int status;
   int reads;
   int k;
-  wchar_t trash[INTERP_TEXT_SIZE];
-  wchar_t * read_ok;
+  TCHAR trash[INTERP_TEXT_SIZE];
+  TCHAR * read_ok;
   int program_status;
 
   program_status SET_TO RS274NGC_OK;
@@ -809,7 +809,7 @@ int interpret_from_file( /* ARGUMENT VALUES                   */
         return RS274NGC_ENDFILE;
       if (status ISNT RS274NGC_OK)
         {         /* should not be RS274NGC_EXIT or RS274NGC_ERROR */
-		  fwprintf(stderr, L"%ls\n", _interpreter_linetext);
+		  _ftprintf(stderr, _T("%s\n"), _interpreter_linetext);
           if (no_stop IS OFF)
             return RS274NGC_ERROR;
           else
@@ -819,7 +819,7 @@ int interpret_from_file( /* ARGUMENT VALUES                   */
               for(k SET_TO -1; k < reads; k++) /* read up to where we were */
                 {
                   read_ok SET_TO
-                    fgetws(trash, INTERP_TEXT_SIZE, _setup.file_pointer);
+                    _fgetts(trash, INTERP_TEXT_SIZE, _setup.file_pointer);
                   if (read_ok IS NULL)
                     return RS274NGC_ERROR;
                 }
@@ -829,7 +829,7 @@ int interpret_from_file( /* ARGUMENT VALUES                   */
       status SET_TO rs274ngc_execute(NULL);
       if (status IS RS274NGC_ERROR)
         {
-		  fwprintf(stderr, L"%ls\n", _interpreter_linetext);
+		  _ftprintf(stderr, _T("%s\n"), _interpreter_linetext);
           if (no_stop IS OFF)
             return RS274NGC_ERROR;
           else
@@ -839,7 +839,7 @@ int interpret_from_file( /* ARGUMENT VALUES                   */
               for(k SET_TO -1; k < reads; k++) /* read up to where we were */
                 {
                   read_ok SET_TO
-                    fgetws(trash, INTERP_TEXT_SIZE, _setup.file_pointer);
+                    _fgetts(trash, INTERP_TEXT_SIZE, _setup.file_pointer);
                   if (read_ok IS NULL)
                     return RS274NGC_ERROR;
                 }
@@ -892,10 +892,10 @@ To exit, the user must enter "quit" (followed by a carriage return).
 */
 
 int interpret_from_keyboard( /* ARGUMENT VALUES      */
- wchar_t * tool_file,           /* name of tool file    */
- wchar_t * setup_file)          /* name of setup file   */
+ TCHAR * tool_file,           /* name of tool file    */
+ TCHAR * setup_file)          /* name of setup file   */
 {
-  wchar_t confirm[INTERP_TEXT_SIZE];
+  TCHAR confirm[INTERP_TEXT_SIZE];
   int length;
   int command_ready;
 
@@ -912,8 +912,8 @@ int interpret_from_keyboard( /* ARGUMENT VALUES      */
       if (command_ready)
         {
           command_ready SET_TO FALSE;
-          wprintf(L"EXEC <-");
-          fgetws(confirm, INTERP_TEXT_SIZE, stdin);
+          _tprintf(_T("EXEC <-"));
+          _fgetts(confirm, INTERP_TEXT_SIZE, stdin);
           if (confirm[0] IS ';')
             {
               rs274ngc_execute(_interpreter_blocktext);
@@ -923,11 +923,11 @@ int interpret_from_keyboard( /* ARGUMENT VALUES      */
         }
       else
         {
-          wprintf(L"READ => ");
+          _tprintf(_T("READ => "));
           if (read_keyboard_line(_interpreter_linetext,
                                  _interpreter_blocktext, &length)
               IS RS274NGC_ERROR);
-          else if (wcscmp (_interpreter_blocktext, L"quit") IS 0)
+          else if (_tcscmp (_interpreter_blocktext, _T("quit")) IS 0)
             return RS274NGC_OK;
           else if (length > 0)
             {
@@ -1000,43 +1000,43 @@ to be printed and the interpreter will not run.
 
 */
 
-int main(int argc, wchar_t ** argv)
+int main(int argc, TCHAR ** argv)
 {
-  wchar_t tool_file[200];
-  wchar_t setup_file[200];
+  TCHAR tool_file[200];
+  TCHAR setup_file[200];
 
 
 	int result;
 
 	result = interpret_from_file( /* ARGUMENT VALUES                   */
-		L"tk.ngc",       /* string: name of the rs274kt file  */
-		L"tk.tbl",       /* name of tool file                 */
-		L"",				/* name of setup file                */
+		_T("tk.ngc"),       /* string: name of the rs274kt file  */
+		_T("tk.tbl"),       /* name of tool file                 */
+		_T(""),				/* name of setup file                */
 		OFF);           /* switch which is ON or OFF         */
 
 	exit(result);
 
 
-  if ((argc > 3) OR ((argc IS 3) AND (wcscmp (argv[2], L"continue") ISNT 0)))
+  if ((argc > 3) OR ((argc IS 3) AND (_tcscmp (argv[2], _T("continue")) ISNT 0)))
     {
-      fwprintf(stderr, L"Usage \"rs274ngc\"\n");
-      fwprintf(stderr, L"   or \"rs274ngc filename\"\n");
-      fwprintf(stderr, L"   or \"rs274ngc filename continue\"\n");
+      _ftprintf(stderr, _T("Usage \"rs274ngc\"\n"));
+      _ftprintf(stderr, _T("   or \"rs274ngc filename\"\n"));
+      _ftprintf(stderr, _T("   or \"rs274ngc filename continue\"\n"));
       exit(1);
     }
-  fwprintf(stderr, L"name of tool file => ");
+  _ftprintf(stderr, _T("name of tool file => "));
   fflush(stderr);
-  fgetws(tool_file, 200, stdin);
+  _fgetts(tool_file, 200, stdin);
   strip_terminal_newline(tool_file);
   if (tool_file[0] IS 0)
-    fwprintf(stderr, L"using default tool table\n");
+    _ftprintf(stderr, _T("using default tool table\n"));
 
-  fwprintf(stderr, L"name of setup file => ");
+  _ftprintf(stderr, _T("name of setup file => "));
   fflush(stderr);
-  fgetws(setup_file, 200, stdin);
+  _fgetts(setup_file, 200, stdin);
   strip_terminal_newline(setup_file);
   if (setup_file[0] IS 0)
-    fwprintf(stderr, L"using default machine setup\n");
+    _ftprintf(stderr, _T("using default machine setup\n"));
 
   if (argc IS 1)
     exit (interpret_from_keyboard(tool_file, setup_file));

@@ -90,7 +90,7 @@ typedef struct
 } AUXEF;
 
 
-int WriteCoff(TCCState *s1, const wchar_t *OutFile)
+int WriteCoff(TCCState *s1, const TCHAR *OutFile)
 {
 	FILE *f;
 	Section *tcc_sect;
@@ -101,7 +101,7 @@ int WriteCoff(TCCState *s1, const wchar_t *OutFile)
 
 	Section *stext, *sdata, *sbss;
 
-	f = _wfopen(OutFile, L"wb");
+	f = _tfopen(OutFile, _T("wb"));
 
 	if (!f)
 	{

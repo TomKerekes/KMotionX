@@ -76,10 +76,10 @@ CCoordMotion::CCoordMotion(CKMotionDLL *KM)
 
 	CString Path;
 
-	GetModuleFileName(GetModuleHandle(L"GCodeInterpreter.dll"),Path.GetBuffer(MAX_PATH),MAX_PATH);
+	GetModuleFileName(GetModuleHandle(_T("GCodeInterpreter.dll")),Path.GetBuffer(MAX_PATH),MAX_PATH);
 	Path.ReleaseBuffer();
 
-	Path.Replace(L"\"",L"");  // remove quotes
+	Path.Replace(_T("\""),_T(""));  // remove quotes
 	Path.TrimRight();
 	Path.TrimLeft();
 
@@ -89,7 +89,7 @@ CCoordMotion::CCoordMotion(CKMotionDLL *KM)
 	// Check if we are running from a 64bit directory directory
 	// if we are, then strip it off
 
-	if (Path.Right(2).CompareNoCase(L"64") == 0)
+	if (Path.Right(2).CompareNoCase(_T("64")) == 0)
 	{
 		Path = Path.Left(Path.GetLength() - 2);
 	}
@@ -97,7 +97,7 @@ CCoordMotion::CCoordMotion(CKMotionDLL *KM)
 	// Check if we are running from the debug directory
 	// if we are, then strip it off
 
-	if (Path.Right(6).CompareNoCase(L"\\debug") == 0)
+	if (Path.Right(6).CompareNoCase(_T("\\debug")) == 0)
 	{
 		Path = Path.Left(Path.GetLength()-6);
 	}
@@ -105,19 +105,19 @@ CCoordMotion::CCoordMotion(CKMotionDLL *KM)
 	// Check if we are running from the release directory
 	// if we are, then strip it off
 
-	if (Path.Right(8).CompareNoCase(L"\\release") == 0)
+	if (Path.Right(8).CompareNoCase(_T("\\release")) == 0)
 	{
 		Path = Path.Left(Path.GetLength()-8);
 	}
 
 	// Now set the root install directory
 
-	if (Path.Right(8).CompareNoCase(L"\\KMotion") == 0)
+	if (Path.Right(8).CompareNoCase(_T("\\KMotion")) == 0)
 	{
-		wcsncpy(MainPathRoot,Path.Left(Path.GetLength()-8),MAX_PATH);
+		_tcsncpy(MainPathRoot,Path.Left(Path.GetLength()-8),MAX_PATH);
 	}
 
-	wcsncpy(MainPath,Path,MAX_PATH);
+	_tcsncpy(MainPath,Path,MAX_PATH);
 
 	m_StraightTraverseCallback=NULL;
 	m_StraightTraverseSixAxisCallback=NULL;
@@ -140,50 +140,50 @@ CCoordMotion::CCoordMotion(CKMotionDLL *KM)
 	// check for a special Kinematics File
 
 	FILE* f;
-	_tfopen_s(&f, (CString)MainPath + L"\\Data\\Kinematics.txt", _T("rt,ccs=UTF-8"));
+	_tfopen_s(&f, (CString)MainPath + _T("\\Data\\Kinematics.txt"), _T("rt,ccs=UTF-8"));
 
 	if (f)
 	{
-		wchar_t s[81];
+		TCHAR s[81];
 		CString sw;
-		fgetws(s, 80, f);
+		_fgetts(s, 80, f);
 
 		sw = s; // make CString
 
 		// remove any newline or carriage return characters
-		sw = sw.SpanExcluding(L"\r\n");
+		sw = sw.SpanExcluding(_T("\r\n"));
 
 
 		// one exists, check if it is calling for Geppetto otherwise assume it is the 3Rod
 
-		if (sw == L"5AxisTableAC")
+		if (sw == _T("5AxisTableAC"))
 			Kinematics = new CKinematics5AxisTableAC;
-		else if (sw == L"Kinematics5AxisTableAB")
+		else if (sw == _T("Kinematics5AxisTableAB"))
 			Kinematics = new CKinematics5AxisTableAB;
-		else if (sw == L"5AxisTableBC")
+		else if (sw == _T("5AxisTableBC"))
 			Kinematics = new CKinematics5AxisTableBC;
-		else if (sw == L"Kinematics5AxisTableAGimbalB")
+		else if (sw == _T("Kinematics5AxisTableAGimbalB"))
 			Kinematics = new CKinematics5AxisTableAGimbalB;
-		else if (sw == L"5AxisGimbalAB")
+		else if (sw == _T("5AxisGimbalAB"))
 			Kinematics = new CKinematics5AxisGimbalAB;
-		else if (sw == L"5AxisGimbalCB")
+		else if (sw == _T("5AxisGimbalCB"))
 			Kinematics = new CKinematics5AxisGimbalCB;
-		else if (sw == L"GeppettoExtruder")
+		else if (sw == _T("GeppettoExtruder"))
 			Kinematics = new CKinematicsGeppettoExtrude;
-		else if (sw == L"Geppetto")
+		else if (sw == _T("Geppetto"))
 			Kinematics = new CKinematicsGeppetto;
-		else if (sw == L"Scara")
+		else if (sw == _T("Scara"))
 			Kinematics = new CKinematicsScara;
-		else if (sw == L"Kinematics2AxisRobot")
+		else if (sw == _T("Kinematics2AxisRobot"))
 			Kinematics = new CKinematics2AxisRobot;
-		else if (sw == L"3Link")
+		else if (sw == _T("3Link"))
 			Kinematics = new CKinematics3Link;
-		else if (sw == L"Kinematics3Rod")
+		else if (sw == _T("Kinematics3Rod"))
 			Kinematics = new CKinematics3Rod;
 		else
 		{
 			// warn - otherwise a misspelled name silently runs trivial linear kinematics
-			MessageBoxW(NULL, KMotionDLL->Translate("Unrecognized Kinematics Type (using default linear) : ") + sw, L"KMotion", MB_ICONEXCLAMATION|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, KMotionDLL->Translate("Unrecognized Kinematics Type (using default linear) : ") + sw, _T("KMotion"), MB_ICONEXCLAMATION|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			Kinematics = new CKinematics;
 		}
 
@@ -203,7 +203,7 @@ CCoordMotion::CCoordMotion(CKMotionDLL *KM)
 	x_axis = y_axis = z_axis = a_axis = b_axis = c_axis = u_axis = v_axis = -1;  // set all as initially undefined
 
 	#ifdef DEBUG_DOWNLOAD
-	AfxMessageBox(L"Download Diag Enabled");
+	AfxMessageBox(_T("Download Diag Enabled"));
 	#endif
 }
 
@@ -300,12 +300,12 @@ int CCoordMotion::CheckSoftLimitsArc(int plane, double XC, double YC, double Z0,
 	return 0;
 }
 
-int CCoordMotion::CheckLimit(int axis, double Act, double SoftLimitPos, double SoftLimitNeg, wchar_t Name, CString &errmsg)
+int CCoordMotion::CheckLimit(int axis, double Act, double SoftLimitPos, double SoftLimitNeg, TCHAR Name, CString &errmsg)
 {
 	if (axis >= 0)
 	{
-		if (Act > SoftLimitPos) { errmsg.Format(L"Actuator %8g Limit %8g %c+", Act, SoftLimitPos, Name); return 1; }
-		if (Act < SoftLimitNeg) { errmsg.Format(L"Actuator %8g Limit %8g %c-", Act, SoftLimitNeg, Name); return 1; }
+		if (Act > SoftLimitPos) { errmsg.Format(_T("Actuator %8g Limit %8g %c+"), Act, SoftLimitPos, Name); return 1; }
+		if (Act < SoftLimitNeg) { errmsg.Format(_T("Actuator %8g Limit %8g %c-"), Act, SoftLimitNeg, Name); return 1; }
 	}
 	return 0;
 }
@@ -598,7 +598,7 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 	if (FeedRateToUse <= 0.0)
 	{
 		SetAbort();
-		KMotionDLL->DoErrMsg(L"Arc Feed with Feed Rate Zero or Negative");
+		KMotionDLL->DoErrMsg(_T("Arc Feed with Feed Rate Zero or Negative"));
 		return 1;
 	}
 
@@ -710,7 +710,7 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 	{
 		if ((MP->ArcsToSegs || MP->UseOnlyLinearSegments || MP->ThirdOrderTP || Kinematics->GeoTableValid) && MP->CollinearTol==0.0)
 		{
-			MessageBoxW(NULL, KMotionDLL->Translate("Error Arcs To Segs selected with Zero Collinear Tolerance"), L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, KMotionDLL->Translate("Error Arcs To Segs selected with Zero Collinear Tolerance"), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			SetAbort();
 			return 1;
 		}
@@ -1176,12 +1176,12 @@ static void TP3AddWaypointThrottled(CCoordMotion *CM, CTP3FeedRun *r,
 					tag, lastE, el - lastAdvance, r->sp->getTotalTimeWritten());
 				r->warnedStall = true;
 				CString s;
-				s.Format(L"3rd Order Planner: controller stopped consuming (ExecTime frozen at\r\n"
-					L"%.3f sec for over 2 sec) while the host was throttled with %.3f sec of\r\n"
-					L"trajectory written.  If this was not a user feedhold, the controller is\r\n"
-					L"stuck in a data-end feedhold.  Downloading will continue without\r\n"
-					L"throttling.  With the Trajectory Planner Log option selected the event\r\n"
-					L"timeline is recorded in c:\\Temp\\TP3_Timeline.log.",
+				s.Format(_T("3rd Order Planner: controller stopped consuming (ExecTime frozen at\r\n")
+					_T("%.3f sec for over 2 sec) while the host was throttled with %.3f sec of\r\n")
+					_T("trajectory written.  If this was not a user feedhold, the controller is\r\n")
+					_T("stuck in a data-end feedhold.  Downloading will continue without\r\n")
+					_T("throttling.  With the Trajectory Planner Log option selected the event\r\n")
+					_T("timeline is recorded in c:\\Temp\\TP3_Timeline.log."),
 					lastE, r->sp->getTotalTimeWritten());
 				CM->KMotionDLL->DoErrMsg(s);
 				break;
@@ -2144,7 +2144,7 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 			if (Vel <= 0.0 || Accel <= 0.0 || Jerk <= 0.0)
 			{
 				SetAbort();
-				KMotionDLL->DoErrMsg(L"3rd Order Planner requires positive Vel, Accel, and Jerk for all axes in use");
+				KMotionDLL->DoErrMsg(_T("3rd Order Planner requires positive Vel, Accel, and Jerk for all axes in use"));
 				return 1;
 			}
 			// smoothing time constant this axis asks for: Aeff/Jerk with the
@@ -2173,8 +2173,8 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 		if (nAct == 0)
 		{
 			SetAbort();
-			KMotionDLL->DoErrMsg(L"3rd Order Planner: no actuator has a nonzero Resolution (Counts per unit).\r\n"
-				L"Define at least one axis in the Trajectory Planner Axis Parameters.");
+			KMotionDLL->DoErrMsg(_T("3rd Order Planner: no actuator has a nonzero Resolution (Counts per unit).\r\n")
+				_T("Define at least one axis in the Trajectory Planner Axis Parameters."));
 			return 1;
 		}
 		// One filter pair spans 3*max(Aeff/Jerk) for ALL axes; a single
@@ -2182,11 +2182,11 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 		if (Rmax > 1.0)
 		{
 			CString s;
-			s.Format(L"3rd Order Planner: Axis %d has effective Accel/Jerk = %.6g/%.6g = %.1f seconds\r\n"
-				L"(effective Accel = min(Accel, sqrt(Vel*Jerk/2))).\r\n"
-				L"This time constant sets the smoothing filter span for ALL axes and makes\r\n"
-				L"planning impractical.  Increase that axis's Jerk (or reduce its Accel) so\r\n"
-				L"Accel/Jerk is well under 1 second (0.02 to 0.2 is typical).", iw, Aw, Jw, Rmax);
+			s.Format(_T("3rd Order Planner: Axis %d has effective Accel/Jerk = %.6g/%.6g = %.1f seconds\r\n")
+				_T("(effective Accel = min(Accel, sqrt(Vel*Jerk/2))).\r\n")
+				_T("This time constant sets the smoothing filter span for ALL axes and makes\r\n")
+				_T("planning impractical.  Increase that axis's Jerk (or reduce its Accel) so\r\n")
+				_T("Accel/Jerk is well under 1 second (0.02 to 0.2 is typical)."), iw, Aw, Jw, Rmax);
 			SetAbort();
 			KMotionDLL->DoErrMsg(s);
 			return 1;
@@ -2348,7 +2348,7 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 		{
 			SetAbort();
 			TP3ClearRun();
-			KMotionDLL->DoErrMsg(L"3rd Order Planner failed to start streaming plan");
+			KMotionDLL->DoErrMsg(_T("3rd Order Planner failed to start streaming plan"));
 			return 1;
 		}
 	}
@@ -2500,9 +2500,9 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 				{
 					r->warnedUnderflow = true;
 					CString s;
-					s.Format(L"3rd Order Planner: buffer nearly underflowed - only %.2f sec of\r\n"
-						L"trajectory is ahead of the controller's executed time.\r\n"
-						L"(planning/download is not keeping up with execution)", ahead);
+					s.Format(_T("3rd Order Planner: buffer nearly underflowed - only %.2f sec of\r\n")
+						_T("trajectory is ahead of the controller's executed time.\r\n")
+						_T("(planning/download is not keeping up with execution)"), ahead);
 					KMotionDLL->DoErrMsg(s);
 				}
 			}
@@ -2512,7 +2512,7 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 	{
 		SetAbort();
 		TP3ClearRun();
-		KMotionDLL->DoErrMsg(L"3rd Order Planner streaming update failed");
+		KMotionDLL->DoErrMsg(_T("3rd Order Planner streaming update failed"));
 		return 1;
 	}
 
@@ -2567,8 +2567,8 @@ int CCoordMotion::TP3FlushRun(const char *why)
 		SetAbort();
 		TP3ClearRun();
 		m_TP3Flushing = false;
-		KMotionDLL->DoErrMsg(L"3rd Order Planner failed to finish the streaming plan\r\n"
-			L"(out of memory or invalid limits - check Vel/Accel/Jerk settings)");
+		KMotionDLL->DoErrMsg(_T("3rd Order Planner failed to finish the streaming plan\r\n")
+			_T("(out of memory or invalid limits - check Vel/Accel/Jerk settings)"));
 		return 1;
 	}
 
@@ -2700,7 +2700,7 @@ int CCoordMotion::StraightFeedAccelRapid(double DesiredFeedRate_in_per_sec, doub
 	if (FeedRateToUse <= 0.0)
 	{
 		SetAbort();
-		KMotionDLL->DoErrMsg(L"Straight Feed with Feed Rate Zero or Negative");
+		KMotionDLL->DoErrMsg(_T("Straight Feed with Feed Rate Zero or Negative"));
 		return 1;
 	}
 
@@ -3992,7 +3992,7 @@ int CCoordMotion::LaunchCoordMotion()
 	{
 		if (fabs(m_ThreadingBaseSpeedRPS) < 1e-9)
 		{
-			MessageBoxW(NULL, KMotionDLL->Translate("Error Threading with Zero Speed"), L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, KMotionDLL->Translate("Error Threading with Zero Speed"), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			SetAbort();
 			return 1;
 		}
@@ -4635,12 +4635,12 @@ int CCoordMotion::OutputSegment(int iseg)
 	FILE *f;
 	
 	if (iseg==0)
-		_tfopen_s(&f, L"c:\\Temp\\data.txt", _T("wt,ccs=UTF-8"));
+		_tfopen_s(&f, _T("c:\\Temp\\data.txt"), _T("wt,ccs=UTF-8"));
 	else
-		_tfopen_s(&f, L"c:\\Temp\\data.txt", _T("at,ccs=UTF-8"));
+		_tfopen_s(&f, _T("c:\\Temp\\data.txt"), _T("at,ccs=UTF-8"));
 
 	int k = iseg;
-	fwprintf(f, L"segment,%d,type,%d,Done,%d,StopRequired,%d,ChangeInDirection,%.6f,vel,%.6f,MaxVel,%.6f,dx,%.6f,x,%.6f,y,%.6f,T,%.6f\n",
+	_ftprintf(f, _T("segment,%d,type,%d,Done,%d,StopRequired,%d,ChangeInDirection,%.6f,vel,%.6f,MaxVel,%.6f,dx,%.6f,x,%.6f,y,%.6f,T,%.6f\n"),
 			k, GetSegPtr(k)->type, GetSegPtr(k)->Done, GetSegPtr(k)->StopRequired,
 			GetSegPtr(k)->ChangeInDirection, GetSegPtr(k)->vel, GetSegPtr(k)->MaxVel, GetSegPtr(k)->dx,
 			GetSegPtr(k)->x1, GetSegPtr(k)->y1, GetSegPtr(k)->C[0].t + GetSegPtr(k)->C[1].t + GetSegPtr(k)->C[2].t);
@@ -4825,7 +4825,7 @@ int CCoordMotion::OutputSegment(int iseg)
 				int *IntUV = (int *)FloatUVArray;
 
 #ifdef DEBUG_DOWNLOAD
-				ds.Format(L"Linear %f %d %d\n",DTimer.Elapsed_Seconds(),iseg,i);
+				ds.Format(_T("Linear %f %d %d\n"),DTimer.Elapsed_Seconds(),iseg,i);
 				PutString(ds);
 #endif
 
@@ -5067,7 +5067,7 @@ int CCoordMotion::OutputSegment(int iseg)
 		}
 		if (i!=0)
 		{
-			KMotionDLL->DoErrMsg(L"Wrong Buffer Times",MB_ICONEXCLAMATION|MB_OK);   
+			KMotionDLL->DoErrMsg(_T("Wrong Buffer Times"),MB_ICONEXCLAMATION|MB_OK);   
 			return 1;
 		}
 	}
@@ -5179,8 +5179,8 @@ int CCoordMotion::OutputSegment(int iseg)
 				}
 				else
 				{
-					result = MessageBoxW(NULL, KMotionDLL->Translate("Unexpected Coordinated Motion Buffer Underflow!\r(Consider increasing the Trajectory Planner Lookahead time in the Configuration Screen)\r\rPress OK to attempt to continue motion\rPress CANCEL to abort"),
-						L"KMotion", MB_ICONEXCLAMATION | MB_OKCANCEL);
+					result = MessageBox(NULL, KMotionDLL->Translate("Unexpected Coordinated Motion Buffer Underflow!\r(Consider increasing the Trajectory Planner Lookahead time in the Configuration Screen)\r\rPress OK to attempt to continue motion\rPress CANCEL to abort"),
+						_T("KMotion"), MB_ICONEXCLAMATION | MB_OKCANCEL);
 
 					if (result == IDCANCEL)
 					{
@@ -5605,7 +5605,7 @@ int CCoordMotion::GetRapidSettings()
 		{
 			FirstTime = false; // only display warniing once
 			CString Stop;
-			Stop.Format(L"%c\r\rTime to Stop %.2f sec\r\rLookahead %.2f sec", Axis, StopTime, MP->TPLookahead);
+			Stop.Format(_T("%c\r\rTime to Stop %.2f sec\r\rLookahead %.2f sec"), Axis, StopTime, MP->TPLookahead);
 
 			// Warning Controller configuration takes longer to stop than Trajectory Planner Look Ahead time
 			KMotionDLL->DoErrMsg(Translate("Warning Controller configuration takes longer to stop than 75% of Trajectory Planner Look Ahead time. Feed Rate will be limited.\r\rLimiting Axis : ") + Stop);
@@ -6050,7 +6050,7 @@ bool CCoordMotion::GetHalt()
 }
 
 
-int CCoordMotion::MeasurePointAppendToFile(const wchar_t *name)
+int CCoordMotion::MeasurePointAppendToFile(const TCHAR *name)
 {
 	double x,y,z,a,b,c;
 	static int row=0, col=0;
@@ -6070,7 +6070,7 @@ int CCoordMotion::MeasurePointAppendToFile(const wchar_t *name)
 		return 1;
 	}
 
-	int result = fwscanf(f,L"%d,%d",&NRows,&NCols);
+	int result = _ftscanf(f,_T("%d,%d"),&NRows,&NCols);
 		
 	if (result != 2 || NRows < 2 || NRows > 1000 || NCols < 2 || NCols > 1000)
 	{
@@ -6079,7 +6079,7 @@ int CCoordMotion::MeasurePointAppendToFile(const wchar_t *name)
 		return 1;
 	}
 
-	result = fwscanf(f,L"%lf,%lf",&GeoSpacingX,&GeoSpacingY);
+	result = _ftscanf(f,_T("%lf,%lf"),&GeoSpacingX,&GeoSpacingY);
 		
 	if (result != 2)
 	{
@@ -6088,7 +6088,7 @@ int CCoordMotion::MeasurePointAppendToFile(const wchar_t *name)
 		return 1;
 	}
 
-	result = fwscanf(f,L"%lf,%lf",&GeoOffsetX,&GeoOffsetY);
+	result = _ftscanf(f,_T("%lf,%lf"),&GeoOffsetX,&GeoOffsetY);
 		
 	if (result != 2)
 	{
@@ -6097,7 +6097,7 @@ int CCoordMotion::MeasurePointAppendToFile(const wchar_t *name)
 		return 1;
 	}
 
-	result = fwscanf(f,L"%d,%d,%lf,%lf",&rr,&cc,&X,&Y);
+	result = _ftscanf(f,_T("%d,%d,%lf,%lf"),&rr,&cc,&X,&Y);
 
 	if (result != 4) row=col=0;		// assume we are starting over
 
@@ -6114,7 +6114,7 @@ int CCoordMotion::MeasurePointAppendToFile(const wchar_t *name)
 		return 1;
 	}
 
-	fwprintf(f,L"%d,%d,%f,%f,%f\n",row,col,x,y,z);
+	_ftprintf(f,_T("%d,%d,%f,%f,%f\n"),row,col,x,y,z);
 
 	col++;
 

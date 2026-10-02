@@ -118,7 +118,7 @@ void CHiResTimer::DisplaySplit()
 
 	for (int i=0; i<nSplit-1; i++)
 	{
-		s.Format(_T("From sample %d to %d was %10.2f us %ls"),i+1,i,Diff_us(i+1,i),(CStringW)(Desc[i+1]));
+		s.Format(_T("From sample %d to %d was %10.2f us %s"),i+1,i,Diff_us(i+1,i),(LPCTSTR)Desc[i+1]);
 
 		s2= s2+s+"\r";
 	}

@@ -232,7 +232,7 @@ int CKinematicsGeppetto::TransformActuatorstoCAD(double *Acts, double *xr, doubl
 // .
 // .
 
-int CKinematicsGeppetto::ReadGeoTable(const wchar_t *name)
+int CKinematicsGeppetto::ReadGeoTable(const TCHAR *name)
 {
 	double X, Y, Z, c;
 	int row, col;
@@ -246,34 +246,34 @@ int CKinematicsGeppetto::ReadGeoTable(const wchar_t *name)
 
 	if (!f)
 	{
-		MessageBoxW(NULL, Translate("Unable to open Geometric Correction File : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Unable to open Geometric Correction File : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	int result = fwscanf(f, L"%d,%d", &NRows, &NCols);
+	int result = _ftscanf(f, _T("%d,%d"), &NRows, &NCols);
 
 	if (result != 2 || NRows < 2 || NRows > 4000 || NCols < 2 || NCols > 4000)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Geometric Correction File (NRows and NCols) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Invalid Geometric Correction File (NRows and NCols) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	result = fwscanf(f, L"%lf,%lf", &GeoSpacingX, &GeoSpacingY);
+	result = _ftscanf(f, _T("%lf,%lf"), &GeoSpacingX, &GeoSpacingY);
 
 	if (result != 2)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Geometric Correction File (GeoSpacingX and GeoSpacingY) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Invalid Geometric Correction File (GeoSpacingX and GeoSpacingY) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	result = fwscanf(f, L"%lf,%lf", &GeoOffsetX, &GeoOffsetY);
+	result = _ftscanf(f, _T("%lf,%lf"), &GeoOffsetX, &GeoOffsetY);
 
 	if (result != 2)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Geometric Correction File (GeoOffsetX and GeoOffsetY) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Invalid Geometric Correction File (GeoOffsetX and GeoOffsetY) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
@@ -282,12 +282,12 @@ int CKinematicsGeppetto::ReadGeoTable(const wchar_t *name)
 
 	for (int i = 0; i<NRows*NCols; i++)
 	{
-		result = fwscanf(f, L"%d,%d,%lf,%lf,%lf,%lf", &row, &col, &X, &Y, &Z, &c);
+		result = _ftscanf(f, _T("%d,%d,%lf,%lf,%lf,%lf"), &row, &col, &X, &Y, &Z, &c);
 
 		if (result != 6 || row < 0 || row >= NRows || col < 0 || col >= NCols)
 		{
 			fclose(f);
-			MessageBoxW(NULL, Translate("Invalid Geometric Correction File (invalid data value) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, Translate("Invalid Geometric Correction File (invalid data value) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			return 1;
 		}
 

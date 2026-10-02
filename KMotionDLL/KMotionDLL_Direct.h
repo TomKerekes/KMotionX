@@ -59,7 +59,7 @@ public:
 	int FirmwareVersion(int board);
 	int CheckForReady(int board);
 	int ServiceConsole(int board);
-	const wchar_t *GetErrMsg(int board);
+	const TCHAR *GetErrMsg(int board);
 	void ClearErrMsg(int board);
 
 	int SetConsoleCallback(int board, SERVER_CONSOLE_HANDLER *ch);

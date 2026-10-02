@@ -60,7 +60,7 @@ CGCodeInterpreter::~CGCodeInterpreter()
 
 int CGCodeInterpreter::Interpret(
 			  int board_type,
-		      const wchar_t *fname,
+		      const TCHAR *fname,
 			  int start, int end,
 			  int restart,
               G_STATUS_CALLBACK *StatusFn,
@@ -141,19 +141,19 @@ bool CGCodeInterpreter::GetAbort()
 	return CoordMotion->GetAbort();
 }
 
-void CGCodeInterpreter::SetToolFile(wchar_t *f)
+void CGCodeInterpreter::SetToolFile(TCHAR *f)
 {
-	wcsncpy(ToolFile,f,MAX_PATH);
+	_tcsncpy(ToolFile,f,MAX_PATH);
 }
 
-void CGCodeInterpreter::SetSetupFile(wchar_t *f)
+void CGCodeInterpreter::SetSetupFile(TCHAR *f)
 {
-	wcsncpy(SetupFile,f,MAX_PATH);
+	_tcsncpy(SetupFile,f,MAX_PATH);
 }
 
-void CGCodeInterpreter::SetVarsFile(wchar_t *f)
+void CGCodeInterpreter::SetVarsFile(TCHAR *f)
 {
-	wcsncpy(VarsFile,f,MAX_PATH);
+	_tcsncpy(VarsFile,f,MAX_PATH);
 }
 
 int CGCodeInterpreter::rs274ErrorExit(int status)
@@ -247,8 +247,8 @@ int CGCodeInterpreter::InitializeInterp(void)
 int CGCodeInterpreter::DoExecute()
 {
 	int status;
-	wchar_t trash[INTERP_TEXT_SIZE];
-	wchar_t * read_ok;
+	TCHAR trash[INTERP_TEXT_SIZE];
+	TCHAR * read_ok;
 	int program_status;
 	CString OutputCRLF;
 
@@ -348,7 +348,7 @@ int CGCodeInterpreter::DoExecute()
 			
 	for( ; m_GCodeReads<m_CurrentLine ; m_GCodeReads++)
 	{
-		read_ok = fgetws(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
+		read_ok = _fgetts(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
 		if (!read_ok) 
 		{
 			ErrorOutput=CoordMotion->KMotionDLL->Translate("Error while reading GCode file ");
@@ -374,7 +374,7 @@ int CGCodeInterpreter::DoExecute()
 		StateSaved=false;  // remember we should save the state at some point
 
 		// give output to caller			
-		Output.Replace(L"\n", L"\r\n");
+		Output.Replace(_T("\n"), _T("\r\n"));
 
 		m_StatusFn(m_CurrentLine,Output);
 		
@@ -522,7 +522,7 @@ int CGCodeInterpreter::LaunchExecution()
 
 volatile bool InvokeInterpComplete;
 
-void InvokeCompleteCallback(int status, int lineno, int sequence_number, const wchar_t *err)
+void InvokeCompleteCallback(int status, int lineno, int sequence_number, const TCHAR *err)
 {
 	if (status)
 	{
@@ -531,7 +531,7 @@ void InvokeCompleteCallback(int status, int lineno, int sequence_number, const w
 	InvokeInterpComplete=true;
 }
 
-void InvokeStatusCallback(int line_no, const wchar_t *msg)
+void InvokeStatusCallback(int line_no, const TCHAR *msg)
 {
 }
 
@@ -589,7 +589,7 @@ int CGCodeInterpreter::InvokeAction(int i, BOOL FlushBeforeUnbufferedOperation, 
 
 			if (Timer.Elapsed_Seconds() > 10.0)
 			{
-				CoordMotion->KMotionDLL->DoErrMsg(L"Timeout waiting on Action to complete");
+				CoordMotion->KMotionDLL->DoErrMsg(_T("Timeout waiting on Action to complete"));
 				return 1;
 			}
 		}
@@ -848,7 +848,7 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 			if (e.Right(4) == ".out")
 			{
 				CString FileName = p->String;
-				if (FileName.Find(L"\\\\") == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
+				if (FileName.Find(_T("\\\\")) == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
 				{
 					FileName = CoordMotion->MainPathRoot + ((CString)C_PROGRAMS_DIR) + FileName;
 				}
@@ -864,7 +864,7 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 				CString Err;
 
 				CString FileName = p->String; 
-				if (FileName.Find(L"\\\\") == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
+				if (FileName.Find(_T("\\\\")) == -1 && FileName.Find(':') == -1)  // if no Path in File name add in the default path
 				{
 					FileName = CoordMotion->MainPathRoot + ((CString)C_PROGRAMS_DIR) + FileName;
 				}
@@ -960,12 +960,12 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 		w="";
 		if (i==6)  // tool change
 		{
-			w.Format(L" %d",p_setup->selected_tool_slot);
+			w.Format(_T(" %d"),p_setup->selected_tool_slot);
 		}
 		else if (i==10)  // set speed
 		{
 			float fspeed = (float)(p_setup->speed * CoordMotion->GetSpindleRateOverride());
-			w.Format(L" %f",fspeed);
+			w.Format(_T(" %f"),fspeed);
 		}
 		else
 		{
@@ -975,19 +975,19 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 
 			if (p_setup->block1.p_flag)
 			{
-				w0.Format(L" %f", p_setup->block1.p_number);
+				w0.Format(_T(" %f"), p_setup->block1.p_number);
 				w=w+w0;
 			}
 
 			if (p_setup->block1.q_flag)
 			{
-				w0.Format(L" %f", p_setup->block1.q_number);
+				w0.Format(_T(" %f"), p_setup->block1.q_number);
 				w=w+w0;
 			}
 
 			if (p_setup->block1.r_flag)
 			{
-				w0.Format(L" %f", p_setup->block1.r_number);
+				w0.Format(_T(" %f"), p_setup->block1.r_number);
 				w=w+w0;
 			}
 		}
@@ -997,9 +997,9 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 		{
 			CString Err;
 
-			Err.Format(CoordMotion->KMotionDLL->Translate("Error Executing PC Program:\r\r%ls\r\rReturn code = %d\r\rAbort?"), (CString)p->String, result);
+			Err.Format(CoordMotion->KMotionDLL->Translate("Error Executing PC Program:\r\r%s\r\rReturn code = %d\r\rAbort?"), p->String, result);
 
-			if (MessageBoxW(NULL, Err, L"KMotion", MB_YESNO) == IDYES) Abort();
+			if (MessageBox(NULL, Err, _T("KMotion"), MB_YESNO) == IDYES) Abort();
 		};
 		break;
 
@@ -1016,7 +1016,7 @@ int CGCodeInterpreter::InvokeActionDirect(int i, BOOL FlushBeforeUnbufferedOpera
 }
 
 
-int CGCodeInterpreter::ExecutePC(const wchar_t *Name, bool NoWait)
+int CGCodeInterpreter::ExecutePC(const TCHAR *Name, bool NoWait)
 {
 	SECURITY_ATTRIBUTES sa          = {0};
 	STARTUPINFO         si          = {0};
@@ -1307,15 +1307,15 @@ int CGCodeInterpreter::ChangeFixtureNumber(int fixture)
 {
 	switch (fixture)
 	{
-	case 1:	return rs274ngc_execute(L"G54");
-	case 2:	return rs274ngc_execute(L"G55");
-	case 3:	return rs274ngc_execute(L"G56");
-	case 4:	return rs274ngc_execute(L"G57");
-	case 5:	return rs274ngc_execute(L"G58");
-	case 6:	return rs274ngc_execute(L"G59");
-	case 7:	return rs274ngc_execute(L"G59.1");
-	case 8:	return rs274ngc_execute(L"G59.2");
-	case 9:	return rs274ngc_execute(L"G59.3");
+	case 1:	return rs274ngc_execute(_T("G54"));
+	case 2:	return rs274ngc_execute(_T("G55"));
+	case 3:	return rs274ngc_execute(_T("G56"));
+	case 4:	return rs274ngc_execute(_T("G57"));
+	case 5:	return rs274ngc_execute(_T("G58"));
+	case 6:	return rs274ngc_execute(_T("G59"));
+	case 7:	return rs274ngc_execute(_T("G59.1"));
+	case 8:	return rs274ngc_execute(_T("G59.2"));
+	case 9:	return rs274ngc_execute(_T("G59.3"));
 	}
 	return 0;
 }
@@ -1518,7 +1518,7 @@ void CGCodeInterpreter::SetScreenScriptCallback(G_SCREENSCRIPT_CALLBACK *UserFn)
 
 int CGCodeInterpreter::rs274ngc_save_parameters()
 {
-	wchar_t file[MAX_PATH+1];
+	TCHAR file[MAX_PATH+1];
 	GET_EXTERNAL_PARAMETER_FILE_NAME(file, MAX_PATH);
 	return ::rs274ngc_save_parameters(file,p_setup->parameters);
 }
@@ -1533,11 +1533,11 @@ bool CGCodeInterpreter::rs274ngc_save_parameters_changed(void)
 
 
 
-int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
+int CGCodeInterpreter::DoReverseSearch(const TCHAR * InFile, int CurrentLine)
 {
 	int GCodeReads,status;
-	wchar_t trash[INTERP_TEXT_SIZE];
-	wchar_t * read_ok;
+	TCHAR trash[INTERP_TEXT_SIZE];
+	TCHAR * read_ok;
 	CString s;
 
 	if (CurrentLine==0) return 0;  // should always be ok to set the first line
@@ -1601,12 +1601,12 @@ int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
 
 	for( ; GCodeReads<=CurrentLine ; GCodeReads++)
 	{
-		read_ok = fgetws(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
+		read_ok = _fgetts(trash, INTERP_TEXT_SIZE,_setup.file_pointer);
 		if (!read_ok) 
 		{
 			rs274ngc_close();
 			delete [] LineArray;
-			MessageBoxW(NULL, CoordMotion->KMotionDLL->Translate("Error while reading GCode file "), L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, CoordMotion->KMotionDLL->Translate("Error while reading GCode file "), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			return 1;
 		}
 		LineArray[GCodeReads]=trash;
@@ -1727,7 +1727,7 @@ int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
 	{
 		if (Units==G_20 && p_setup->length_units!=CANON_UNITS_INCHES)
 		{
-			if (AfxMessageBox(L"Backward scan found G20 Inches Mode.  Switch to Inches?" ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
+			if (AfxMessageBox(_T("Backward scan found G20 Inches Mode.  Switch to Inches?") ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
 			{
 				p_setup->length_units=CANON_UNITS_INCHES;
 				// wholesale raw adoption (user-approved): offsets now read
@@ -1737,7 +1737,7 @@ int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
 		}
 		if (Units==G_21 && p_setup->length_units!=CANON_UNITS_MM)
 		{
-			if (AfxMessageBox(L"Backward scan found G21 MM Mode.  Switch to MM?" ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
+			if (AfxMessageBox(_T("Backward scan found G21 MM Mode.  Switch to MM?") ,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
 			{
 				p_setup->length_units=CANON_UNITS_MM;
 				// wholesale raw adoption (user-approved): offsets now read
@@ -1749,7 +1749,7 @@ int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
 
 	if (block0.motion_to_be == -1)
 	{
-		s.Format(L"New Line does not contain a G mode.  Backward scan found:\r\rG%d\r\rUse this mode?", G / 10);
+		s.Format(_T("New Line does not contain a G mode.  Backward scan found:\r\rG%d\r\rUse this mode?"), G / 10);
 
 		if (AfxMessageBox(s, MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL) == IDNO)
 		{
@@ -1795,7 +1795,7 @@ int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
 	{
 		if (FoundF)
 		{
-			s.Format(L"New Line does not contain a Feedrate F command.  Backward scan found:\r\rF%g\r\rUse this feedrate?",f);
+			s.Format(_T("New Line does not contain a Feedrate F command.  Backward scan found:\r\rF%g\r\rUse this feedrate?"),f);
 			// Ask if not already set to that value
 			if (p_setup->feed_rate == f || AfxMessageBox(s,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDYES)
 			{
@@ -1808,7 +1808,7 @@ int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
 		}
 		else
 		{
-			MessageBoxW(NULL, CoordMotion->KMotionDLL->Translate("New Line does not contain a Feedrate F command.  Unable to determine previous feedrate"), L"KMotion", MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+			MessageBox(NULL, CoordMotion->KMotionDLL->Translate("New Line does not contain a Feedrate F command.  Unable to determine previous feedrate"), _T("KMotion"), MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 		}
 	}
 	else
@@ -1852,14 +1852,14 @@ int CGCodeInterpreter::DoReverseSearch(const wchar_t * InFile, int CurrentLine)
 		else
 			s = "Backward scan found prior position as:\r\r";
 
-		if (CoordMotion->x_axis >= 0) { v.Format(L" X%g", xprep); s = s + v; }
-		if (CoordMotion->y_axis >= 0) { v.Format(L" Y%g", yprep); s = s + v; }
-		if (CoordMotion->z_axis >= 0) { v.Format(L" Z%g", zprep); s = s + v; }
-		if (CoordMotion->a_axis >= 0) { v.Format(L" A%g", aprep); s = s + v; }
-		if (CoordMotion->b_axis >= 0) { v.Format(L" B%g", bprep); s = s + v; }
-		if (CoordMotion->c_axis >= 0) { v.Format(L" C%g", cprep); s = s + v; }
-		if (CoordMotion->u_axis >= 0) { v.Format(L" U%g", uprep); s = s + v; }
-		if (CoordMotion->v_axis >= 0) { v.Format(L" V%g", vprep); s = s + v; }
+		if (CoordMotion->x_axis >= 0) { v.Format(_T(" X%g"), xprep); s = s + v; }
+		if (CoordMotion->y_axis >= 0) { v.Format(_T(" Y%g"), yprep); s = s + v; }
+		if (CoordMotion->z_axis >= 0) { v.Format(_T(" Z%g"), zprep); s = s + v; }
+		if (CoordMotion->a_axis >= 0) { v.Format(_T(" A%g"), aprep); s = s + v; }
+		if (CoordMotion->b_axis >= 0) { v.Format(_T(" B%g"), bprep); s = s + v; }
+		if (CoordMotion->c_axis >= 0) { v.Format(_T(" C%g"), cprep); s = s + v; }
+		if (CoordMotion->u_axis >= 0) { v.Format(_T(" U%g"), uprep); s = s + v; }
+		if (CoordMotion->v_axis >= 0) { v.Format(_T(" V%g"), vprep); s = s + v; }
 		s=s+"\r\rShould a Safe Z move be made to these coordinates?";
 		if (AfxMessageBox(s,MB_YESNO | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL)==IDNO)
 		{

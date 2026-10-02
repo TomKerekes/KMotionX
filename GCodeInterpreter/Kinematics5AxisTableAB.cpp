@@ -46,25 +46,25 @@ CKinematics5AxisTableAB::~CKinematics5AxisTableAB()
 int CKinematics5AxisTableAB::Initialize()
 {
 	// Check if parameters exist in Kinematics.txt, if so update them and ask for confirmation value window yes/no, no abort
-	GetParameter(L"BTableAZeroZZero", &BTableAZeroZZero);
+	GetParameter(_T("BTableAZeroZZero"), &BTableAZeroZZero);
 	CString str1;
-	str1.Format(L"Value BTableAZeroZZero is: %g \n", BTableAZeroZZero);
+	str1.Format(_T("Value BTableAZeroZZero is: %g \n"), BTableAZeroZZero);
 	//if (AfxMessageBox(str1, MB_YESNO) == IDNO) return -1;
-	GetParameter(L"BTableAZeroXCenterpoint", &BTableAZeroXCenterpoint);
+	GetParameter(_T("BTableAZeroXCenterpoint"), &BTableAZeroXCenterpoint);
 	CString str2;
-	str2.Format(L"Value BTableAZeroXCenterpoint is: %g \n", BTableAZeroXCenterpoint);
+	str2.Format(_T("Value BTableAZeroXCenterpoint is: %g \n"), BTableAZeroXCenterpoint);
 	//if (AfxMessageBox(str2, MB_YESNO) == IDNO) return -1;
-	GetParameter(L"BTableAZeroYCenterpoint", &BTableAZeroYCenterpoint);
+	GetParameter(_T("BTableAZeroYCenterpoint"), &BTableAZeroYCenterpoint);
 	CString str3;
-	str3.Format(L"Value BTableAZeroYCenterpoint is: %g \n", BTableAZeroYCenterpoint);
+	str3.Format(_T("Value BTableAZeroYCenterpoint is: %g \n"), BTableAZeroYCenterpoint);
 	//if (AfxMessageBox(str3, MB_YESNO) == IDNO) return -1;
-	GetParameter(L"ASaddleYCenterpoint", &ASaddleYCenterpoint);
+	GetParameter(_T("ASaddleYCenterpoint"), &ASaddleYCenterpoint);
 	CString str4;
-	str4.Format(L"Value ASaddleYCenterpoint is: %g \n", ASaddleYCenterpoint);
+	str4.Format(_T("Value ASaddleYCenterpoint is: %g \n"), ASaddleYCenterpoint);
 	//if (AfxMessageBox(str4, MB_YESNO) == IDNO) return -1;
-	GetParameter(L"ASaddleZCenterpoint", &ASaddleZCenterpoint);
+	GetParameter(_T("ASaddleZCenterpoint"), &ASaddleZCenterpoint);
 	CString str5;
-	str5.Format(L"Value ASaddleZCenterpoint is: %g \n", ASaddleZCenterpoint);
+	str5.Format(_T("Value ASaddleZCenterpoint is: %g \n"), ASaddleZCenterpoint);
 	//if (AfxMessageBox(str1 + str2 + str3 + str4 + str5, MB_YESNO) == IDNO) return -1;
 	return 0;
 }

@@ -47,7 +47,7 @@ CKMotionServerApp::CKMotionServerApp()
 	// Place all significant initialization in InitInstance
 
 	// only allow one instance of KMotionServer.exe
-	CMutex *KSMutex = new CMutex(FALSE, L"KMotionServer", NULL);
+	CMutex *KSMutex = new CMutex(FALSE, _T("KMotionServer"), NULL);
 
 	bool Locked = KSMutex->Lock(100);
 	if (!Locked)

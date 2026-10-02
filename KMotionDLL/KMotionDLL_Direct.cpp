@@ -103,7 +103,7 @@ int CKMotionDLL_Direct::MapBoardToIndex(int BoardID)
 
 	if (i == MAX_BOARDS)
 	{
-		MessageBoxW(NULL, Translate("Fatal Error: Too Many Board IDs used"), L"KMotion", MB_ICONSTOP | MB_OK);
+		MessageBox(NULL, Translate("Fatal Error: Too Many Board IDs used"), _T("KMotion"), MB_ICONSTOP | MB_OK);
 		KMotionLocal.KMotionIO[i].Mutex->Unlock();
 		exit(1);
 	}
@@ -239,7 +239,7 @@ int CKMotionDLL_Direct::nInstances()
 	return share;
 }
 
-const wchar_t * CKMotionDLL_Direct::GetErrMsg(int board)
+const TCHAR * CKMotionDLL_Direct::GetErrMsg(int board)
 {
 	return KMotionLocal.KMotionIO[board].ErrMsg;
 }

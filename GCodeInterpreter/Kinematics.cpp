@@ -848,7 +848,7 @@ int CKinematics::IntersectionTwoCircles(CPT2D c0, double r0, CPT2D c1, double r1
 // .
 
 
-int CKinematics::ReadGeoTable(const wchar_t *name)
+int CKinematics::ReadGeoTable(const TCHAR *name)
 {
 	double X,Y,Z;
 	int row,col;
@@ -869,34 +869,34 @@ int CKinematics::ReadGeoTable(const wchar_t *name)
 	if (!f)
 	{
 		if (AnyLinearTableValid) return 0;  // only Linears in play
-		MessageBoxW(NULL, Translate("Unable to open Geometric Correction File : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Unable to open Geometric Correction File : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	int result = fwscanf(f,L"%d,%d",&NRows,&NCols);
+	int result = _ftscanf(f,_T("%d,%d"),&NRows,&NCols);
 		
 	if (result != 2 || NRows < 2 || NRows > 4000 || NCols < 2 || NCols > 4000)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Geometric Correction File (NRows and NCols) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Invalid Geometric Correction File (NRows and NCols) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	result = fwscanf(f,L"%lf,%lf",&GeoSpacingX,&GeoSpacingY);
+	result = _ftscanf(f,_T("%lf,%lf"),&GeoSpacingX,&GeoSpacingY);
 		
 	if (result != 2)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Geometric Correction File (GeoSpacingX and GeoSpacingY) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Invalid Geometric Correction File (GeoSpacingX and GeoSpacingY) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	result = fwscanf(f,L"%lf,%lf",&GeoOffsetX,&GeoOffsetY);
+	result = _ftscanf(f,_T("%lf,%lf"),&GeoOffsetX,&GeoOffsetY);
 		
 	if (result != 2)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Geometric Correction File (GeoOffsetX and GeoOffsetY) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+		MessageBox(NULL, Translate("Invalid Geometric Correction File (GeoOffsetX and GeoOffsetY) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 		return 1;
 	}
 
@@ -905,12 +905,12 @@ int CKinematics::ReadGeoTable(const wchar_t *name)
 
 	for (int i=0; i<NRows*NCols; i++)
 	{
-		result = fwscanf(f,L"%d,%d,%lf,%lf,%lf",&row,&col,&X,&Y,&Z);
+		result = _ftscanf(f,_T("%d,%d,%lf,%lf,%lf"),&row,&col,&X,&Y,&Z);
 
 		if (result != 5 || row < 0 || row >= NRows || col < 0 || col >= NCols)
 		{
 			fclose(f);
-			MessageBoxW(NULL, Translate("Invalid Geometric Correction File (invalid data value) : ") +  name, L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+			MessageBox(NULL, Translate("Invalid Geometric Correction File (invalid data value) : ") +  name, _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
 			return 1;
 		}
 
@@ -925,7 +925,7 @@ int CKinematics::ReadGeoTable(const wchar_t *name)
 	return 0;
 }
 
-int CKinematics::ReadLinearTable(int ia, const wchar_t *name, bool *valid)
+int CKinematics::ReadLinearTable(int ia, const TCHAR *name, bool *valid)
 {
 	int col;
 	double X;
@@ -952,32 +952,32 @@ int CKinematics::ReadLinearTable(int ia, const wchar_t *name, bool *valid)
 		return 0;
 	}
 
-	int result = fwscanf(f, L"%d", &NLinear[ia]);
+	int result = _ftscanf(f, _T("%d"), &NLinear[ia]);
 
 	if (result != 1 || NLinear[ia] < 2 || NLinear[ia] > 10000)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Linear Table Correction File (NLinear) : ") + Name, L"KMotion", 
+		MessageBox(NULL, Translate("Invalid Linear Table Correction File (NLinear) : ") + Name, _T("KMotion"), 
 			MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	result = fwscanf(f, L"%lf", &LinearSpacings[ia]);
+	result = _ftscanf(f, _T("%lf"), &LinearSpacings[ia]);
 
 	if (result != 1)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Linear Table Correction File (LinearSpacing) : ") + Name, L"KMotion",
+		MessageBox(NULL, Translate("Invalid Linear Table Correction File (LinearSpacing) : ") + Name, _T("KMotion"),
 			MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 		return 1;
 	}
 
-	result = fwscanf(f, L"%lf", &LinearOffset[ia]);
+	result = _ftscanf(f, _T("%lf"), &LinearOffset[ia]);
 
 	if (result != 1)
 	{
 		fclose(f);
-		MessageBoxW(NULL, Translate("Invalid Linear Table Correction File (LinearOffset) : ") + Name, L"KMotion", 
+		MessageBox(NULL, Translate("Invalid Linear Table Correction File (LinearOffset) : ") + Name, _T("KMotion"), 
 			MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 		return 1;
 	}
@@ -990,12 +990,12 @@ int CKinematics::ReadLinearTable(int ia, const wchar_t *name, bool *valid)
 
 	for (int i = 0; i < NLinear[ia]; i++)
 	{
-		result = fwscanf(f, L"%d,%lf", &col, &X);
+		result = _ftscanf(f, _T("%d,%lf"), &col, &X);
 
 		if (result != 2 || col < 0 || col >= NLinear[ia])
 		{
 			fclose(f);
-			MessageBoxW(NULL, Translate("Invalid Linear Table Correction File (invalid data value) : ") + Name, L"KMotion", 
+			MessageBox(NULL, Translate("Invalid Linear Table Correction File (invalid data value) : ") + Name, _T("KMotion"), 
 				MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 			return 1;
 		}
@@ -1140,33 +1140,33 @@ int CKinematics::Solve(double *A, int N)
 int CKinematics::Initialize()
 {
 	// Check if parameters exist in Kinematics.txt, if so update them and ask for confirmation value window yes/no, no abort
-	GetParameter(L"MaxCorrPerIteration", &MaxCorrPerIteration);
+	GetParameter(_T("MaxCorrPerIteration"), &MaxCorrPerIteration);
 	return 0;
 }
 
-int CKinematics::GetParameter(const wchar_t* key, double *v)
+int CKinematics::GetParameter(const TCHAR* key, double *v)
 {
 	FILE* f;
-	_tfopen_s(&f, (CString)MainPath + L"\\Data\\Kinematics.txt", _T("rt,ccs=UTF-8"));
+	_tfopen_s(&f, (CString)MainPath + _T("\\Data\\Kinematics.txt"), _T("rt,ccs=UTF-8"));
 
 	if (!f) return 1;
 
 	while (!feof(f))
 	{
-		wchar_t s[81], *p;
-		fgetws(s, 80, f);
+		TCHAR s[81], *p;
+		_fgetts(s, 80, f);
 
-		p = wcsstr(s, key);
+		p = _tcsstr(s, key);
 
 		if (p != NULL)
 		{
 			fclose(f);
-			p = p + (int)wcslen(key);
+			p = p + (int)_tcslen(key);
 			removeChar(p, ' ');  // remove spaces, tabs, or equal signs
 			removeChar(p, '=');
 			removeChar(p, '\t');
 
-			int result = swscanf(p, L"%lf", v);
+			int result = _stscanf(p, _T("%lf"), v);
 			if (result != 1) return 2;
 			return 0;
 		}
@@ -1177,9 +1177,9 @@ int CKinematics::GetParameter(const wchar_t* key, double *v)
 }
 
 
-void CKinematics::removeChar(wchar_t *s, int c) {
+void CKinematics::removeChar(TCHAR *s, int c) {
 
-	int j, n = (int)wcslen(s);
+	int j, n = (int)_tcslen(s);
 	for (int i = j = 0; i<n; i++)
 		if (s[i] != c)
 			s[j++] = s[i];
