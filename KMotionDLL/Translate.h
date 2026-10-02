@@ -13,22 +13,21 @@ class CTranslate {
 public:
     CTranslate();
 
-    std::wstring Translate(std::string s);
-    std::wstring Translate(const char* s);
+    CString Translate(CString s);
 
 private:
     bool CheckedForList;
     bool ListLoaded;
 
-    std::vector<std::wstring> EnglishList;
-    std::vector<std::wstring> TranslateList;
-	std::wstring Translate(std::string* s);
+    // UTF-8, like everything else in the Linux build
+    std::vector<std::string> EnglishList;
+    std::vector<std::string> TranslateList;
 
     void LoadTranslationList();
 };
 extern CTranslate Trans;  // global instance
 
-std::wstring Translate(std::string s);
+CString Translate(CString s);
 #else
 #pragma once
 

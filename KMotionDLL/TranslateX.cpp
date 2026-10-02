@@ -1,26 +1,22 @@
 #include <KMotionX.h>
 #include "KMotionDLL.h"
 #include "Translate.h"
-//#include "dbg.h"
+
+// Linux version of Translate.cpp. Strings are UTF-8 (narrow) here; the translation file is
+// read as wide text, like Windows does, and converted.
 
 CTranslate Trans;
 
-std::wstring Translate(std::string s)
+CString Translate(CString s)
 {
 	return Trans.Translate(s);
 }
 
 CTranslate::CTranslate() : CheckedForList(false), ListLoaded(false) {}
 
-std::wstring CTranslate::Translate(std::string s) {
-    std::wstring w = Translate(s.c_str());
-    return w;
-}
-
-std::wstring CTranslate::Translate(const char* s) {
-    // Convert const char* to std::wstring
-    std::wstring w(s, s + strlen(s));
-    if (CheckedForList && !ListLoaded) return w;
+CString CTranslate::Translate(CString s)
+{
+    if (CheckedForList && !ListLoaded) return s;
 
     if (!CheckedForList) {
         LoadTranslationList();
@@ -29,13 +25,13 @@ std::wstring CTranslate::Translate(const char* s) {
     if (ListLoaded) {
         // look for a match
         for (size_t i = 0; i < EnglishList.size(); ++i) {
-            if (w == EnglishList[i]) {
-                return TranslateList[i];
+            if (s == EnglishList[i]) {
+                return CString(TranslateList[i]);
             }
         }
     }
 
-    return w;
+    return s;
 }
 
 void CTranslate::LoadTranslationList() {
@@ -57,36 +53,25 @@ void CTranslate::LoadTranslationList() {
 
     while (fileStream.getline(wcsString, 4000)) {
         sRead = wcsString;
-        
-        sRead.erase(std::remove(sRead.begin(), sRead.end(), L'\n'), sRead.end());
 
-        // for some reason slashes are changed to double slashes
-        //std::replace(sRead.begin(), sRead.end(), L'\\r', L'\r');
-
-        // file format is English Left ..#.. Translated Right
-        size_t i = sRead.find(L"    ..#..    ", 0);
-        if (i != std::wstring::npos) {
-            //log_info("line: %zu -- %ls", i, sRead.c_str());
-            Eng = sRead.substr(0, i);
-            //log_info("Eng: %ls", Eng.c_str());
-            Trans = sRead.substr(i + 13);
-            //log_info("Trans: %ls", Trans.c_str());
-            EnglishList.push_back(Eng);
-            TranslateList.push_back(Trans);
+        // Remove trailing carriage return if present
+        if (!sRead.empty() && sRead.back() == L'\r') {
+            sRead.pop_back();
         }
 
-    };
+        if (!sRead.empty()) {
+            // file format is English Left ..#.. Translated Right
+            size_t i = sRead.find(L"    ..#..    ");
 
-    ListLoaded = true;
-    fileStream.close();
+            if (i != std::wstring::npos) {
+                Eng = sRead.substr(0, i);
+                Trans = sRead.substr(i + 13);
 
-    // sort by length
-    for (size_t i = 0; i < EnglishList.size(); ++i) {
-        for (size_t k = i + 1; k < EnglishList.size(); ++k) {
-            if (EnglishList[k].length() > EnglishList[i].length()) {
-                std::swap(EnglishList[i], EnglishList[k]);
-                std::swap(TranslateList[i], TranslateList[k]);
+                EnglishList.push_back(kmx::wstrtostr(Eng));
+                TranslateList.push_back(kmx::wstrtostr(Trans));
             }
         }
     }
+
+    ListLoaded = true;
 }

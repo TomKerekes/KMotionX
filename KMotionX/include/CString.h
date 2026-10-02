@@ -43,6 +43,8 @@ either expressed or implied, of the FreeBSD Project.
 // Avoid tons of warnings with root code
 #pragma GCC system_header
 #include <stdstring.h>
+typedef CStdStr<char>    CStringA;
+typedef CStdStr<wchar_t> CStringW;
 #endif
 #endif
 

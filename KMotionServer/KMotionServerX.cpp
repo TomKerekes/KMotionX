@@ -737,7 +737,7 @@ void GetAnswerToRequest(char *chRequest, unsigned int nInBytes, char *chReply, u
 		unsigned short msglen;
 		char s[MAX_LINE+1];
 		s[0] = DEST_ERRMSG;
-		strcpy(s+1,kmx::wstrtostr(KMotionDLL.GetErrMsg(board)).c_str());
+		strcpy(s+1,KMotionDLL.GetErrMsg(board));
 
 		cbReplyBytes = strlen(s)+1;// + Term Null, DEST code already accounted for in s
 		// Write the message to the pipe. 

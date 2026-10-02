@@ -36,8 +36,8 @@ stdout to a file.
 int HandleThreading(double *FeedRate);
 int CheckIfThreadingInProgress(void);
 
-std::string Output;
-std::string ErrorOutput;
+CString Output;
+CString ErrorOutput;
 CGCodeInterpreter *GC;
 CCoordMotion *CM;;
 
@@ -1008,9 +1008,7 @@ void GET_EXTERNAL_PARAMETER_FILE_NAME(TCHAR *filename, int max_size)
 	if (GC->VarsFile[0] == 0)
 		snprintf(filename, max_size, "%s%cData%cemc.var",GC->CoordMotion->MainPathRoot, PATH_SEPARATOR, PATH_SEPARATOR);
 	else
-		Name=GC->VarsFile;
-
-	_tcscpy(filename,Name.GetBuffer(0));
+		_tcsncpy(filename, GC->VarsFile, max_size);
 }
 
 // returns the currently active plane

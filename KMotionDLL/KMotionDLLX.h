@@ -25,7 +25,7 @@
 #include <fcntl.h>
 //#include <ctype.h>
 
-//#include <CString.h>
+#include <CString.h>
 #include <CMutex.h>
 
 /*

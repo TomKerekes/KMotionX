@@ -11,6 +11,7 @@
 
 
 #ifdef _KMOTIONX 
+#include <KMotionX.h>
 #include "PC-DSP.h" 
 #include <SocketWrapper.h> 
 #include <CMutex.h> 
@@ -135,7 +136,9 @@ public:
 	int CompileAndLoadCoff(const TCHAR *Name, int Thread);
 	int CompileAndLoadCoff(const TCHAR* Name, int Thread, TCHAR* Err, int MaxErrLen);
 	int Compile(const TCHAR* Name, const TCHAR* OutFile, const int board_type, int Thread, TCHAR *Err, int MaxErrLen);
+#ifndef _KMOTIONX
 	int RemoveBOMandIncludedFiles(const CString& FilePath, const CList<CString, CString&>& IncludePaths);
+#endif
 	int CompileTI(const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread,TCHAR *Err, int MaxErrLen);
 	int LinkTI(const TCHAR * Linker, const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread,TCHAR *Err, int MaxErrLen, int MaxSize);
 	int ValidateC(const TCHAR *Name, TCHAR *Err, int MaxErrLen, int BoardType);

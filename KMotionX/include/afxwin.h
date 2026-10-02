@@ -8,6 +8,10 @@
 #ifndef AFXWIN_H_
 #define AFXWIN_H_
 
+// what Dynomotion's sources expect from MFC's afxwin.h: TCHAR, _T() and CString
+#include <tcharx.h>
+#include <CString.h>
+
 
 
 

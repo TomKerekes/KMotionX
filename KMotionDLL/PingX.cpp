@@ -222,14 +222,14 @@ DWORD ScanAdapters(LPDWORD lpdwParam)
         int result = ScanAdaptersErr();
         if (result)
         {
-            CStringW s;
+            CString s;
 
             s.Format(Translate("Scanning for Kogna's Failed - Error %d"), result);
-            MessageBoxW(NULL, s, L"KMotion", MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+            MessageBox(NULL, s, "KMotion", MB_ICONSTOP | MB_OK | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 
             WSACleanup();
             if (WSAStartup(MAKEWORD(1, 1), &wsd) != 0)
-                MessageBoxW(NULL, Translate("Winsock Startup Failed"), L"KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
+                MessageBox(NULL, Translate("Winsock Startup Failed"), "KMotion", MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
         }
         Sleep(1000);
     }

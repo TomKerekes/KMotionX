@@ -4,8 +4,8 @@
 #include <stdio.h>		// FILE
 
 
-extern std::string Output;
-extern std::string ErrorOutput;
+extern CString Output;
+extern CString ErrorOutput;
 extern int ErrorFileLineNumber;
 extern int line_number;
 
@@ -161,8 +161,8 @@ struct CANON_TOOL_TABLE {
     double yoffset;
     double FeedTime;
     double FeedDist;
-    std::string Comment;
-	std::string ToolImage;
+    CString Comment;
+	CString ToolImage;
 };
 
 /* Initialization */

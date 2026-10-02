@@ -10,7 +10,7 @@
 
 #include <pthread.h>
 
-//#include <CString.h>
+#include <CString.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -32,6 +32,8 @@
 #include "TrajectoryPlanner.h"
 #include "Kinematics.h"
 #include "Kinematics3Rod.h"
+#include "Kinematics3Link.h"
+#include "TrajectoryPlanner3.h"
 #include "KinematicsGeppetto.h"
 #include "KinematicsGeppettoExtrude.h"
 #include "Kinematics5AxisGimbalAB.h"

@@ -92,7 +92,7 @@ CKMotionIO::~CKMotionIO()
 }
 
 
-SOCKET CKMotionIO::ConnectToKognaSocket(std::wstring* pReason, unsigned long ipAddress, int port)
+SOCKET CKMotionIO::ConnectToKognaSocket(CString* pReason, unsigned long ipAddress, int port)
 {
 #ifndef _KMOTIONX
 	unsigned char DynoMAC[6] = { 0x8c, 0x1f, 0x64, 0x15, 0xe0, 0x00 }; // dymotion purchased MAC base address
@@ -172,7 +172,7 @@ void * DoExecuteShell(void *lpdwParam)
 // the connection in a worker Thread and keep returning no connection until
 // the worker thread successfully connects
 
-SOCKET CKMotionIO::TryConnectToSocket(std::wstring* pReason, unsigned long ipAddress, int port)
+SOCKET CKMotionIO::TryConnectToSocket(CString* pReason, unsigned long ipAddress, int port)
 {
 #ifndef _KMOTIONX
 	HANDLE Thread = NULL;
@@ -328,7 +328,7 @@ return 0;
 
 
 
-bool CKMotionIO::RequestedDeviceAvail(std::wstring *Reason)
+bool CKMotionIO::RequestedDeviceAvail(CString *Reason)
 {
 	int i;
 	bool TryKogna = Requested_ID == 0 || Requested_ID >  MAX_USB_ID;
@@ -403,8 +403,8 @@ bool CKMotionIO::RequestedDeviceAvail(std::wstring *Reason)
 					pthread_mutex_unlock(KFLOPListMutex);
 					if (Reason)
 					{
-						std::wstring translated = Translate("KMotion not found on USB Location %d\n\nUnable to open device");
-						*Reason = kmx::format(translated.c_str(), Requested_ID);  // Convert back to std::wstring
+						CString translated = Translate("KMotion not found on USB Location %d\n\nUnable to open device");
+						Reason->Format(translated, Requested_ID);
 					} 
 					return false;
 				}
@@ -435,7 +435,7 @@ bool CKMotionIO::RequestedDeviceAvail(std::wstring *Reason)
 
 int CKMotionIO::Connect()
 {
-	std::wstring reason;
+	CString reason;
 	CHiResTimer Timer;
 
 	int ftStatus;
@@ -1364,7 +1364,7 @@ int CKMotionIO::KMotionLock(const char *CallerID)
 {
 	int result;
 	//int board = (int)(this - KMotionLocal.KMotionIO);
-	std::wstring reason;
+	CString reason;
 	if (!Mutex->Lock(3000)) return KMOTION_NOT_CONNECTED;
 
 	if (!m_Connected)
@@ -1651,7 +1651,7 @@ int CKMotionIO::SetConsoleCallback(SERVER_CONSOLE_HANDLER *ch)
 
 // save the error message to be piped back to caller
 
-int CKMotionIO::ErrorMessageBox(const wchar_t *s)
+int CKMotionIO::ErrorMessageBox(const TCHAR *s)
 {
 	ErrMsg = s;
 	return 0;

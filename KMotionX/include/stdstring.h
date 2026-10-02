@@ -3136,6 +3136,416 @@ public:
             FmtArg<A15>(v15)(),FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),
             FmtArg<A18>(v18)(),FmtArg<A19>(v19)());
     }
+    // Added for KMotionX: Dynomotion's LinearHex/ArcHex commands format up to 33 values
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29, class A30>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29, const A30& v30)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)(),FmtArg<A30>(v30)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29, class A30,
+        class A31>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29, const A30& v30, const A31& v31)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)(),FmtArg<A30>(v30)(),
+            FmtArg<A31>(v31)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29, class A30,
+        class A31, class A32>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29, const A30& v30, const A31& v31, const A32& v32)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)(),FmtArg<A30>(v30)(),
+            FmtArg<A31>(v31)(),FmtArg<A32>(v32)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29, class A30,
+        class A31, class A32, class A33>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29, const A30& v30, const A31& v31, const A32& v32,
+                const A33& v33)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)(),FmtArg<A30>(v30)(),
+            FmtArg<A31>(v31)(),FmtArg<A32>(v32)(),FmtArg<A33>(v33)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29, class A30,
+        class A31, class A32, class A33, class A34>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29, const A30& v30, const A31& v31, const A32& v32,
+                const A33& v33, const A34& v34)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)(),FmtArg<A30>(v30)(),
+            FmtArg<A31>(v31)(),FmtArg<A32>(v32)(),FmtArg<A33>(v33)(),
+            FmtArg<A34>(v34)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29, class A30,
+        class A31, class A32, class A33, class A34, class A35>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29, const A30& v30, const A31& v31, const A32& v32,
+                const A33& v33, const A34& v34, const A35& v35)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)(),FmtArg<A30>(v30)(),
+            FmtArg<A31>(v31)(),FmtArg<A32>(v32)(),FmtArg<A33>(v33)(),
+            FmtArg<A34>(v34)(),FmtArg<A35>(v35)());
+    }
+    template<class A1, class A2, class A3, class A4, class A5, class A6,
+        class A7, class A8, class A9, class A10, class A11, class A12,
+        class A13, class A14, class A15, class A16, class A17, class A18,
+        class A19, class A20, class A21, class A22, class A23, class A24,
+        class A25, class A26, class A27, class A28, class A29, class A30,
+        class A31, class A32, class A33, class A34, class A35, class A36>
+    void Format(const CT* szFmt, const A1& v1, const A2& v2, const A3& v3, const A4& v4,
+                const A5& v5, const A6& v6, const A7& v7, const A8& v8,
+                const A9& v9, const A10& v10, const A11& v11, const A12& v12,
+                const A13& v13, const A14& v14, const A15& v15, const A16& v16,
+                const A17& v17, const A18& v18, const A19& v19, const A20& v20,
+                const A21& v21, const A22& v22, const A23& v23, const A24& v24,
+                const A25& v25, const A26& v26, const A27& v27, const A28& v28,
+                const A29& v29, const A30& v30, const A31& v31, const A32& v32,
+                const A33& v33, const A34& v34, const A35& v35, const A36& v36)
+    {
+        Fmt(szFmt, FmtArg<A1>(v1)(),FmtArg<A2>(v2)(),FmtArg<A3>(v3)(),
+            FmtArg<A4>(v4)(),FmtArg<A5>(v5)(),FmtArg<A6>(v6)(),
+            FmtArg<A7>(v7)(),FmtArg<A8>(v8)(),FmtArg<A9>(v9)(),
+            FmtArg<A10>(v10)(),FmtArg<A11>(v11)(),FmtArg<A12>(v12)(),
+            FmtArg<A13>(v13)(),FmtArg<A14>(v14)(),FmtArg<A15>(v15)(),
+            FmtArg<A16>(v16)(),FmtArg<A17>(v17)(),FmtArg<A18>(v18)(),
+            FmtArg<A19>(v19)(),FmtArg<A20>(v20)(),FmtArg<A21>(v21)(),
+            FmtArg<A22>(v22)(),FmtArg<A23>(v23)(),FmtArg<A24>(v24)(),
+            FmtArg<A25>(v25)(),FmtArg<A26>(v26)(),FmtArg<A27>(v27)(),
+            FmtArg<A28>(v28)(),FmtArg<A29>(v29)(),FmtArg<A30>(v30)(),
+            FmtArg<A31>(v31)(),FmtArg<A32>(v32)(),FmtArg<A33>(v33)(),
+            FmtArg<A34>(v34)(),FmtArg<A35>(v35)(),FmtArg<A36>(v36)());
+    }
 #else  // #ifdef SS_SAFE_FORMAT
 
 

@@ -243,7 +243,7 @@ int CKMotionDLL::WaitToken(bool display_msg, int TimeOut_ms, const char *CallerI
 		else
 			snprintf(s, 256, " #%d", BoardID);
 
-		DoErrMsg(Translate("Can't Connect to KMotion Board") + kmx::strtowstr(s));
+		DoErrMsg(Translate("Can't Connect to KMotion Board") + s);
 
 	}
 
@@ -307,7 +307,7 @@ int CKMotionDLL::LoadCoff(int Thread, const TCHAR *Name, int PackToFlash)
 
 	if (PackToFlash==0)
 	{
-		snprintf(s, 50, "Kill %d", Thread);  // make sure the Thread isn't running
+		s.Format("Kill %d", Thread);  // make sure the Thread isn't running
 		if (WriteLine(s)) return 1;
 	}
 #endif
@@ -327,7 +327,7 @@ int CKMotionDLL::LoadCoff(int Thread, const TCHAR *Name, int PackToFlash)
 	if (Thread >= 0 && PackToFlash==0)
 	{
 		// Set the entry point for the thread
-		snprintf(s, 50, "EntryPoint%d %X",Thread,EntryPoint);
+		s.Format("EntryPoint%d %X",Thread,EntryPoint);
 		result = WriteLine(s);
 		if (result) return result;
 	}
@@ -2071,7 +2071,8 @@ int CKMotionDLL::CheckKMotionVersion(int *type, bool GetBoardTypeOnly, bool Wait
 			ReleaseToken();
 		else
 			PipeCmd(ENUM_ReleaseToken);  // KMotionLock took only the server's token, not PipeMutex
-		result = WriteLineReadLine("Version",BoardVersion);
+		result = WriteLineReadLine("Version",BoardVersion.GetBufferSetLength(MAX_LINE));
+		BoardVersion.ReleaseBuffer();
 
 		if (result) return result;
 
@@ -2082,12 +2083,14 @@ int CKMotionDLL::CheckKMotionVersion(int *type, bool GetBoardTypeOnly, bool Wait
 		if(strstr(BoardVersion,"KOGNA") != NULL)
 		//if (BoardVersion.Find("KOGNA")==0)
 		{
-			kmx::getDspFile(OutFile, BOARD_TYPE_KOGNA);
+			kmx::getDspFile(OutFile.GetBufferSetLength(MAX_PATH), BOARD_TYPE_KOGNA);
+			OutFile.ReleaseBuffer();
 			if (type) *type = BOARD_TYPE_KOGNA;
 		}
 		else
 		{
-			kmx::getDspFile(OutFile, BOARD_TYPE_KFLOP);
+			kmx::getDspFile(OutFile.GetBufferSetLength(MAX_PATH), BOARD_TYPE_KFLOP);
+			OutFile.ReleaseBuffer();
 			if (type) *type = BOARD_TYPE_KFLOP;
 		}
 
@@ -2103,7 +2106,7 @@ int CKMotionDLL::CheckKMotionVersion(int *type, bool GetBoardTypeOnly, bool Wait
 			return 1;
 		}
 
-		CoffVersion[strlen(CoffVersion)-1] = '\0'; //remove trailing \n
+		CoffVersion.TrimRight("\n"); //remove trailing \n
 		
 
 		// check if they match exactly
@@ -2724,7 +2727,7 @@ void CKMotionDLL::DoErrMsg(const TCHAR *s)
 }
 //PH convenience function
 void CKMotionDLL::DoErrMsg(std::wstring s){
-	DoErrMsg(s.c_str());
+	DoErrMsg(kmx::wstrtostr(s).c_str());
 }
 //PH convenience function
 void CKMotionDLL::DoErrMsg(std::string s){

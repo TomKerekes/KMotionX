@@ -235,7 +235,7 @@ MOTION_PARAMS *CCoordMotion::GetMotionParams()
 
 int CCoordMotion::CheckSoftLimitsArc(int plane, double XC, double YC, double Z0, double Z1,
 	double a, double b, double c, double u, double v, BOOL DirIsCCW,
-	double radius, double theta0, double dtheta, std::string &errmsg)
+	double radius, double theta0, double dtheta, CString &errmsg)
 {
 	if (m_DisableSoftLimits) return 0;
 
@@ -317,7 +317,7 @@ int CCoordMotion::CheckLimit(int axis, double Act, double SoftLimitPos, double S
 }
 
 
-int CCoordMotion::CheckSoftLimits(double x, double y, double z, double a, double b, double c, double u, double v, std::string &errmsg)
+int CCoordMotion::CheckSoftLimits(double x, double y, double z, double a, double b, double c, double u, double v, CString &errmsg)
 {
 	MOTION_PARAMS *MP = &Kinematics->m_MotionParams;
 
@@ -437,7 +437,7 @@ int CCoordMotion::StraightTraverse(double x, double y, double z, double a, doubl
 	if (GetRapidSettings()) return 1;
 	
 	// if exceeding limits trigger Halt
-	std::string errmsg;
+	CString errmsg;
 	if (CheckSoftLimits(x,y,z,a,b,c,u,v,errmsg)) 
 	{
 		if (m_Simulate)
@@ -769,7 +769,7 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 	if (GetRapidSettings()) return 1;
 
 	int SoftLimitResult;
-	std::string errmsg;
+	CString errmsg;
 
 	SoftLimitResult = CheckSoftLimitsArc(plane, first_axis, second_axis, cur_third, axis_end_point,
 					   a, b, c, u, v, rotation, radius, theta0, dtheta, errmsg);
@@ -991,7 +991,9 @@ static CHiResTimer tp3LogTimer;
 // create it so the logs are never silently skipped
 static void EnsureTempDir()
 {
+#ifndef _KMOTIONX
 	CreateDirectoryA("c:\\Temp", NULL);   // no-op if it already exists
+#endif
 }
 
 static void TP3LogOpen()
@@ -2715,7 +2717,7 @@ int CCoordMotion::StraightFeedAccelRapid(double DesiredFeedRate_in_per_sec, doub
 	// check if we should sync parameters with KFLOP
 	if (GetRapidSettings()) return 1;
 
-	std::string errmsg;
+	CString errmsg;
 	if (CheckSoftLimits(x,y,z,a,b,c,u,v,errmsg)) 
 	{
 		std::string FunctionType;
@@ -3526,7 +3528,8 @@ int CCoordMotion::WaitForSegmentsFinished(BOOL NoErrorOnDisable)
 	{
 		if (count++)
 		{
-			if (KMotionDLL->WriteLineReadLine("ExecTime",response)){SetAbort(); return 1;}
+			if (KMotionDLL->WriteLineReadLine("ExecTime",response.GetBufferSetLength(MAX_LINE))){SetAbort(); return 1;}
+			response.ReleaseBuffer();
 			if (sscanf(response, "%lf",&m_TimeAlreadyExecuted)!= 1){SetAbort(); return 1;}
 			UpdateRealTimeState(m_TimeAlreadyExecuted);
 			Sleep(10);
@@ -3545,12 +3548,14 @@ int CCoordMotion::WaitForSegmentsFinished(BOOL NoErrorOnDisable)
 			}
 		}
 		
-		if (KMotionDLL->WriteLineReadLine("CheckDoneBuf",response)) {SetAbort(); return 1;}
+		if (KMotionDLL->WriteLineReadLine("CheckDoneBuf",response.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+		response.ReleaseBuffer();
 
 
 		if (strcmp(response,"-1")==0)
 		{
-			if (KMotionDLL->WriteLineReadLine("ExecTime",response2)){SetAbort(); return 1;}
+			if (KMotionDLL->WriteLineReadLine("ExecTime",response2.GetBufferSetLength(MAX_LINE))){SetAbort(); return 1;}
+			response2.ReleaseBuffer();
 			if (sscanf(response2, "%lf",&m_TimeAlreadyExecuted)!= 1){SetAbort(); return 1;}
 			UpdateRealTimeState(m_TimeAlreadyExecuted);
 
@@ -3570,7 +3575,8 @@ int CCoordMotion::WaitForSegmentsFinished(BOOL NoErrorOnDisable)
 	}
 	while (strcmp(response,"1")!=0);
 
-	if (KMotionDLL->WriteLineReadLine("ExecTime",response2)){SetAbort(); return 1;}
+	if (KMotionDLL->WriteLineReadLine("ExecTime",response2.GetBufferSetLength(MAX_LINE))){SetAbort(); return 1;}
+	response2.ReleaseBuffer();
 	if (sscanf(response2, "%lf",&m_TimeAlreadyExecuted)!= 1){SetAbort(); return 1;}
 	UpdateRealTimeState(m_TimeAlreadyExecuted);
 
@@ -3589,7 +3595,8 @@ int CCoordMotion::WaitForMoveXYZABCFinished()
 	do
 	{
 		if (count++) Sleep(10);
-		if (KMotionDLL->WriteLineReadLine("CheckDoneXYZABC",response)) {SetAbort(); return 1;}
+		if (KMotionDLL->WriteLineReadLine("CheckDoneXYZABC",response.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+		response.ReleaseBuffer();
 
 		if (strcmp(response,"-1")==0)
 		{
@@ -3622,7 +3629,8 @@ int CCoordMotion::CheckMotionHalt(bool Coord)
 		// wait until stopped
 		do
 		{
-			if (KMotionDLL->WriteLineReadLine("GetStopState",response))  {SetAbort(); return 1;}
+			if (KMotionDLL->WriteLineReadLine("GetStopState",response.GetBufferSetLength(MAX_LINE)))  {SetAbort(); return 1;}
+			response.ReleaseBuffer();
 
 			if (m_Abort) return 1;
 
@@ -3631,7 +3639,8 @@ int CCoordMotion::CheckMotionHalt(bool Coord)
 
 			if (Coord && strcmp(response,"1")==0)
 			{
-				if (KMotionDLL->WriteLineReadLine("CheckDoneBuf",responsebuf)) {SetAbort(); return 1;}
+				if (KMotionDLL->WriteLineReadLine("CheckDoneBuf",responsebuf.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+				responsebuf.ReleaseBuffer();
 
 				if (strcmp(responsebuf,"1")==0)
 				{
@@ -3671,7 +3680,8 @@ int CCoordMotion::CheckMotionHalt(bool Coord)
 			else
 			{
 				// determine the line number we were at
-				if (KMotionDLL->WriteLineReadLine("ExecTime",response)) return 1;
+				if (KMotionDLL->WriteLineReadLine("ExecTime",response.GetBufferSetLength(MAX_LINE))) return 1;
+				response.ReleaseBuffer();
 				int result=sscanf(response, "%lf",&m_TimeAlreadyExecuted);
 				if (result != 1)  return 1;
 				if (m_TimeAlreadyExecuted < 0.0) return 1;
@@ -3978,7 +3988,8 @@ int CCoordMotion::LaunchCoordMotion()
 {
 	CStringA s;
 
-	if (KMotionDLL->WriteLineReadLine("CheckDoneBuf",s)) {SetAbort(); return 1;}
+	if (KMotionDLL->WriteLineReadLine("CheckDoneBuf",s.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+	s.ReleaseBuffer();
 
 	if (strcmp(s, "-1") == 0)
 	{
@@ -3996,7 +4007,7 @@ int CCoordMotion::LaunchCoordMotion()
 			return 1;
 		}
 
-		snprintf(s, MAX_LINE, "TrigThread %.6f",m_ThreadingBaseSpeedRPS);
+		s.Format("TrigThread %.6f",m_ThreadingBaseSpeedRPS);
 		if(KMotionDLL->WriteLine(s)){SetAbort(); return 1;}
 	}
 	else  // no normal coordinated motion
@@ -4832,10 +4843,10 @@ int CCoordMotion::OutputSegment(int iseg)
 				if (!LastWasLinear)  // must specify all if first or there was an arc
 				{
 					if (u_axis >= 0 || v_axis >= 0)
-						snprintf(s, 256, "LinearHexEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("LinearHexEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 							Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], IntUV[0], IntUV[1], Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], IntUV[2], IntUV[3], Int[12], Int[13], Int[14], Int[15], Int[16]);
 					else
-						snprintf(s, 256, "LinearHex %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("LinearHex %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 							Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], Int[12], Int[13], Int[14], Int[15], Int[16]);
 
 					DidThisLinear=LastWasLinear=true;
@@ -4843,15 +4854,15 @@ int CCoordMotion::OutputSegment(int iseg)
 				else if (!DidThisLinear) // new linear so we must specify the new endpoint
 				{
 					if (u_axis >= 0 || v_axis >= 0)
-						snprintf(s, 256, "LHexEx1 %X %X %X %X %X %X %X %X %X %X %X %X %X", Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], IntUV[2], IntUV[3], Int[12], Int[13], Int[14], Int[15], Int[16]);
+						s.Format("LHexEx1 %X %X %X %X %X %X %X %X %X %X %X %X %X", Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], IntUV[2], IntUV[3], Int[12], Int[13], Int[14], Int[15], Int[16]);
 					else
-						snprintf(s, 256, "LHex1 %X %X %X %X %X %X %X %X %X %X %X", Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], Int[12], Int[13], Int[14], Int[15], Int[16]);
+						s.Format("LHex1 %X %X %X %X %X %X %X %X %X %X %X", Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], Int[12], Int[13], Int[14], Int[15], Int[16]);
 							
 					DidThisLinear=true;
 				}
 				else
 				{
-					snprintf(s, 256, "LHex2 %X %X %X %X %X",
+					s.Format("LHex2 %X %X %X %X %X",
 						Int[12],Int[13],Int[14],Int[15],Int[16]); 
 				}
 
@@ -4930,10 +4941,10 @@ int CCoordMotion::OutputSegment(int iseg)
 					FloatArray[18]  = (float)(p->C[i].t);
 
 					if (u_axis >= 0 || v_axis >= 0)
-						snprintf(s, 256, "ArcHexEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("ArcHexEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 							Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], Int[6], Int[7], Int[8], Int[9], IntUV[0], IntUV[1], Int[10], Int[11], Int[12], Int[13], IntUV[2], IntUV[3], Int[14], Int[15], Int[16], Int[17], Int[18]);
 					else
-						snprintf(s, 256, "ArcHex %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("ArcHex %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 						Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], Int[12], Int[13], Int[14], Int[15], Int[16], Int[17], Int[18]);
 				}
 				else if (p->plane == CANON_PLANE_XZ)
@@ -4973,10 +4984,10 @@ int CCoordMotion::OutputSegment(int iseg)
 					FloatArray[18]  = (float)(p->C[i].t);
 
 					if (u_axis >= 0 || v_axis >= 0)
-						snprintf(s, 256, "ArcHexZXEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("ArcHexZXEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 							Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], Int[6], Int[7], Int[8], Int[9], IntUV[0], IntUV[1], Int[10], Int[11], Int[12], Int[13], IntUV[2], IntUV[3], Int[14], Int[15], Int[16], Int[17], Int[18]);
 					else
-						snprintf(s, 256, "ArcHexZX %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("ArcHexZX %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 							Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], Int[12], Int[13], Int[14], Int[15], Int[16], Int[17], Int[18]);
 				}
 				else // YZ
@@ -5016,10 +5027,10 @@ int CCoordMotion::OutputSegment(int iseg)
 					FloatArray[18]  = (float)(p->C[i].t);
 
 					if (u_axis >= 0 || v_axis >= 0)
-						snprintf(s, 256, "ArcHexYZEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("ArcHexYZEx %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 							Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], Int[6], Int[7], Int[8], Int[9], IntUV[0], IntUV[1], Int[10], Int[11], Int[12], Int[13], IntUV[2], IntUV[3], Int[14], Int[15], Int[16], Int[17], Int[18]);
 					else
-						snprintf(s, 256, "ArcHexYZ %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
+						s.Format("ArcHexYZ %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X",
 							Int[0], Int[1], Int[2], Int[3], Int[4], Int[5], Int[6], Int[7], Int[8], Int[9], Int[10], Int[11], Int[12], Int[13], Int[14], Int[15], Int[16], Int[17], Int[18]);
 				}
 
@@ -5124,7 +5135,8 @@ int CCoordMotion::OutputSegment(int iseg)
 				TP3Log("DLWAIT_BEGIN   downloaded=%8.3f exec=%8.3f", m_TotalDownloadedTime, m_TimeAlreadyExecuted);
 			}
 			if (FlushWriteLineBuffer()) return 1;  // flush any segments beforehand
-			if (KMotionDLL->WriteLineReadLine("ExecTime",response)) return 1;
+			if (KMotionDLL->WriteLineReadLine("ExecTime",response.GetBufferSetLength(MAX_LINE))) return 1;
+			response.ReleaseBuffer();
 
 			result=sscanf(response, "%lf",&m_TimeAlreadyExecuted);
 			if (result != 1)  return 1;
@@ -5151,7 +5163,8 @@ int CCoordMotion::OutputSegment(int iseg)
 				TP3Log("DLWAIT_UNDERFLOW ExecTime negative downloaded=%8.3f executed=%8.3f",
 					m_TotalDownloadedTime, executed);
 				// Buffer ran dry.  Check if an axis was disabled
-				if (KMotionDLL->WriteLineReadLine("CheckDoneXYZABC",response)) {SetAbort(); return 1;}
+				if (KMotionDLL->WriteLineReadLine("CheckDoneXYZABC",response.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+				response.ReleaseBuffer();
 
 				if (strcmp(response,"-1")==0)
 				{
@@ -5414,7 +5427,8 @@ int CCoordMotion::GetAxisDefinitions(int *x, int *y, int *z, int *a, int *b, int
 
 	if (!m_DefineCS_valid)
 	{
-		if (KMotionDLL->WriteLineReadLine("DefineCS",response)) return 1;
+		if (KMotionDLL->WriteLineReadLine("DefineCS",response.GetBufferSetLength(MAX_LINE))) return 1;
+		response.ReleaseBuffer();
 
 		result=sscanf(response, "%d%d%d%d%d%d",&x_axis,&y_axis,&z_axis,&a_axis,&b_axis,&c_axis);
 		if (result != 6) return 1;
@@ -5438,7 +5452,8 @@ int CCoordMotion::GetAxisDefinitions(int *x, int *y, int *z, int *a, int *b, int
 
 	if (!m_DefineCS_valid)
 	{
-		if (KMotionDLL->WriteLineReadLine("DefineCSEx",response)) return 1;
+		if (KMotionDLL->WriteLineReadLine("DefineCSEx",response.GetBufferSetLength(MAX_LINE))) return 1;
+		response.ReleaseBuffer();
 		result = sscanf(response, "%d%d%d%d%d%d%d%d", &x_axis, &y_axis, &z_axis, &a_axis, &b_axis, &c_axis, &u_axis, &v_axis);
 		if (result != 8) return 1;
 		m_DefineCS_known=true;
@@ -5671,30 +5686,35 @@ int CCoordMotion::GetRapidSettingsAxis(int axis,double *Vel,double *Accel,double
 		return 1;
 	}
 
-	snprintf(s, 64, "Vel%d;Accel%d;Jerk%d;SoftLimitPos%d;SoftLimitNeg%d",axis,axis,axis,axis,axis);
+	s.Format("Vel%d;Accel%d;Jerk%d;SoftLimitPos%d;SoftLimitNeg%d",axis,axis,axis,axis,axis);
 	if (KMotionDLL->WriteLine(s)) return 1;
 
-	if (KMotionDLL->ReadLineTimeOut(response)) return 1;
+	if (KMotionDLL->ReadLineTimeOut(response.GetBufferSetLength(MAX_LINE))) return 1;
+	response.ReleaseBuffer();
 	result=sscanf(response, "%lf",&temp);
 	if (result != 1) return 1;
 	*Vel = fabs(temp/CountsPerInch);
 
-	if (KMotionDLL->ReadLineTimeOut(response)) return 1;
+	if (KMotionDLL->ReadLineTimeOut(response.GetBufferSetLength(MAX_LINE))) return 1;
+	response.ReleaseBuffer();
 	result=sscanf(response, "%lf",&temp);
 	if (result != 1) return 1;
 	*Accel = fabs(temp/CountsPerInch);
 
-	if (KMotionDLL->ReadLineTimeOut(response)) return 1;
+	if (KMotionDLL->ReadLineTimeOut(response.GetBufferSetLength(MAX_LINE))) return 1;
+	response.ReleaseBuffer();
 	result=sscanf(response, "%lf",&temp);
 	if (result != 1) return 1;
 	*Jerk = fabs(temp/CountsPerInch);
 
-	if (KMotionDLL->ReadLineTimeOut(response)) return 1;
+	if (KMotionDLL->ReadLineTimeOut(response.GetBufferSetLength(MAX_LINE))) return 1;
+	response.ReleaseBuffer();
 	result = sscanf(response, "%lf", &temp);
 	if (result != 1) return 1;
 	*SoftLimitPos = temp;
 
-	if (KMotionDLL->ReadLineTimeOut(response)) return 1;
+	if (KMotionDLL->ReadLineTimeOut(response.GetBufferSetLength(MAX_LINE))) return 1;
+	response.ReleaseBuffer();
 	result = sscanf(response, "%lf", &temp);
 	if (result != 1) return 1;
 	*SoftLimitNeg = temp;
@@ -5773,8 +5793,9 @@ int CCoordMotion::GetDestination(int axis, double *d)
 	
 	if (axis<0 || axis>N_CHANNELS_KOGNA) {SetAbort(); return 1;} // invalid
 
-	snprintf(cmd, 16, "Dest%d",axis);
-	if (KMotionDLL->WriteLineReadLine(cmd,response)) {SetAbort(); return 1;}
+	cmd.Format("Dest%d",axis);
+	if (KMotionDLL->WriteLineReadLine(cmd,response.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+	response.ReleaseBuffer();
 
 	result=sscanf(response, "%lf",d);
 	if (result != 1) {SetAbort(); return 1;}
@@ -5793,8 +5814,9 @@ int CCoordMotion::GetPosition(int axis, double *d)
 	
 	if (axis<0 || axis>N_CHANNELS_KOGNA) {SetAbort(); return 1;} // invalid
 
-	snprintf(cmd, 16, "Pos%d",axis);
-	if (KMotionDLL->WriteLineReadLine(cmd,response)) {SetAbort(); return 1;}
+	cmd.Format("Pos%d",axis);
+	if (KMotionDLL->WriteLineReadLine(cmd,response.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+	response.ReleaseBuffer();
 
 	result=sscanf(response, "%lf",d);
 	if (result != 1) {SetAbort(); return 1;}
@@ -5813,8 +5835,9 @@ int CCoordMotion::GetAxisDone(int axis, int *r)
 	
 	if (axis<0 || axis>N_CHANNELS_KOGNA) {SetAbort(); return 1;} // invalid
 
-	snprintf(cmd, 16, "CheckDone%d",axis);
-	if (KMotionDLL->WriteLineReadLine(cmd,response)) {SetAbort(); return 1;}
+	cmd.Format("CheckDone%d",axis);
+	if (KMotionDLL->WriteLineReadLine(cmd,response.GetBufferSetLength(MAX_LINE))) {SetAbort(); return 1;}
+	response.ReleaseBuffer();
 
 	result=sscanf(response, "%d",r);
 	if (result != 1) {SetAbort(); return 1;}
@@ -5904,7 +5927,7 @@ void CCoordMotion::SetFeedRateOverride(double v)
 	if (!m_Simulate)
 	{
 		DetermineSoftwareHardwareFRO(HW,SW);
-		snprintf(s, 32, "SetFRO %.4f",HW);
+		s.Format("SetFRO %.4f",HW);
 		KMotionDLL->WriteLine(s);
 	}
 }
@@ -5919,7 +5942,7 @@ void CCoordMotion::SetFeedRateRapidOverride(double v)
 
 	if (!m_Simulate)
 	{
-		snprintf(s, 32, "SetRapidFRO %.4f",v);
+		s.Format("SetRapidFRO %.4f",v);
 		KMotionDLL->WriteLine(s);
 	}
 }
@@ -6055,7 +6078,7 @@ int CCoordMotion::MeasurePointAppendToFile(const TCHAR *name)
 
 	if (!f)
 	{
-		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Unable to open Geometric Correction File : ") + kmx::strtowstr(name));
+		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Unable to open Geometric Correction File : ") + name);
 		return 1;
 	}
 
@@ -6064,7 +6087,7 @@ int CCoordMotion::MeasurePointAppendToFile(const TCHAR *name)
 	if (result != 2 || NRows < 2 || NRows > 1000 || NCols < 2 || NCols > 1000)
 	{
 		fclose(f);
-		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Invalid Geometric Correction File (NRows and NCols) : ") + kmx::strtowstr(name));
+		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Invalid Geometric Correction File (NRows and NCols) : ") + name);
 		return 1;
 	}
 
@@ -6073,7 +6096,7 @@ int CCoordMotion::MeasurePointAppendToFile(const TCHAR *name)
 	if (result != 2)
 	{
 		fclose(f);
-		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Invalid Geometric Correction File (GeoSpacingX and GeoSpacingY) : ") + kmx::strtowstr(name));
+		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Invalid Geometric Correction File (GeoSpacingX and GeoSpacingY) : ") + name);
 		return 1;
 	}
 
@@ -6082,7 +6105,7 @@ int CCoordMotion::MeasurePointAppendToFile(const TCHAR *name)
 	if (result != 2)
 	{
 		fclose(f);
-		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Invalid Geometric Correction File (GeoOffsetX and GeoOffsetY) : ") + kmx::strtowstr(name));
+		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Invalid Geometric Correction File (GeoOffsetX and GeoOffsetY) : ") + name);
 		return 1;
 	}
 
@@ -6099,7 +6122,7 @@ int CCoordMotion::MeasurePointAppendToFile(const TCHAR *name)
 
 	if (!f)
 	{
-		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Unable to open Measurement Point File : ") + kmx::strtowstr(name));
+		KMotionDLL->DoErrMsg(KMotionDLL->Translate("Unable to open Measurement Point File : ") + name);
 		return 1;
 	}
 
@@ -6178,7 +6201,7 @@ int CCoordMotion::ConfigSpindle(int type, int axis, double UpdateTime, double Ta
 {
 	CStringA s;
 	
-	snprintf(s, 128, "ConfigSpindle %d %d %.6f %.6f %f",type, axis, UpdateTime, Tau, CountsPerRev);
+	s.Format("ConfigSpindle %d %d %.6f %.6f %f",type, axis, UpdateTime, Tau, CountsPerRev);
 	return KMotionDLL->WriteLine(s);
 }
 
@@ -6187,7 +6210,8 @@ int CCoordMotion::GetSpindleRPS(float &speed)
 {
 	CStringA response;
 
-	if (KMotionDLL->WriteLineReadLine("GetSpindleRPS",response)) return 1;
+	if (KMotionDLL->WriteLineReadLine("GetSpindleRPS",response.GetBufferSetLength(MAX_LINE))) return 1;
+	response.ReleaseBuffer();
 	
 	// check state
 	if (sscanf(response,"%f",&speed)!=1) return 1;

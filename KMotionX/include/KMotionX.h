@@ -3,6 +3,8 @@
 #include "dbg.h"
 #include <stdint.h>
 #include <string>
+#include "tcharx.h"
+#include "CString.h"
 #define OLD_COMPILER 1 // Select default compiler: 1 to use 0.9.16 tcc, else 0 to use later version
 
 #if OLD_COMPILER
@@ -48,6 +50,26 @@
 #define FALSE 0
 #endif
 typedef unsigned int BOOL;
+
+// Win32 critical sections, as recursive pthread mutexes
+#include <pthread.h>
+typedef pthread_mutex_t CRITICAL_SECTION;
+inline void InitializeCriticalSection(CRITICAL_SECTION *cs)
+{
+	pthread_mutexattr_t a;
+	pthread_mutexattr_init(&a);
+	pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(cs, &a);
+	pthread_mutexattr_destroy(&a);
+}
+inline void DeleteCriticalSection(CRITICAL_SECTION *cs) { pthread_mutex_destroy(cs); }
+inline void EnterCriticalSection(CRITICAL_SECTION *cs) { pthread_mutex_lock(cs); }
+inline void LeaveCriticalSection(CRITICAL_SECTION *cs) { pthread_mutex_unlock(cs); }
+
+inline void *InterlockedExchangePointer(void * volatile *Target, void *Value)
+{
+	return __atomic_exchange_n(Target, Value, __ATOMIC_SEQ_CST);
+}
 
 #ifndef M_PI
 #define M_PI = 3.14159265358979323846264338327950288

@@ -291,7 +291,7 @@ public:
 	int CheckSoftLimits(double x, double y, double z, double a, double b, double c, double u, double v, CString &errmsg);
 	int CheckSoftLimitsArc(int plane, double XC, double YC, double Z0, double Z1,
 						   double a, double b, double c, double u, double v, BOOL DirIsCCW, 
-						   double radius, double theta0, double dtheta, std::string &errmsg);
+						   double radius, double theta0, double dtheta, CString &errmsg);
 	
 	CKMotionDLL *KMotionDLL;
 

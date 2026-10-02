@@ -96,6 +96,11 @@ axes not compiled in.
 /****************************************************************************/
 
 #include "StdAfx.h"
+#ifdef _KMOTIONX
+#define FPOS_IS_ZERO(p) ((p).__pos == 0)  // glibc's fpos_t is a struct
+#else
+#define FPOS_IS_ZERO(p) ((p) == 0)
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -3361,7 +3366,7 @@ int PutFloatVarToKFLOP(double v, int &ipersist)
 {
 	CStringA s;
 	float f = (float)v;
-	snprintf(s, 64, "SetPersistHex %d %x", ipersist, *(int *)&f);
+	s.Format("SetPersistHex %d %x", ipersist, *(int *)&f);
 	if (CM->KMotionDLL->WriteLine(s)) { CM->SetAbort(); return 1; }
 	ipersist++;
 	return 0;
@@ -12364,7 +12369,7 @@ int return_sub()
 	if (-- _setup.sub_stack_call_cnt[_setup.stacki] == 0)
 	{
 		// put the file pointer and line number back to caller
-		if (_setup.sub_stack_pos[_setup.stacki] == 0) // beginning of file (M99 return with no call)?
+		if (FPOS_IS_ZERO(_setup.sub_stack_pos[_setup.stacki])) // beginning of file (M99 return with no call)?
 		{
 			fclose(_setup.file_pointer); // reopen file so UTF-8 BOM is handled properly
 			_tfopen_s(&_setup.file_pointer, _setup.filename, _T("rt,ccs=UTF-8"));
@@ -12379,7 +12384,7 @@ int return_sub()
 	{
 		// still more loops
 		// put the file pointer and line number back to beg of subroutine
-		if (_setup.sub_stack_sub_start_pos[_setup.stacki] == 0) // beginning of file (M99 return with no call)?
+		if (FPOS_IS_ZERO(_setup.sub_stack_sub_start_pos[_setup.stacki])) // beginning of file (M99 return with no call)?
 		{
 			fclose(_setup.file_pointer); // reopen file so UTF-8 BOM is handled properly
 			_tfopen_s(&_setup.file_pointer, _setup.filename, _T("rt,ccs=UTF-8"));

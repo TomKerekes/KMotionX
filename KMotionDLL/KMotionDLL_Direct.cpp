@@ -36,10 +36,16 @@ void CKMotionDLL_Direct::FindKognas(bool NoInternet)
 	else
 	{
 		// Create a mutex with no initial owner
+#ifdef _KMOTIONX
+		KognaListMutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+		memset(KognaListMutex, 0, sizeof(pthread_mutex_t));
+		pthread_mutex_init(KognaListMutex, NULL);
+#else
 		KognaListMutex = CreateMutex(
 			NULL,              // default security attributes
 			FALSE,             // initially not owned
 			NULL);             // unnamed mutex
+#endif
 
 		FirstKognasScanComplete = true;  // force it to be true so we don't wait for the internet
 	}
