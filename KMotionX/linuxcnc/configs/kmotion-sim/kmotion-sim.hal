@@ -1,0 +1,11 @@
+# kmotion-sim: LinuxCNC with kmotion-motion in the motion module's place.
+# kmotion-motion is a userspace process (see ../../README.md); it attaches to the
+# task<->motion shared memory like motmod does and creates the motion.*, joint.N.*,
+# axis.L.* and spindle.N.* pins a GUI expects. The path is relative to this folder.
+loadusr -W ../../kmotion-motion/kmotion-motion -l /tmp/kmotion-motion.log
+
+# the iocontrol loopbacks every config needs: task leaves E-stop only when
+# emc-enable-in is true, and tool changes complete only when answered
+net estop-loop iocontrol.0.user-enable-out iocontrol.0.emc-enable-in
+net tool-change iocontrol.0.tool-change iocontrol.0.tool-changed
+net tool-prep iocontrol.0.tool-prepare iocontrol.0.tool-prepared
