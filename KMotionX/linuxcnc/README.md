@@ -8,11 +8,23 @@ through the same shared memory block.
 
 ## Layout
 
-- `kmotion-motion/` – the process. `kmotion-motion.cc` decodes every emcmot command,
-  acknowledges it, keeps the status block and the HAL pins a GUI expects up to date, and
-  for now executes the moves with a stand-in model (segments run at their commanded speed,
-  no acceleration, no blending; jogs; immediate homing). Derived from LinuxCNC's
-  `motion-logger.c`, hence GPL-2.
+- `kmotion-motion/` – the process. `kmotion-motion.cc` (LinuxCNC side) decodes every emcmot
+  command, acknowledges it, keeps the status block and the HAL pins a GUI expects up to date,
+  handles jogging and homing. Derived from LinuxCNC's `motion-logger.c`, hence GPL-2.
+  `kmotion-backend.cc` (KMotion side) hands the moves to KMotion's trajectory planner
+  (`CCoordMotion`, TP3). The two include only their own project's headers and meet through
+  `kmotion-backend.h`. `-m standin` keeps the earlier stand-in model (moves at their
+  commanded speed, no planner) for comparison.
+  - **Simulate mode** (the current one): the planner runs with `m_Simulate` + `m_DoTime`, so
+    it plans and times every segment exactly as for a board but downloads nothing; the
+    finalized segments are copied out of its buffer (the TPSegLog's data) and replayed over
+    time. LinuxCNC therefore shows the motion the controller would execute: accelerations,
+    jerk limits, corner blending, 3rd order knots. `make test` runs the planner on the test
+    program's moves without LinuxCNC or a board (`backend-test.cc`).
+  - Planner settings come from the ini: `[KMOTION]` (3rd order, cubic knots, actuator
+    limits, segment log, break angle, tolerances, lookahead, board channels), the axis
+    limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK` (jerk defaults to
+    10 × accel) and counts per unit from `[JOINT_n] INPUT_SCALE`.
 - `configs/kmotion-sim/` – a LinuxCNC configuration that loads `kmotion-motion` instead of
   `motmod` (the sim/axis config, inches, 3 joints, trivkins), plus `drive.py`, which runs
   the whole thing from the command line.
@@ -31,11 +43,23 @@ files of its tree (the motion error ring buffer helpers) are compiled in.
 `-v -d` keeps LinuxCNC's output on the console instead of its error dialog. The command
 stream goes to `/tmp/kmotion-motion.log` (the `-l` option in the HAL file).
 
+## Notes on the KMotion side
+
+- `CCoordMotion` in simulate mode still asks the board for the coordinate system and the
+  positions (`DefineCS`, `Dest%d`), and `FlushSegments` opens the board's buffer; the backend
+  therefore sets the axis map and the current position itself and composes its flush from
+  the public pieces (`TP3FlushRun`, `MaximizeSegments`, `OutputSegment`, then the reset).
+- The planner finalizes the last moves only when told that no more are coming, so the
+  backend flushes when task has been quiet for 50 ms (program end, M0, tool change, dwell).
+- One LinuxCNC move becomes many planned segments (knots every 10 ms with TP3); a move
+  counts as finished when a segment of a later move starts. The planner's sequence numbers
+  are our own serials, mapped back to LinuxCNC's line ids.
+
 ## Next
 
-1. Hand `SET_LINE`/`SET_CIRCLE` to `CCoordMotion` (`StraightFeedAccelRapid`, `ArcFeed`, TP3)
-   with `CKMotionDLL` in simulate mode; positions back from the planner/board.
-2. The Kogna: axis definitions, feed override through the board, Halt/Resume as kmxWeb
-   does it, homing on the board side.
-3. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
+1. The Kogna: simulate off, axis definitions and the init program, positions from the
+   board, feed override through the board, Halt/Resume as kmxWeb does it, homing on the
+   board side.
+2. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
    module is bypassed and only gets joint positions to display.
+3. mm configs (LinuxCNC machine units vs KMotion's inches).

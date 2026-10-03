@@ -32,6 +32,9 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <fstream>
+#include <map>
+#include <string>
 #include <signal.h>
 #include <unistd.h>
 
@@ -40,6 +43,8 @@
 #include "motion/motion_struct.h"
 #include "motion/mot_priv.h"
 #include <motion_types.h>
+
+#include "kmotion-backend.h"
 
 // ---- the shared memory block, with the names mot_priv.h's macros expect ----------
 struct emcmot_struct_t *emcmotStruct = NULL;
@@ -59,6 +64,9 @@ static volatile sig_atomic_t quit = 0;
 static FILE *logfile = NULL;
 static const char *logfile_name = NULL;
 static double period_s = 0.005;
+static KmBackend *km = NULL;                // KMotion's planner; NULL: the stand-in model below
+static std::string mode = "kmotion";        // -m kmotion | standin
+static double now_s();
 
 static const int NAXES = 9;                 // x y z a b c u v w
 static const int QUEUE_LIMIT = 16;          // queueFull from here: bounds task's read-ahead
@@ -163,6 +171,11 @@ struct Model {
     double jog_min[NAXES], jog_max[NAXES];
     double joint_home[EMCMOT_MAX_JOINTS];
     bool probing;
+    // with the KMotion backend
+    KmState ks;             // what the backend reported last
+    double last_move_time;  // when task last handed a move over (flush timing)
+    int last_type;          // motion type and tag of the last move handed over
+    struct state_tag_t last_tag;
 };
 static Model m;
 
@@ -179,6 +192,10 @@ static void model_init()
         m.jog_max[i] = 1e9;
     }
     for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) m.joint_home[j] = 0;
+    memset(&m.ks, 0, sizeof m.ks);
+    m.last_move_time = 0;
+    m.last_type = 0;
+    memset(&m.last_tag, 0, sizeof m.last_tag);
 }
 
 static bool any_jog_active()
@@ -259,7 +276,16 @@ static void model_step(double dt)
 {
     m.current_vel = 0;
     // coordinated motion
-    if (!m.active && !m.queue.empty() && !m.paused) {
+    if (km) {
+        // the planner finalizes the last moves only when told that no more are coming:
+        // flush once task has been quiet for a moment (program end, M0, tool change, dwell)
+        if (km->needs_flush() && now_s() - m.last_move_time > 0.05) km->flush();
+        km->step(dt, m.ks);
+        if (m.ks.message[0]) report_error("%s", m.ks.message);
+        memcpy(m.pos, m.ks.pos, sizeof m.pos);
+        m.current_vel = m.ks.current_vel;
+        if (m.ks.active_id) m.last_id = m.ks.active_id;
+    } else if (!m.active && !m.queue.empty() && !m.paused) {
         start_segment(m.queue.front());
         m.active = true;
     }
@@ -302,6 +328,7 @@ static void model_step(double dt)
         if (m.pos[i] < m.jog_min[i]) { m.pos[i] = m.jog_min[i]; j.active = false; }
         if (fabs(j.vel) > m.current_vel) m.current_vel = fabs(j.vel);
     }
+    if (km && any_jog_active()) km->set_position(m.pos);   // the planner continues from here
 }
 
 // ---- HAL pins: what motmod offers and GUIs (AXIS at least) expect to find -----------
@@ -449,22 +476,30 @@ static void update_motion_state()
 // everything derived from the model, once per cycle
 static void update_status()
 {
-    bool coord_busy = m.active || !m.queue.empty();
+    bool coord_busy = km ? m.ks.running : (m.active || !m.queue.empty());
     bool inpos = !coord_busy && !any_jog_active();
     SET_MOTION_INPOS_FLAG(inpos ? 1 : 0);
     emcmotStatus->carte_pos_cmd = array_to_pose(m.pos);
     emcmotStatus->carte_pos_fb = emcmotStatus->carte_pos_cmd;
-    emcmotStatus->depth = (int) m.queue.size();
-    emcmotStatus->activeDepth = m.active ? 1 : 0;
-    emcmotStatus->tcqlen = (unsigned) m.queue.size();
-    emcmotStatus->queueFull = m.queue.size() >= (size_t) QUEUE_LIMIT;
+    int depth = km ? m.ks.depth : (int) m.queue.size();
+    emcmotStatus->depth = depth;
+    emcmotStatus->activeDepth = km ? (m.ks.active_id ? 1 : 0) : (m.active ? 1 : 0);
+    emcmotStatus->tcqlen = (unsigned) depth;
+    emcmotStatus->queueFull = depth >= QUEUE_LIMIT;
     emcmotStatus->paused = m.paused;
     emcmotStatus->stepping = m.stepping;
     emcmotStatus->jogging_active = any_jog_active();
     emcmotStatus->current_vel = m.current_vel;
     emcmotStatus->net_feed_scale = net_feed_scale();
     emcmotStatus->enables_queued = emcmotStatus->enables_new;
-    if (m.active) {
+    if (km) {
+        emcmotStatus->id = m.ks.active_id ? m.ks.active_id : m.last_id;
+        emcmotStatus->motionType = m.ks.running ? m.last_type : 0;
+        emcmotStatus->requested_vel = m.ks.current_vel;
+        emcmotStatus->distance_to_go = m.ks.distance_to_go;
+        if (m.ks.running) emcmotStatus->tag = m.last_tag;
+        memset(&emcmotStatus->dtg, 0, sizeof emcmotStatus->dtg);
+    } else if (m.active) {
         const Segment &s = m.queue.front();
         emcmotStatus->id = s.id;
         emcmotStatus->motionType = s.motion_type;
@@ -576,7 +611,7 @@ static void queue_segment(Segment &s)
 static void start_jog(int index, bool to_target, double target, double vel)
 {
     if (index < 0 || index >= NAXES) return;
-    if (!GET_MOTION_ENABLE_FLAG() || (m.active && !m.paused)) return;
+    if (!GET_MOTION_ENABLE_FLAG() || (km ? m.ks.running : (m.active && !m.paused))) return;
     Jog &j = m.jog[index];
     j.active = true;
     j.to_target = to_target;
@@ -590,6 +625,7 @@ static void handle_command()
     switch (c->command) {
     case EMCMOT_ABORT:
         log_print("ABORT\n");
+        if (km) km->abort();
         m.queue.clear();
         m.active = false;
         m.paused = false;
@@ -610,6 +646,7 @@ static void handle_command()
     case EMCMOT_DISABLE:
         log_print("DISABLE\n");
         SET_MOTION_ENABLE_FLAG(0);
+        if (km) km->abort();
         m.queue.clear();
         m.active = false;
         m.paused = false;
@@ -627,15 +664,18 @@ static void handle_command()
     case EMCMOT_PAUSE:
         log_print("PAUSE\n");
         m.paused = true;
+        if (km) km->pause(true);
         break;
     case EMCMOT_RESUME:
         log_print("RESUME\n");
         m.paused = false;
         m.stepping = false;
+        if (km) km->pause(false);
         break;
     case EMCMOT_STEP:
         log_print("STEP\n");
-        if (m.paused) { m.paused = false; m.stepping = true; }
+        if (km) { m.paused = false; km->pause(false); }     // no single-step with the planner yet
+        else if (m.paused) { m.paused = false; m.stepping = true; }
         break;
     case EMCMOT_REVERSE:
         log_print("REVERSE (not supported here)\n");
@@ -677,14 +717,17 @@ static void handle_command()
     case EMCMOT_FEED_SCALE:
         log_print("FEED_SCALE %.6g\n", c->scale);
         emcmotStatus->feed_scale = c->scale;
+        if (km) km->set_feed_override(net_feed_scale(), emcmotStatus->rapid_scale);
         break;
     case EMCMOT_RAPID_SCALE:
         log_print("RAPID_SCALE %.6g\n", c->scale);
         emcmotStatus->rapid_scale = c->scale;
+        if (km) km->set_feed_override(net_feed_scale(), emcmotStatus->rapid_scale);
         break;
     case EMCMOT_FS_ENABLE:
         log_print("FS_ENABLE %d\n", c->mode);
         if (c->mode) emcmotStatus->enables_new |= FS_ENABLED; else emcmotStatus->enables_new &= ~FS_ENABLED;
+        if (km) km->set_feed_override(net_feed_scale(), emcmotStatus->rapid_scale);
         break;
     case EMCMOT_FH_ENABLE:
         log_print("FH_ENABLE %d\n", c->mode);
@@ -705,6 +748,7 @@ static void handle_command()
         } else {
             mark_joint_homed(c->joint, true);
         }
+        if (km) km->set_position(m.pos);
         break;
     case EMCMOT_JOINT_UNHOME:
         log_print("JOINT_UNHOME joint=%d\n", c->joint);
@@ -736,6 +780,14 @@ static void handle_command()
                   c->pos.tran.x, c->pos.tran.y, c->pos.tran.z, c->pos.a, c->pos.b, c->pos.c, c->pos.u, c->pos.v, c->pos.w,
                   c->id, c->motion_type, c->vel, c->ini_maxvel, c->acc, c->turn);
         if (!GET_MOTION_COORD_FLAG()) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("SET_LINE outside coordinated mode"); break; }
+        if (km) {
+            double end[NAXES];
+            pose_to_array(c->pos, end);
+            if (km->line(end, c->vel, c->acc, c->motion_type == EMC_MOTION_TYPE_TRAVERSE, c->id))
+                emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
+            m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
+            break;
+        }
         if (m.queue.size() >= (size_t) QUEUE_LIMIT) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("motion queue full"); break; }
         Segment s;
         memset(&s, 0, sizeof s);
@@ -749,6 +801,14 @@ static void handle_command()
                   c->center.x, c->center.y, c->center.z, c->normal.x, c->normal.y, c->normal.z,
                   c->id, c->motion_type, c->vel, c->ini_maxvel, c->acc, c->turn);
         if (!GET_MOTION_COORD_FLAG()) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("SET_CIRCLE outside coordinated mode"); break; }
+        if (km) {
+            double end[NAXES], center[3] = {c->center.x, c->center.y, c->center.z}, normal[3] = {c->normal.x, c->normal.y, c->normal.z};
+            pose_to_array(c->pos, end);
+            if (km->arc(end, center, normal, c->turn, c->vel, c->acc, c->id))
+                emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
+            m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
+            break;
+        }
         if (m.queue.size() >= (size_t) QUEUE_LIMIT) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("motion queue full"); break; }
         Segment s;
         memset(&s, 0, sizeof s);
@@ -764,6 +824,15 @@ static void handle_command()
     case EMCMOT_PROBE: {
         log_print("PROBE to x=%.6g, y=%.6g, z=%.6g, vel=%.6g type=%d (runs as a plain move here, never trips)\n",
                   c->pos.tran.x, c->pos.tran.y, c->pos.tran.z, c->vel, c->probe_type);
+        if (km) {
+            double end[NAXES];
+            pose_to_array(c->pos, end);
+            if (km->line(end, c->vel, c->acc, false, c->id)) emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
+            m.last_move_time = now_s(); m.last_type = EMC_MOTION_TYPE_PROBING; m.last_tag = c->tag;
+            emcmotStatus->probing = 0;
+            emcmotStatus->probeTripped = 0;
+            break;
+        }
         Segment s;
         memset(&s, 0, sizeof s);
         s.kind = Segment::PROBE;
@@ -776,6 +845,13 @@ static void handle_command()
     }
     case EMCMOT_RIGID_TAP: {
         log_print("RIGID_TAP to z=%.6g vel=%.6g (runs as a plain move here)\n", c->pos.tran.z, c->vel);
+        if (km) {
+            double end[NAXES];
+            pose_to_array(c->pos, end);
+            if (km->line(end, c->vel, c->acc, false, c->id)) emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
+            m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
+            break;
+        }
         Segment s;
         memset(&s, 0, sizeof s);
         s.kind = Segment::RIGID_TAP;
@@ -1009,6 +1085,82 @@ static void handle_command()
     }
 }
 
+// ---- the KMotion backend's configuration, from the LinuxCNC ini -------------------------
+// Minimal ini reader: "[SECTION]" headers and "KEY = value" lines, '#' and ';' comments,
+// the first occurrence of a key wins (LinuxCNC's own convention).
+struct Ini {
+    std::map<std::string, std::string> kv;
+    bool load(const char *path)
+    {
+        std::ifstream f(path);
+        if (!f) return false;
+        std::string line, sec;
+        while (std::getline(f, line)) {
+            size_t p = line.find_first_of("#;");
+            if (p != std::string::npos) line.erase(p);
+            size_t a = line.find_first_not_of(" \t\r"), b = line.find_last_not_of(" \t\r");
+            if (a == std::string::npos) continue;
+            line = line.substr(a, b - a + 1);
+            if (line[0] == '[') { sec = line.substr(1, line.find(']') - 1); continue; }
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::string k = line.substr(0, eq), v = line.substr(eq + 1);
+            k.erase(k.find_last_not_of(" \t") + 1);
+            v.erase(0, v.find_first_not_of(" \t"));
+            kv.insert(std::make_pair(sec + "." + k, v));
+        }
+        return true;
+    }
+    const char *get(const std::string &sec, const std::string &key) const
+    {
+        std::map<std::string, std::string>::const_iterator it = kv.find(sec + "." + key);
+        return it == kv.end() ? NULL : it->second.c_str();
+    }
+    double num(const std::string &sec, const std::string &key, double dflt) const
+    {
+        const char *v = get(sec, key);
+        return v ? atof(v) : dflt;
+    }
+};
+
+static bool read_kmotion_config(KmConfig &cfg)
+{
+    const char *ini_path = getenv("INI_FILE_NAME");
+    Ini ini;
+    if (!ini_path || !ini.load(ini_path)) {
+        fprintf(stderr, "kmotion-motion: cannot read the ini file (INI_FILE_NAME=%s)\n", ini_path ? ini_path : "unset");
+        return false;
+    }
+    const char *K = "KMOTION";
+    cfg.third_order = ini.num(K, "THIRD_ORDER", 1) != 0;
+    cfg.cubic_knots = ini.num(K, "CUBIC_KNOTS", 1) != 0;
+    cfg.actuator_limits = ini.num(K, "ACTUATOR_LIMITS", 1) != 0;
+    cfg.log_segments = ini.num(K, "LOG_SEGMENTS", 0) != 0;
+    cfg.break_angle = ini.num(K, "BREAK_ANGLE", cfg.break_angle);
+    cfg.collinear_tol = ini.num(K, "COLLINEAR_TOL", cfg.collinear_tol);
+    cfg.corner_tol = ini.num(K, "CORNER_TOL", cfg.corner_tol);
+    cfg.facet_angle = ini.num(K, "FACET_ANGLE", cfg.facet_angle);
+    cfg.lookahead = ini.num(K, "LOOKAHEAD", cfg.lookahead);
+    const char *coords = ini.get("TRAJ", "COORDINATES");
+    const char *channels = ini.get(K, "CHANNELS");
+    if (channels) sscanf(channels, "%d %d %d %d %d %d %d %d", &cfg.channel[0], &cfg.channel[1], &cfg.channel[2], &cfg.channel[3],
+                         &cfg.channel[4], &cfg.channel[5], &cfg.channel[6], &cfg.channel[7]);
+    const char letters[] = "XYZABCUV";
+    for (int i = 0; i < 8; i++) {
+        KmAxisParams &ax = cfg.axis[i];
+        if (coords && !strchr(coords, letters[i]) && !strchr(coords, tolower(letters[i]))) continue;
+        std::string sec = std::string("AXIS_") + letters[i];
+        char jsec[16];
+        snprintf(jsec, sizeof jsec, "JOINT_%d", i);     // identity kinematics: joint i is axis i
+        ax.counts_per_unit = fabs(ini.num(jsec, "INPUT_SCALE", 0));
+        ax.max_vel = ini.num(sec, "MAX_VELOCITY", 0);
+        ax.max_accel = ini.num(sec, "MAX_ACCELERATION", 0);
+        ax.max_jerk = ini.num(sec, "MAX_JERK", 0);
+        if (ax.counts_per_unit <= 0) ax.counts_per_unit = ini.num(K, "DEFAULT_SCALE", 1000);
+    }
+    return true;
+}
+
 // ---- main ----------------------------------------------------------------------------------
 static void sighandler(int) { quit = 1; }
 
@@ -1024,10 +1176,15 @@ int main(int argc, char *argv[])
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-l") && i + 1 < argc) logfile_name = argv[++i];
         else if (!strcmp(argv[i], "-p") && i + 1 < argc) period_s = atof(argv[++i]) * 1e-3;
+        else if (!strcmp(argv[i], "-m") && i + 1 < argc) mode = argv[++i];
         else {
-            fprintf(stderr, "usage: kmotion-motion [-l LOGFILE] [-p PERIOD_MS]\n");
+            fprintf(stderr, "usage: kmotion-motion [-l LOGFILE] [-p PERIOD_MS] [-m kmotion|standin]\n");
             return 1;
         }
+    }
+    if (mode != "kmotion" && mode != "standin") {
+        fprintf(stderr, "kmotion-motion: -m takes kmotion or standin\n");
+        return 1;
     }
     if (period_s < 0.001) period_s = 0.001;
 
@@ -1046,6 +1203,25 @@ int main(int argc, char *argv[])
     if (create_pins() < 0 || init_comm_buffers() < 0) {
         hal_exit(comp_id);
         return 1;
+    }
+    if (mode == "kmotion") {
+        KmConfig cfg;
+        if (!read_kmotion_config(cfg)) { hal_exit(comp_id); return 1; }
+        km = new KmBackend;
+        if (!km->init(cfg, m.pos)) {
+            fprintf(stderr, "kmotion-motion: the KMotion planner could not be set up\n");
+            hal_exit(comp_id);
+            return 1;
+        }
+        log_print("motion: %s; planner %s%s%s; axes", km->mode_name(), cfg.third_order ? "3rd order" : "standard",
+                  cfg.third_order && cfg.cubic_knots ? ", cubic knots" : "", cfg.actuator_limits ? ", actuator limits" : ", axis limits");
+        for (int i = 0; i < 8; i++)
+            if (cfg.axis[i].counts_per_unit > 0 && cfg.axis[i].max_vel > 0)
+                log_print(" %c: %g counts, vel %g, accel %g, jerk %g;", "XYZABCUV"[i], cfg.axis[i].counts_per_unit,
+                          cfg.axis[i].max_vel, cfg.axis[i].max_accel, cfg.axis[i].max_jerk);
+        log_print("\n");
+    } else {
+        log_print("motion: stand-in model\n");
     }
     update_motion_state();
     update_status();
