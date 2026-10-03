@@ -9,23 +9,46 @@
  * blending and all. The only part of CCoordMotion that talks to a board even in
  * simulate mode is FlushSegments, so the flush is composed here from its public
  * pieces instead.
+ *
+ * Board mode: the same planner downloads to the board through KMotionServer the
+ * way KMotionCNC and kmxWeb do; positions, the executing line (ExecTime) and the
+ * end of a run (CheckDoneBuf) are polled from the board.
+ *
+ * Everything that touches CoordMotion runs in the worker thread.
  */
 #include "kmotion-backend.h"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "GCodeInterpreterX.h"
 #include "CoordMotion.h"
 
+static std::mutex g_msg_mutex;
 static std::string g_message;                   // operator messages from KMotion
 static void err_handler(const char *msg)
 {
+    std::lock_guard<std::mutex> lock(g_msg_mutex);
     if (!g_message.empty()) g_message += " | ";
     g_message += msg;
+}
+static int console_handler(const char *msg)     // the board's console output (printf from C programs)
+{
+    fprintf(stderr, "kmotion-motion: board console: %s", msg);
+    return 0;
+}
+
+static double now_s()
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 // a planned segment, as the controller would execute it (the segment log's view)
@@ -41,28 +64,59 @@ struct Seg {
     double T[7], A[7], B[7], C[7], D[7];
     double K[32];
     double total;           // duration
-    double start[8];        // set when it starts
+};
+
+struct Cmd {
+    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO } kind;
+    double end[9], center[3], normal[3];
+    double vel, acc, seconds, feed_scale, rapid_scale;
+    bool rapid, on;
+    int turn, id, axis;
 };
 
 struct KmBackend::Impl {
     KmConfig cfg;
     CKMotionDLL *km = nullptr;
     CCoordMotion *cm = nullptr;
+    double scale[8];                // counts per actuator unit
+    bool used[8];
+
+    // command queue, main thread -> worker
+    std::mutex qmx;
+    std::condition_variable qcv;
+    std::deque<Cmd> q;
+    std::thread worker;             // plans and downloads (may block on the board's flow control)
+    std::thread poller;             // board mode: polls status so the display never freezes
+    std::mutex wmx;                 // the run bookkeeping below, shared by the two threads
+    std::atomic<bool> stop{false};
+    std::atomic<bool> paused{false};
+
+    // published state
+    std::mutex smx;
+    KmState st;
+    std::string messages;
+
+    // worker state
     int serial = 0;                 // last sequence number handed to the planner
     int done_upto = 0;              // every sequence number <= this has finished
     std::deque<int> ids;            // LinuxCNC id per sequence number, ids[0] is for done_upto + 1
-    int harvested = 0;              // planner segments copied so far (index into its buffer)
     bool unflushed = false;         // moves handed over since the last flush
+    double last_move_t = 0;
+    double pos[9];
+    bool enabled[8];
+    double feed_scale = 1.0, rapid_scale = 1.0;
+    double current_vel = 0;
+    // simulate: replay
+    int harvested = 0;              // planner segments copied so far (index into its buffer)
     std::deque<Seg> replay;
     Seg cur;
     bool have_cur = false;
     double t_in_seg = 0;
-    double pos[9];
-    bool paused = false;
-    double feed_scale = 1.0, rapid_scale = 1.0;
-    double current_vel = 0;
-    double scale[8];                // counts per actuator unit, for the actuator frame
-    bool used[8];
+    double last_tick = 0;
+    // board
+    bool run_active = false;        // a run is downloaded/executing on the board
+    double last_poll = 0;
+    bool connected = false;
 
     int id_of(int seq) const
     {
@@ -72,6 +126,18 @@ struct KmBackend::Impl {
     void finish_upto(int seq)
     {
         while (done_upto < seq && !ids.empty()) { ids.pop_front(); done_upto++; }
+    }
+    void post(const Cmd &c)
+    {
+        std::lock_guard<std::mutex> lock(qmx);
+        q.push_back(c);
+        qcv.notify_one();
+    }
+    void message(const std::string &m)
+    {
+        std::lock_guard<std::mutex> lock(smx);
+        if (!messages.empty()) messages += " | ";
+        messages += m;
     }
 };
 
@@ -101,12 +167,12 @@ static void point_at(const Seg &s, double dist, double o[8])
         double dth = th1 - th0;
         if (s.ccw) { if (dth <= 0) dth += 2 * M_PI; }
         else { if (dth >= 0) dth -= 2 * M_PI; }
-        // a planned arc longer than the chord suggests: full turns
-        double r = r0 + f * (r1 - r0);
+        // a planned arc longer than the end points suggest: full turns
         if (r0 > 0 && s.dx > fabs(dth) * r0 * 1.5) {
             double turns = floor((s.dx / r0 - fabs(dth)) / (2 * M_PI) + 0.5);
             dth += (s.ccw ? 1 : -1) * turns * 2 * M_PI;
         }
+        double r = r0 + f * (r1 - r0);
         double th = th0 + f * dth;
         double lx = s.xc + r * cos(th), ly = s.yc + r * sin(th);
         double lz = s.P0[2] + f * (s.P1[2] - s.P0[2]);
@@ -130,7 +196,7 @@ static void eval(const Seg &s, double t, double o[8])
     point_at(s, dist_at(s, t), o);
 }
 
-// ---- the planner's buffer -> our replay queue ---------------------------------------
+// ---- the planner's buffer -> the replay queue (simulate mode) -------------------------
 static void copy_segment(KmBackend::Impl *d, SEGMENT *p, Seg &s)
 {
     memset(&s, 0, sizeof s);
@@ -187,6 +253,7 @@ static void copy_segment(KmBackend::Impl *d, SEGMENT *p, Seg &s)
 
 static void harvest(KmBackend::Impl *d)
 {
+    if (!d->cfg.simulate) return;
     for (int i = d->harvested; i < d->cm->m_nsegs_downloaded; i++) {
         Seg s;
         copy_segment(d, GetSegPtr(i), s);
@@ -195,33 +262,497 @@ static void harvest(KmBackend::Impl *d)
     d->harvested = d->cm->m_nsegs_downloaded;
 }
 
-// actuator-frame positions back to CAD through the kinematics
-static void to_cad(KmBackend::Impl *d, const Seg &s, const double in[8], double out[9])
+// actuator positions (counts) back to CAD through the kinematics
+static void acts_to_cad(KmBackend::Impl *d, const double acts_in[8], double out[9])
+{
+    double acts[MAX_ACTUATORS];
+    for (int i = 0; i < 8; i++) acts[i] = acts_in[i];
+    double x, y, z, a, b, c, u, v;
+    if (d->cm->Kinematics->TransformActuatorstoCAD(acts, &x, &y, &z, &a, &b, &c, &u, &v) == 0) {
+        out[0] = x; out[1] = y; out[2] = z; out[3] = a; out[4] = b; out[5] = c; out[6] = u; out[7] = v;
+    }
+    out[8] = 0;
+}
+
+static void seg_to_cad(KmBackend::Impl *d, const Seg &s, const double in[8], double out[9])
 {
     if (s.act_frame) {
-        double acts[MAX_ACTUATORS];
+        double acts[8];
         for (int i = 0; i < 8; i++) acts[i] = in[i] * d->scale[i];
-        double x, y, z, a, b, c, u, v;
-        if (d->cm->Kinematics->TransformActuatorstoCAD(acts, &x, &y, &z, &a, &b, &c, &u, &v) == 0) {
-            out[0] = x; out[1] = y; out[2] = z; out[3] = a; out[4] = b; out[5] = c; out[6] = u; out[7] = v;
-            out[8] = 0;
-            return;
-        }
+        acts_to_cad(d, acts, out);
+        return;
     }
     for (int i = 0; i < 8; i++) out[i] = in[i];
     out[8] = 0;
 }
 
-// ---- KmBackend --------------------------------------------------------------------------
-KmBackend::KmBackend() : d(new Impl) {}
+static void set_cm_position(KmBackend::Impl *d, const double pos[9])
+{
+    CCoordMotion *cm = d->cm;
+    cm->current_x = pos[0]; cm->current_y = pos[1]; cm->current_z = pos[2];
+    cm->current_a = pos[3]; cm->current_b = pos[4]; cm->current_c = pos[5];
+    cm->current_u = pos[6]; cm->current_v = pos[7];
+}
+
+static void fail(KmBackend::Impl *d, const char *what)
+{
+    std::string m;
+    {
+        std::lock_guard<std::mutex> lock(g_msg_mutex);
+        m = g_message;
+        g_message.clear();
+    }
+    if (m.empty()) m = std::string(what) + " failed in KMotion's planner";
+    d->message(m);
+    d->cm->ClearAbort();
+    d->cm->ClearHalt();
+}
+
+// ---- worker: planning ----------------------------------------------------------------
+static int begin_move(KmBackend::Impl *d, int id)
+{
+    std::lock_guard<std::mutex> lk(d->wmx);
+    int seq = ++d->serial;
+    d->ids.push_back(id);
+    d->unflushed = true;
+    d->last_move_t = now_s();
+    if (!d->cfg.simulate) d->run_active = true;
+    return seq;
+}
+
+static void w_line(KmBackend::Impl *d, const Cmd &c)
+{
+    int seq = begin_move(d, c.id);
+    int r = d->cm->StraightFeedAccelRapid(c.vel, c.acc, c.rapid, true, c.end[0], c.end[1], c.end[2], c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, c.id);
+    harvest(d);
+    if (r) fail(d, "StraightFeed");
+}
+
+static void w_arc(KmBackend::Impl *d, const Cmd &c)
+{
+    // LinuxCNC's center/normal/turn back to rs274ngc's canon arc, which KMotion's
+    // ArcFeed takes: the plane from the normal's dominant axis, (first, second,
+    // helix) axes in the plane's canonical order, rotation = sign * (turns + 1)
+    int plane_axis = 2;
+    if (fabs(c.normal[1]) > fabs(c.normal[plane_axis])) plane_axis = 1;
+    if (fabs(c.normal[0]) > fabs(c.normal[plane_axis])) plane_axis = 0;
+    CANON_PLANE plane;
+    int i1, i2, i3;
+    if (plane_axis == 2) { plane = CANON_PLANE_XY; i1 = 0; i2 = 1; i3 = 2; }
+    else if (plane_axis == 1) { plane = CANON_PLANE_XZ; i1 = 2; i2 = 0; i3 = 1; }
+    else { plane = CANON_PLANE_YZ; i1 = 1; i2 = 2; i3 = 0; }
+    int turns = c.turn < 0 ? -c.turn : c.turn;
+    int rotation = (c.normal[plane_axis] >= 0 ? 1 : -1) * (turns + 1);
+    int seq = begin_move(d, c.id);
+    int r = d->cm->ArcFeedAccel(c.vel, c.acc, plane, c.end[i1], c.end[i2], c.center[i1], c.center[i2], rotation, c.end[i3],
+                                c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, c.id);
+    harvest(d);
+    if (r) fail(d, "ArcFeed");
+}
+
+static void w_dwell(KmBackend::Impl *d, const Cmd &c)
+{
+    int seq = begin_move(d, c.id);
+    int r = d->cm->Dwell(c.seconds, seq);
+    harvest(d);
+    if (r) fail(d, "Dwell");
+}
+
+static void w_abort(KmBackend::Impl *d);
+
+static void w_flush(KmBackend::Impl *d)
+{
+    CCoordMotion *cm = d->cm;
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        if (!d->unflushed) return;
+        d->unflushed = false;
+    }
+    if (!d->cfg.simulate) {
+        // the real thing: finishes the plan, downloads the rest, starts the buffer
+        if (cm->FlushSegments()) {
+            if (cm->m_AxisDisabled) { d->message("an axis of the coordinate system is disabled: motion refused"); cm->m_AxisDisabled = false; }
+            fail(d, "FlushSegments");
+            w_abort(d);                 // the moves are lost: let LinuxCNC's queue drain
+        }
+        return;
+    }
+    // what FlushSegments does, minus the board: finish a 3rd order streaming run,
+    // finalize the remaining segments, "download" them (into the planner's buffer only),
+    // then reset for the next run
+    if (cm->Kinematics->m_MotionParams.ThirdOrderTP && cm->TP3FlushRun("linuxcnc flush")) { fail(d, "TP3FlushRun"); return; }
+    MaximizeSegments();
+    for (int iseg = cm->m_nsegs_downloaded; iseg < nsegs; iseg++)
+        if (cm->OutputSegment(iseg)) { fail(d, "OutputSegment"); return; }
+    harvest(d);
+    tp_init();
+    cm->TP3ClearRun();
+    cm->DownloadInit();
+    d->harvested = 0;
+}
+
+static void w_abort(KmBackend::Impl *d)
+{
+    CCoordMotion *cm = d->cm;
+    cm->SetAbort();
+    cm->ClearAbort();                 // re-initializes the planner
+    cm->ClearHalt();
+    d->replay.clear();
+    d->have_cur = false;
+    d->t_in_seg = 0;
+    d->harvested = 0;
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        d->unflushed = false;
+        d->run_active = false;
+        d->ids.clear();
+        d->done_upto = d->serial;
+    }
+    d->current_vel = 0;
+    if (d->cfg.simulate) {
+        set_cm_position(d, d->pos);
+    } else {
+        cm->RearmCoordLaunch();
+        double x, y, z, a, b, c, u, v;
+        if (cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
+            double p[9] = {x, y, z, a, b, c, u, v, 0};
+            memcpy(d->pos, p, sizeof p);
+        }
+        cm->ClearAbort();
+    }
+}
+
+static void w_replay(KmBackend::Impl *d, double dt)
+{
+    double before[9];
+    memcpy(before, d->pos, sizeof before);
+    d->current_vel = 0;
+    if (!d->paused) {
+        // the board's feed override scales the whole coordinated motion's clock
+        double adv = dt * (d->feed_scale > 0 ? d->feed_scale : 0);
+        while (adv > 0) {
+            if (!d->have_cur) {
+                if (d->replay.empty()) break;
+                d->cur = d->replay.front();
+                d->replay.pop_front();
+                d->have_cur = true;
+                d->t_in_seg = 0;
+                // a move spans many planned segments (hundreds of knots): it is finished
+                // once a segment of a later move starts
+                std::lock_guard<std::mutex> lk(d->wmx);
+                d->finish_upto(d->cur.seq - 1);
+            }
+            double left = d->cur.total - d->t_in_seg;
+            if (adv >= left) {
+                adv -= left;
+                double o[8];
+                eval(d->cur, d->cur.total, o);
+                seg_to_cad(d, d->cur, o, d->pos);
+                d->have_cur = false;
+            } else {
+                d->t_in_seg += adv;
+                adv = 0;
+                double o[8];
+                eval(d->cur, d->t_in_seg, o);
+                seg_to_cad(d, d->cur, o, d->pos);
+            }
+        }
+        double dd = 0;
+        for (int i = 0; i < 3; i++) dd += (d->pos[i] - before[i]) * (d->pos[i] - before[i]);
+        d->current_vel = dt > 0 ? sqrt(dd) / dt : 0;
+    }
+    std::lock_guard<std::mutex> lk(d->wmx);
+    if (!d->have_cur && d->replay.empty() && !d->unflushed) d->finish_upto(d->serial);
+}
+
+// ---- worker: the board ------------------------------------------------------------------
+static int board_query(KmBackend::Impl *d, const char *cmd, char *reply)
+{
+    reply[0] = 0;
+    return d->km->WriteLineReadLine(cmd, reply);
+}
+
+// CoordMotion::UpdateRealTimeState is private: the same walk over the executing
+// buffer, from the public planner globals - which downloaded segment the board's
+// execution time T falls into, hence the sequence number being executed
+static bool realtime_sequence(double T, int &seq)
+{
+    if (T < 0.0) return false;                      // nothing executing
+    SEGMENT *segs = segments_executing;
+    if (segs != segments0 && segs != segments1) return false;
+    int index = (segs == segments0) ? 0 : 1;
+    double BufTime = SegsDoneTime[index];
+    if (SegsDone[index] == -1) {
+        if (special_cmds_initial_sequence_no[index] >= 0) { seq = special_cmds_initial_sequence_no[index]; return true; }
+        return false;
+    }
+    int i;
+    for (i = SegsDone[index]; i >= 0; i--) {
+        for (int k = segs[TPMOD(i)].nTrips - 1; k >= 0; k--) {
+            if (BufTime <= T) break;
+            BufTime -= segs[TPMOD(i)].C[k].t;
+        }
+        if (BufTime <= T || (T == 0.0 && BufTime < 1e-6)) break;
+    }
+    if (i < 0) return false;
+    seq = segs[TPMOD(i)].sequence_number;
+    return true;
+}
+
+static void w_poll_board(KmBackend::Impl *d)
+{
+    CCoordMotion *cm = d->cm;
+    MAIN_STATUS status;
+    memset(&status, 0, sizeof status);
+    if (d->km->WaitToken(false, 100, "kmotion-motion") != KMOTION_LOCKED) {
+        d->connected = false;
+        return;
+    }
+    int r = d->km->GetStatus(status, false);
+    d->km->ReleaseToken();
+    if (r) {
+        if (d->connected) d->message("lost the board: GetStatus failed");
+        d->connected = false;
+        return;
+    }
+    d->connected = true;
+    // positions: the commanded destinations (open-loop machines report no other position)
+    double acts[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    double before[9];
+    memcpy(before, d->pos, sizeof before);
+    for (int i = 0; i < 8; i++) {
+        int ch = d->cfg.channel[i];
+        if (ch >= 0 && ch < N_CHANNELS_KOGNA) {
+            acts[i] = status.Dest[ch];
+            d->enabled[i] = (status.Enables >> ch) & 1;
+        } else {
+            d->enabled[i] = true;
+        }
+    }
+    acts_to_cad(d, acts, d->pos);
+    // speed from the board's own clock between two status reads (the host-side interval
+    // includes the query latency and reads low)
+    static double last_stamp = 0;
+    double dt = status.TimeStamp - last_stamp;
+    last_stamp = status.TimeStamp;
+    double dd = 0;
+    for (int i = 0; i < 3; i++) dd += (d->pos[i] - before[i]) * (d->pos[i] - before[i]);
+    if (dt > 0.001 && dt < 1.0) d->current_vel = sqrt(dd) / dt;
+
+    bool active, flushed;
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        active = d->run_active;
+        flushed = !d->unflushed;
+    }
+    if (active && cm->CoordLaunched()) {
+        char reply[MAX_LINE + 1];
+        // where the board is in the downloaded buffer: the executing line
+        if (board_query(d, "ExecTime", reply) == 0) {
+            double T;
+            int seq;
+            if (sscanf(reply, "%lf", &T) == 1 && realtime_sequence(T, seq)) {
+                std::lock_guard<std::mutex> lk(d->wmx);
+                if (seq > d->done_upto && seq <= d->serial) d->finish_upto(seq - 1);
+            }
+        }
+        if (flushed && board_query(d, "CheckDoneBuf", reply) == 0) {
+            if (strcmp(reply, "1") == 0) {
+                // the buffer ran to its end: the run is complete
+                std::lock_guard<std::mutex> lk(d->wmx);
+                if (!d->unflushed) {
+                    d->finish_upto(d->serial);
+                    d->run_active = false;
+                    cm->RearmCoordLaunch();
+                }
+            } else if (strcmp(reply, "-1") == 0) {
+                d->message("an axis is disabled: motion aborted");
+                cm->SetAbort();
+                Cmd c;
+                memset(&c, 0, sizeof c);
+                c.kind = Cmd::ABORT;
+                d->post(c);
+            }
+        }
+    }
+}
+
+// what the main thread reads
+static void publish(KmBackend::Impl *d)
+{
+    std::lock_guard<std::mutex> lock(d->smx);
+    std::lock_guard<std::mutex> lk(d->wmx);
+    KmState &s = d->st;
+    memcpy(s.pos, d->pos, sizeof s.pos);
+    for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
+    s.depth = d->serial - d->done_upto;
+    s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty();
+    s.active_id = s.depth > 0 ? d->id_of(d->done_upto + 1) : 0;
+    s.paused = d->paused;
+    s.connected = d->cfg.simulate ? true : d->connected;
+    s.current_vel = d->current_vel;
+    s.distance_to_go = (d->cfg.simulate && d->have_cur && d->cur.kind != 'K' && d->cur.total > 0)
+                       ? d->cur.dx * (1 - d->t_in_seg / d->cur.total) : 0;
+    std::lock_guard<std::mutex> lock2(g_msg_mutex);
+    if (!g_message.empty()) {
+        if (!d->messages.empty()) d->messages += " | ";
+        d->messages += g_message;
+        g_message.clear();
+    }
+}
+
+// board mode: status at its own pace, whatever the planner is waiting on
+static void poller_main(KmBackend::Impl *d)
+{
+    while (!d->stop) {
+        double t = now_s();
+        w_poll_board(d);
+        d->last_poll = t;
+        publish(d);
+        double sleep_s = d->cfg.status_period - (now_s() - t);
+        if (sleep_s > 0) std::this_thread::sleep_for(std::chrono::duration<double>(sleep_s));
+    }
+}
+
+static int run_program(KmBackend::Impl *d, const char *path, int thread)
+{
+    char err[512] = "";
+    if (d->km->CompileAndLoadCoff(path, thread, err, sizeof err - 1)) {
+        d->message(std::string("init program failed: ") + path + ": " + err);
+        return 1;
+    }
+    char cmd[64], reply[MAX_LINE + 1];
+    snprintf(cmd, sizeof cmd, "Execute%d", thread);
+    if (d->km->WriteLine(cmd)) { d->message("Execute failed for the init program"); return 1; }
+    snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
+    double t0 = now_s();
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); return 1; }
+        if (strcmp(reply, "0") == 0) return 0;
+        if (now_s() - t0 > 30) { d->message("the init program did not finish within 30 s"); return 1; }
+    }
+}
+
+static void w_machine_on(KmBackend::Impl *d, bool on)
+{
+    char cmd[64];
+    MAIN_STATUS status;
+    memset(&status, 0, sizeof status);
+    bool have_status = d->km->GetStatus(status, true) == 0;
+    for (int i = 0; i < 8; i++) {
+        int ch = d->cfg.channel[i];
+        if (ch < 0) continue;
+        if (on) {
+            // enable at the current destination: no jump for open-loop axes
+            if (have_status) snprintf(cmd, sizeof cmd, "EnableAxisDest%d %.0f", ch, status.Dest[ch]);   // console form: no "="
+            else snprintf(cmd, sizeof cmd, "EnableAxis%d", ch);
+        } else {
+            snprintf(cmd, sizeof cmd, "DisableAxis%d", ch);
+        }
+        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return; }
+    }
+}
+
+static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
+{
+    // an incremental or absolute jog: a move of the one actuator to the target counts
+    if (c.axis < 0 || c.axis >= 8) return;
+    int ch = d->cfg.channel[c.axis];
+    if (ch < 0) return;
+    double target[9];
+    memcpy(target, d->pos, sizeof target);
+    target[c.axis] = c.end[c.axis];
+    double acts[MAX_ACTUATORS];
+    if (d->cm->Kinematics->TransformCADtoActuators(target[0], target[1], target[2], target[3], target[4], target[5], target[6], target[7], acts)) return;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "Move%d=%.3f", ch, acts[c.axis]);
+    if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
+}
+
+// ---- worker loop --------------------------------------------------------------------------
+static void worker_main(KmBackend::Impl *d)
+{
+    d->last_tick = d->last_poll = now_s();
+    while (!d->stop) {
+        // commands
+        for (;;) {
+            Cmd c;
+            {
+                std::unique_lock<std::mutex> lock(d->qmx);
+                if (d->q.empty()) break;
+                c = d->q.front();
+                d->q.pop_front();
+            }
+            switch (c.kind) {
+            case Cmd::LINE: w_line(d, c); break;
+            case Cmd::ARC: w_arc(d, c); break;
+            case Cmd::DWELL: w_dwell(d, c); break;
+            case Cmd::ABORT: w_abort(d); break;
+            case Cmd::FEED:
+                d->feed_scale = c.feed_scale;
+                d->rapid_scale = c.rapid_scale;
+                if (!d->cfg.simulate) {
+                    d->cm->SetFeedRateOverride(c.feed_scale);
+                    d->cm->SetFeedRateRapidOverride(c.rapid_scale);
+                }
+                break;
+            case Cmd::SET_POS:
+                if (d->cfg.simulate && !d->have_cur && d->replay.empty() && !d->unflushed) {
+                    memcpy(d->pos, c.end, sizeof d->pos);
+                    set_cm_position(d, d->pos);
+                }
+                break;
+            case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
+            case Cmd::JOG_TO: if (!d->cfg.simulate) w_jog_to(d, c); break;
+            }
+        }
+        double t = now_s();
+        // the planner finalizes the last moves only when told that no more are coming:
+        // flush once task has been quiet for a moment (program end, M0, tool change, dwell)
+        bool flush_now;
+        {
+            std::lock_guard<std::mutex> lk(d->wmx);
+            flush_now = d->unflushed && t - d->last_move_t > 0.05;
+        }
+        if (flush_now) w_flush(d);
+        if (d->cfg.simulate) {
+            double dt = t - d->last_tick;
+            if (dt > 0.1) dt = 0.1;
+            w_replay(d, dt);
+            d->last_tick = t;
+            publish(d);
+        }
+        std::unique_lock<std::mutex> lock(d->qmx);
+        if (d->q.empty()) d->qcv.wait_for(lock, std::chrono::milliseconds(5));
+    }
+}
+
+// ---- KmBackend ----------------------------------------------------------------------------
+KmBackend::KmBackend() : d(new Impl)
+{
+    memset(&d->st, 0, sizeof d->st);
+    memset(d->pos, 0, sizeof d->pos);
+    for (int i = 0; i < 8; i++) { d->enabled[i] = true; d->scale[i] = 1; d->used[i] = false; }
+}
+
 KmBackend::~KmBackend()
 {
+    d->stop = true;
+    d->qcv.notify_one();
+    if (d->worker.joinable()) d->worker.join();
+    if (d->poller.joinable()) d->poller.join();
     delete d->cm;
     delete d->km;
     delete d;
 }
 
-const char *KmBackend::mode_name() const { return d->cfg.simulate ? "KMotion planner, simulated execution" : "KMotion planner and board"; }
+bool KmBackend::is_board() const { return !d->cfg.simulate; }
+
+const char *KmBackend::mode_name() const
+{
+    return d->cfg.simulate ? "KMotion planner, simulated execution" : "KMotion planner and board";
+}
 
 bool KmBackend::init(const KmConfig &cfg, const double pos[9])
 {
@@ -233,12 +764,6 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
     CCoordMotion *cm = d->cm;
     cm->m_Simulate = cfg.simulate;
     cm->m_DoTime = true;            // plan with real timing even without a board
-
-    // the coordinate system, without asking the board
-    cm->x_axis = cfg.channel[0]; cm->y_axis = cfg.channel[1]; cm->z_axis = cfg.channel[2];
-    cm->a_axis = cfg.channel[3]; cm->b_axis = cfg.channel[4]; cm->c_axis = cfg.channel[5];
-    cm->u_axis = cfg.channel[6]; cm->v_axis = cfg.channel[7];
-    cm->m_DefineCS_valid = cm->m_DefineCS_known = true;
 
     MOTION_PARAMS *MP = cm->GetMotionParams();
     MP->BreakAngle = cfg.break_angle;
@@ -282,174 +807,176 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
     MP->ActuatorLimits = cfg.actuator_limits;
     MP->LogSegments = cfg.log_segments;
     cm->SetTPParams();
-    // rapids use the board's own axis settings and GetRapidSettings would fetch them
-    // (even in simulate mode it tries, which launches KMotionServer): the rapid limits
-    // are set above, so mark them fresh
-    if (cfg.simulate) cm->RapidParamsDirty = false;
+
+    if (cfg.simulate) {
+        // the coordinate system, without asking the board
+        cm->x_axis = cfg.channel[0]; cm->y_axis = cfg.channel[1]; cm->z_axis = cfg.channel[2];
+        cm->a_axis = cfg.channel[3]; cm->b_axis = cfg.channel[4]; cm->c_axis = cfg.channel[5];
+        cm->u_axis = cfg.channel[6]; cm->v_axis = cfg.channel[7];
+        cm->m_DefineCS_valid = cm->m_DefineCS_known = true;
+        // rapids use the board's own axis settings and GetRapidSettings would fetch them
+        // (even in simulate mode it tries, which launches KMotionServer): the rapid limits
+        // are set above, so mark them fresh
+        cm->RapidParamsDirty = false;
+        set_cm_position(d, pos);
+    } else {
+        int type = 0;
+        if (d->km->CheckKMotionVersion(&type)) {
+            std::string m;
+            { std::lock_guard<std::mutex> lock(g_msg_mutex); m = g_message; g_message.clear(); }
+            fprintf(stderr, "kmotion-motion: no board, or firmware mismatch: %s\n", m.c_str());
+            return false;
+        }
+        fprintf(stderr, "kmotion-motion: connected to a %s\n", type == BOARD_TYPE_KOGNA ? "Kogna" : "KFLOP");
+        d->km->SetConsoleCallback(console_handler);     // registers with the server: board mode only
+        if (cfg.init_program[0] && run_program(d, cfg.init_program, cfg.init_thread)) {
+            std::string m;
+            { std::lock_guard<std::mutex> lock(d->smx); m = d->messages; }
+            fprintf(stderr, "kmotion-motion: %s\n", m.c_str());
+            return false;
+        }
+        if (cm->SetAxisDefinitions(cfg.channel[0], cfg.channel[1], cfg.channel[2], cfg.channel[3],
+                                   cfg.channel[4], cfg.channel[5], cfg.channel[6], cfg.channel[7])) {
+            fprintf(stderr, "kmotion-motion: DefineCS failed\n");
+            return false;
+        }
+        double x, y, z, a, b, c, u, v;
+        if (cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v)) {
+            fprintf(stderr, "kmotion-motion: reading the board position failed\n");
+            cm->ClearAbort();
+            return false;
+        }
+        double p[9] = {x, y, z, a, b, c, u, v, 0};
+        memcpy(d->pos, p, sizeof p);
+        d->connected = true;
+    }
     cm->ClearAbort();
     cm->ClearHalt();
-    set_position(pos);
+    {
+        std::lock_guard<std::mutex> lock(d->smx);
+        memcpy(d->st.pos, d->pos, sizeof d->st.pos);
+        for (int i = 0; i < 8; i++) d->st.enabled[i] = true;
+        d->st.connected = true;
+    }
+    d->worker = std::thread(worker_main, d);
+    if (!cfg.simulate) d->poller = std::thread(poller_main, d);
     return true;
 }
 
 void KmBackend::set_position(const double pos[9])
 {
-    memcpy(d->pos, pos, sizeof d->pos);
-    CCoordMotion *cm = d->cm;
-    cm->current_x = pos[0]; cm->current_y = pos[1]; cm->current_z = pos[2];
-    cm->current_a = pos[3]; cm->current_b = pos[4]; cm->current_c = pos[5];
-    cm->current_u = pos[6]; cm->current_v = pos[7];
-}
-
-static int fail(KmBackend::Impl *d, const char *what)
-{
-    if (g_message.empty()) g_message = std::string(what) + " failed in KMotion's planner";
-    d->cm->ClearAbort();
-    return 1;
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::SET_POS;
+    memcpy(c.end, pos, sizeof c.end);
+    d->post(c);
 }
 
 int KmBackend::line(const double end[9], double vel, double acc, bool rapid, int id)
 {
-    int seq = ++d->serial;
-    d->ids.push_back(id);
-    d->unflushed = true;
-    int r = d->cm->StraightFeedAccelRapid(vel, acc, rapid, true, end[0], end[1], end[2], end[3], end[4], end[5], end[6], end[7], seq, id);
-    harvest(d);
-    return r ? fail(d, "StraightFeed") : 0;
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::LINE;
+    memcpy(c.end, end, sizeof c.end);
+    c.vel = vel; c.acc = acc; c.rapid = rapid; c.id = id;
+    d->post(c);
+    return 0;
 }
 
 int KmBackend::arc(const double end[9], const double center[3], const double normal[3], int turn, double vel, double acc, int id)
 {
-    // LinuxCNC's center/normal/turn back to rs274ngc's canon arc, which KMotion's
-    // ArcFeed takes: the plane from the normal's dominant axis, (first, second,
-    // helix) axes in the plane's canonical order, rotation = sign * (turns + 1)
-    int plane_axis = 2;
-    if (fabs(normal[1]) > fabs(normal[plane_axis])) plane_axis = 1;
-    if (fabs(normal[0]) > fabs(normal[plane_axis])) plane_axis = 0;
-    CANON_PLANE plane;
-    int i1, i2, i3;
-    if (plane_axis == 2) { plane = CANON_PLANE_XY; i1 = 0; i2 = 1; i3 = 2; }
-    else if (plane_axis == 1) { plane = CANON_PLANE_XZ; i1 = 2; i2 = 0; i3 = 1; }
-    else { plane = CANON_PLANE_YZ; i1 = 1; i2 = 2; i3 = 0; }
-    int turns = turn < 0 ? -turn : turn;
-    int rotation = (normal[plane_axis] >= 0 ? 1 : -1) * (turns + 1);
-    int seq = ++d->serial;
-    d->ids.push_back(id);
-    d->unflushed = true;
-    int r = d->cm->ArcFeedAccel(vel, acc, plane, end[i1], end[i2], center[i1], center[i2], rotation, end[i3],
-                                end[3], end[4], end[5], end[6], end[7], seq, id);
-    harvest(d);
-    return r ? fail(d, "ArcFeed") : 0;
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::ARC;
+    memcpy(c.end, end, sizeof c.end);
+    memcpy(c.center, center, sizeof c.center);
+    memcpy(c.normal, normal, sizeof c.normal);
+    c.turn = turn; c.vel = vel; c.acc = acc; c.id = id;
+    d->post(c);
+    return 0;
 }
 
 int KmBackend::dwell(double seconds, int id)
 {
-    int seq = ++d->serial;
-    d->ids.push_back(id);
-    d->unflushed = true;
-    int r = d->cm->Dwell(seconds, seq);
-    harvest(d);
-    return r ? fail(d, "Dwell") : 0;
-}
-
-bool KmBackend::needs_flush() const { return d->unflushed; }
-
-int KmBackend::flush()
-{
-    if (!d->unflushed) return 0;
-    CCoordMotion *cm = d->cm;
-    // what FlushSegments does, minus the board: finish a 3rd order streaming run,
-    // finalize the remaining segments, "download" them (into the planner's buffer only,
-    // in simulate mode), then reset for the next run
-    if (cm->Kinematics->m_MotionParams.ThirdOrderTP && cm->TP3FlushRun("linuxcnc flush")) return fail(d, "TP3FlushRun");
-    MaximizeSegments();
-    for (int iseg = cm->m_nsegs_downloaded; iseg < nsegs; iseg++)
-        if (cm->OutputSegment(iseg)) return fail(d, "OutputSegment");
-    harvest(d);
-    tp_init();
-    cm->TP3ClearRun();
-    cm->DownloadInit();
-    d->harvested = 0;
-    d->unflushed = false;
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::DWELL;
+    c.seconds = seconds; c.id = id;
+    d->post(c);
     return 0;
 }
 
 void KmBackend::abort()
 {
-    CCoordMotion *cm = d->cm;
-    cm->SetAbort();
-    cm->ClearAbort();                 // re-initializes the planner
-    cm->ClearHalt();
-    d->replay.clear();
-    d->have_cur = false;
-    d->t_in_seg = 0;
-    d->harvested = 0;
-    d->unflushed = false;
-    d->ids.clear();
-    d->done_upto = d->serial;
-    d->current_vel = 0;
-    set_position(d->pos);
+    // break the worker out of any wait on the board, and stop the board now
+    d->cm->SetAbort();
+    if (!d->cfg.simulate) d->km->WriteLine("StopImmediate2");
+    d->paused = false;
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::ABORT;
+    d->post(c);
 }
 
-void KmBackend::pause(bool on) { d->paused = on; }
+void KmBackend::pause(bool on)
+{
+    d->paused = on;
+    if (!d->cfg.simulate) d->km->WriteLine(on ? "StopImmediate0" : "StopImmediate1");   // feed hold / resume
+}
 
 void KmBackend::set_feed_override(double feed_scale, double rapid_scale)
 {
-    d->feed_scale = feed_scale;
-    d->rapid_scale = rapid_scale;
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::FEED;
+    c.feed_scale = feed_scale; c.rapid_scale = rapid_scale;
+    d->post(c);
 }
 
-void KmBackend::step(double dt, KmState &out)
+void KmBackend::machine_on(bool on)
 {
-    Impl *d = this->d;
-    d->current_vel = 0;
-    double before[9];
-    memcpy(before, d->pos, sizeof before);     // the whole step's displacement gives the speed
-    if (!d->paused) {
-        // the board's feed override scales the whole coordinated motion's clock
-        double adv = dt * (d->feed_scale > 0 ? d->feed_scale : 0);
-        while (adv > 0) {
-            if (!d->have_cur) {
-                if (d->replay.empty()) break;
-                d->cur = d->replay.front();
-                d->replay.pop_front();
-                memcpy(d->cur.start, d->pos, sizeof d->cur.start);
-                d->have_cur = true;
-                d->t_in_seg = 0;
-                // a move spans many planned segments (hundreds of knots): it is finished
-                // once a segment of a later move starts
-                d->finish_upto(d->cur.seq - 1);
-            }
-            double left = d->cur.total - d->t_in_seg;
-            if (adv >= left) {
-                adv -= left;
-                double o[8];
-                eval(d->cur, d->cur.total, o);
-                to_cad(d, d->cur, o, d->pos);
-                d->have_cur = false;
-            } else {
-                d->t_in_seg += adv;
-                adv = 0;
-                double o[8];
-                eval(d->cur, d->t_in_seg, o);
-                to_cad(d, d->cur, o, d->pos);
-            }
-        }
-        double dd = 0;
-        for (int i = 0; i < 3; i++) dd += (d->pos[i] - before[i]) * (d->pos[i] - before[i]);
-        d->current_vel = dt > 0 ? sqrt(dd) / dt : 0;
-    }
-    if (!d->have_cur && d->replay.empty() && !d->unflushed) d->finish_upto(d->serial);
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::MACHINE_ON;
+    c.on = on;
+    d->post(c);
+}
 
-    memcpy(out.pos, d->pos, sizeof out.pos);
-    out.running = d->have_cur || !d->replay.empty() || d->unflushed;
-    out.depth = d->serial - d->done_upto;
-    out.active_id = d->have_cur ? d->id_of(d->cur.seq) : (out.depth > 0 ? d->id_of(d->done_upto + 1) : 0);
-    out.current_vel = d->current_vel;
-    out.distance_to_go = d->have_cur && d->cur.kind != 'K' && d->cur.total > 0 ? d->cur.dx * (1 - d->t_in_seg / d->cur.total) : 0;
+void KmBackend::jog(int axis, double vel)
+{
+    if (d->cfg.simulate || axis < 0 || axis >= 8) return;
+    int ch = d->cfg.channel[axis];
+    if (ch < 0) return;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "Jog%d=%.3f", ch, vel * d->scale[axis]);   // counts/s, the board's limits apply
+    if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
+}
+
+void KmBackend::jog_to(int axis, double target, double)
+{
+    if (d->cfg.simulate || axis < 0 || axis >= 8) return;
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::JOG_TO;
+    c.axis = axis;
+    c.end[axis] = target;
+    d->post(c);
+}
+
+void KmBackend::jog_stop(int axis)
+{
+    if (d->cfg.simulate) return;
+    for (int i = 0; i < 8; i++)
+        if ((axis < 0 || axis == i) && d->cfg.channel[i] >= 0) jog(i, 0);
+}
+
+void KmBackend::state(KmState &out)
+{
+    std::lock_guard<std::mutex> lock(d->smx);
+    out = d->st;
     out.message[0] = 0;
-    if (!g_message.empty()) {
-        snprintf(out.message, sizeof out.message, "%s", g_message.c_str());
-        g_message.clear();
+    if (!d->messages.empty()) {
+        snprintf(out.message, sizeof out.message, "%s", d->messages.c_str());
+        d->messages.clear();
     }
 }

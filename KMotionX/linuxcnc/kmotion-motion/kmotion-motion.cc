@@ -207,6 +207,7 @@ static bool any_jog_active()
 static void stop_jogs(int which)       // -1: all
 {
     for (int i = 0; i < NAXES; i++) if (which < 0 || which == i) m.jog[i].active = false;
+    if (km && km->is_board()) km->jog_stop(which);
 }
 
 static void start_segment(Segment &s)
@@ -277,10 +278,7 @@ static void model_step(double dt)
     m.current_vel = 0;
     // coordinated motion
     if (km) {
-        // the planner finalizes the last moves only when told that no more are coming:
-        // flush once task has been quiet for a moment (program end, M0, tool change, dwell)
-        if (km->needs_flush() && now_s() - m.last_move_time > 0.05) km->flush();
-        km->step(dt, m.ks);
+        km->state(m.ks);                 // the worker thread keeps it current
         if (m.ks.message[0]) report_error("%s", m.ks.message);
         memcpy(m.pos, m.ks.pos, sizeof m.pos);
         m.current_vel = m.ks.current_vel;
@@ -526,7 +524,7 @@ static void update_status()
             joint->motor_pos_fb = joint->motor_pos_cmd;
             SET_JOINT_INPOS_FLAG(joint, m.jog[j].active ? 0 : 1);
         }
-        SET_JOINT_ENABLE_FLAG(joint, GET_MOTION_ENABLE_FLAG());
+        SET_JOINT_ENABLE_FLAG(joint, GET_MOTION_ENABLE_FLAG() && (km == NULL || j >= 8 || m.ks.enabled[j]));
         js->flag = joint->flag;
         js->pos_cmd = joint->pos_cmd;
         js->pos_fb = joint->pos_fb;
@@ -612,6 +610,12 @@ static void start_jog(int index, bool to_target, double target, double vel)
 {
     if (index < 0 || index >= NAXES) return;
     if (!GET_MOTION_ENABLE_FLAG() || (km ? m.ks.running : (m.active && !m.paused))) return;
+    if (km && km->is_board()) {
+        // the board jogs the actuator itself, within its own axis limits
+        if (to_target) km->jog_to(index, target, vel);
+        else km->jog(index, vel);
+        return;
+    }
     Jog &j = m.jog[index];
     j.active = true;
     j.to_target = to_target;
@@ -641,12 +645,14 @@ static void handle_command()
         log_print("ENABLE\n");
         SET_MOTION_ENABLE_FLAG(1);
         SET_MOTION_ERROR_FLAG(0);
+        if (km && km->is_board()) km->machine_on(true);
         update_motion_state();
         break;
     case EMCMOT_DISABLE:
         log_print("DISABLE\n");
         SET_MOTION_ENABLE_FLAG(0);
         if (km) km->abort();
+        if (km && km->is_board()) km->machine_on(false);
         m.queue.clear();
         m.active = false;
         m.paused = false;
@@ -1132,6 +1138,13 @@ static bool read_kmotion_config(KmConfig &cfg)
         return false;
     }
     const char *K = "KMOTION";
+    const char *mode_ini = ini.get(K, "MODE");
+    if (mode_ini && !strcasecmp(mode_ini, "board")) cfg.simulate = false;
+    else if (mode_ini && !strcasecmp(mode_ini, "standin")) mode = "standin";
+    const char *prog = ini.get(K, "INIT_PROGRAM");
+    if (prog) snprintf(cfg.init_program, sizeof cfg.init_program, "%s", prog);
+    cfg.init_thread = (int) ini.num(K, "INIT_THREAD", 1);
+    cfg.status_period = ini.num(K, "STATUS_PERIOD_MS", 20) * 1e-3;
     cfg.third_order = ini.num(K, "THIRD_ORDER", 1) != 0;
     cfg.cubic_knots = ini.num(K, "CUBIC_KNOTS", 1) != 0;
     cfg.actuator_limits = ini.num(K, "ACTUATOR_LIMITS", 1) != 0;
@@ -1204,9 +1217,9 @@ int main(int argc, char *argv[])
         hal_exit(comp_id);
         return 1;
     }
+    KmConfig cfg;
+    if (mode == "kmotion" && !read_kmotion_config(cfg)) { hal_exit(comp_id); return 1; }
     if (mode == "kmotion") {
-        KmConfig cfg;
-        if (!read_kmotion_config(cfg)) { hal_exit(comp_id); return 1; }
         km = new KmBackend;
         if (!km->init(cfg, m.pos)) {
             fprintf(stderr, "kmotion-motion: the KMotion planner could not be set up\n");
