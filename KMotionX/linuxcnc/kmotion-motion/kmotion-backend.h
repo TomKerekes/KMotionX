@@ -8,8 +8,8 @@
  * The backend runs KMotion in its own thread: CoordMotion's calls block while the
  * board's buffer is full (that is its flow control), and LinuxCNC's task times a
  * motion command out after a second, so the protocol loop must never wait on them.
- * Moves and settings are queued to the worker; feedhold, resume, abort and jogs go
- * to the board straight away (the KMotion pipe serializes the two threads).
+ * Moves and settings are queued to the worker; feed hold, resume, the stop of an abort
+ * and jogs go to the board through a small command thread of their own, in order.
  *
  * Units are LinuxCNC's machine units (the configs here are inches, which is also
  * what KMotion's planner uses; a mm machine needs the conversion added).
@@ -38,6 +38,8 @@ struct KmConfig {
     double lookahead = 3.0;
     KmAxisParams axis[8];
     int channel[8] = {0, 1, 2, -1, -1, -1, -1, -1};   // board channel per axis (DefineCS)
+    int queue_limit = 500;        // LinuxCNC moves the protocol side lets task queue: while that
+                                  // many are pending, task is waiting for us, not out of moves
     // board mode
     char init_program[512] = "";  // C program run once at start (axis setup), "" for none
     int init_thread = 1;
@@ -52,6 +54,7 @@ struct KmState {
     bool running;                 // something is executing or still being planned
     bool paused;
     bool connected;               // board mode: status is coming from the board
+    int errors;                   // planner failures so far; each one stopped the motion
     double current_vel;
     double distance_to_go;
     char message[512];            // non-empty: a message for the operator (cleared by the call)
@@ -70,6 +73,9 @@ public:
     int line(const double end[9], double vel, double acc, bool rapid, int id);
     int arc(const double end[9], const double center[3], const double normal[3], int turn, double vel, double acc, int id);
     int dwell(double seconds, int id);
+    // LinuxCNC's SET_TERM_COND (G61/G61.1/G64 P): 1 = exact stop at block ends, 2 = blend;
+    // tolerance in machine units, 0 = the planner's own corner tolerance
+    void set_path_mode(int term_cond, double tolerance);
     // drop everything, stop where we are
     void abort();
     void pause(bool on);

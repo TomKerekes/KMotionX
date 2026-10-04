@@ -21,6 +21,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -67,11 +68,11 @@ struct Seg {
 };
 
 struct Cmd {
-    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO } kind;
+    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE } kind;
     double end[9], center[3], normal[3];
-    double vel, acc, seconds, feed_scale, rapid_scale;
+    double vel, acc, seconds, feed_scale, rapid_scale, tolerance;
     bool rapid, on;
-    int turn, id, axis;
+    int turn, id, axis, term_cond;
 };
 
 struct KmBackend::Impl {
@@ -87,9 +88,21 @@ struct KmBackend::Impl {
     std::deque<Cmd> q;
     std::thread worker;             // plans and downloads (may block on the board's flow control)
     std::thread poller;             // board mode: polls status so the display never freezes
+    // urgent board commands from the protocol thread (feed hold, resume, the stop of an
+    // abort, jogs): sent in order by a thread of their own, so the protocol loop never
+    // waits on the board link (task times a command out after 1 s; the link has stalled
+    // for over a second under heavy polling)
+    std::thread urgent;
+    std::mutex umx;
+    std::condition_variable ucv;
+    std::deque<std::string> uq;
     std::mutex wmx;                 // the run bookkeeping below, shared by the two threads
     std::atomic<bool> stop{false};
     std::atomic<bool> paused{false};
+    std::atomic<bool> aborting{false}; // abort() requested, the worker has not finished it yet
+    std::atomic<int> stop_state{0};    // board: MAIN_STATUS.StopImmediateState from the last status poll
+    std::atomic<unsigned> status_count{0};   // board: status polls so far
+    std::atomic<int> errors{0};        // planner failures so far (each one stopped the motion)
 
     // published state
     std::mutex smx;
@@ -102,7 +115,10 @@ struct KmBackend::Impl {
     std::deque<int> ids;            // LinuxCNC id per sequence number, ids[0] is for done_upto + 1
     bool unflushed = false;         // moves handed over since the last flush
     double last_move_t = 0;
+    double last_full_t = 0;         // when task's queue was last seen full (it needs a moment to refill)
     double pos[9];
+    double cmd_end[8];              // where the last move handed to the planner ends (its own
+                                    // current_* lags one staged chord behind after an arc)
     bool enabled[8];
     double feed_scale = 1.0, rapid_scale = 1.0;
     double current_vel = 0;
@@ -132,6 +148,12 @@ struct KmBackend::Impl {
         std::lock_guard<std::mutex> lock(qmx);
         q.push_back(c);
         qcv.notify_one();
+    }
+    void send_urgent(const std::string &cmd)
+    {
+        std::lock_guard<std::mutex> lock(umx);
+        uq.push_back(cmd);
+        ucv.notify_one();
     }
     void message(const std::string &m)
     {
@@ -292,9 +314,17 @@ static void set_cm_position(KmBackend::Impl *d, const double pos[9])
     cm->current_x = pos[0]; cm->current_y = pos[1]; cm->current_z = pos[2];
     cm->current_a = pos[3]; cm->current_b = pos[4]; cm->current_c = pos[5];
     cm->current_u = pos[6]; cm->current_v = pos[7];
+    memcpy(d->cmd_end, pos, sizeof d->cmd_end);
 }
 
-static void fail(KmBackend::Impl *d, const char *what)
+static void w_abort(KmBackend::Impl *d);
+
+// the planner refused a move or a flush. Our own abort makes it return failures too
+// (that is how the worker gets out of a blocking download): those are not errors.
+// Anything else is one: the planner is left mid-path, so the run is stopped like an
+// abort and LinuxCNC gets the message and its motion error flag (what motmod does
+// when tpAddLine fails)
+static void fail(KmBackend::Impl *d, const char *what, int id = 0)
 {
     std::string m;
     {
@@ -302,10 +332,12 @@ static void fail(KmBackend::Impl *d, const char *what)
         m = g_message;
         g_message.clear();
     }
+    if (d->aborting) return;
     if (m.empty()) m = std::string(what) + " failed in KMotion's planner";
+    if (id > 0) m += " (line " + std::to_string(id) + ")";
     d->message(m);
-    d->cm->ClearAbort();
-    d->cm->ClearHalt();
+    d->errors++;
+    w_abort(d);
 }
 
 // ---- worker: planning ----------------------------------------------------------------
@@ -323,16 +355,26 @@ static int begin_move(KmBackend::Impl *d, int id)
 static void w_line(KmBackend::Impl *d, const Cmd &c)
 {
     int seq = begin_move(d, c.id);
-    int r = d->cm->StraightFeedAccelRapid(c.vel, c.acc, c.rapid, true, c.end[0], c.end[1], c.end[2], c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, c.id);
+    // the planner's ID argument is its cutter-compensation hint (1/2/3), not a line number
+    int r = d->cm->StraightFeedAccelRapid(c.vel, c.acc, c.rapid, true, c.end[0], c.end[1], c.end[2], c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, 0);
+    if (!r) memcpy(d->cmd_end, c.end, sizeof d->cmd_end);
     harvest(d);
-    if (r) fail(d, "StraightFeed");
+    if (r) fail(d, "StraightFeed", c.id);
 }
 
 static void w_arc(KmBackend::Impl *d, const Cmd &c)
 {
     // LinuxCNC's center/normal/turn back to rs274ngc's canon arc, which KMotion's
-    // ArcFeed takes: the plane from the normal's dominant axis, (first, second,
-    // helix) axes in the plane's canonical order, rotation = sign * (turns + 1)
+    // ArcFeed takes. The plane from the normal's dominant axis; (first, second | helix)
+    // axes in the plane's canonical order: XY (x, y | z), XZ (z, x | y), YZ (y, z | x).
+    // The direction as posemath's pmCircleInit reads it: counterclockwise about the
+    // normal with `turn` extra full turns when turn >= 0; turn < 0 flips the normal
+    // (clockwise) and means -1 - turn extra turns. The planner takes a plain CCW flag
+    // (its own canon passes rotation == 1) and knows no multiple turns: those become
+    // half circles ahead of the final arc, the helix and the other axes advancing in
+    // proportion to the angle. Each piece gets its own planner sequence number, like
+    // G-code lines (the planner kept only one of two identical pieces under one number);
+    // they all map to the one LinuxCNC id.
     int plane_axis = 2;
     if (fabs(c.normal[1]) > fabs(c.normal[plane_axis])) plane_axis = 1;
     if (fabs(c.normal[0]) > fabs(c.normal[plane_axis])) plane_axis = 0;
@@ -341,13 +383,40 @@ static void w_arc(KmBackend::Impl *d, const Cmd &c)
     if (plane_axis == 2) { plane = CANON_PLANE_XY; i1 = 0; i2 = 1; i3 = 2; }
     else if (plane_axis == 1) { plane = CANON_PLANE_XZ; i1 = 2; i2 = 0; i3 = 1; }
     else { plane = CANON_PLANE_YZ; i1 = 1; i2 = 2; i3 = 0; }
-    int turns = c.turn < 0 ? -c.turn : c.turn;
-    int rotation = (c.normal[plane_axis] >= 0 ? 1 : -1) * (turns + 1);
-    int seq = begin_move(d, c.id);
-    int r = d->cm->ArcFeedAccel(c.vel, c.acc, plane, c.end[i1], c.end[i2], c.center[i1], c.center[i2], rotation, c.end[i3],
-                                c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, c.id);
+    bool ccw = c.normal[plane_axis] >= 0;
+    int extra = c.turn;
+    if (c.turn < 0) { ccw = !ccw; extra = -1 - c.turn; }
+    CCoordMotion *cm = d->cm;
+    double cur[8];
+    memcpy(cur, d->cmd_end, sizeof cur);        // not cm->current_*: see cmd_end
+    int r = 0;
+    if (extra > 0) {
+        // the final arc's angle as the planner will see it: (0, 2 pi] CCW, [-2 pi, 0) CW
+        double t0 = atan2(cur[i2] - c.center[i2], cur[i1] - c.center[i1]);
+        double t1 = atan2(c.end[i2] - c.center[i2], c.end[i1] - c.center[i1]);
+        double dt = t1 - t0;
+        if (fabs(dt) < 1e-9) dt = 0;
+        if (ccw) { if (dt <= 0) dt += 2 * M_PI; } else { if (dt >= 0) dt -= 2 * M_PI; }
+        double total = fabs(dt) + 2 * M_PI * extra;
+        double opp1 = 2 * c.center[i1] - cur[i1], opp2 = 2 * c.center[i2] - cur[i2];   // across the circle
+        for (int k = 1; k <= 2 * extra && r == 0; k++) {
+            double f = M_PI * k / total;            // fraction of the whole motion after k half circles
+            double mid[8];
+            for (int i = 0; i < 8; i++) mid[i] = cur[i] + (c.end[i] - cur[i]) * f;
+            bool back = (k % 2) == 0;
+            int seq = begin_move(d, c.id);
+            r = cm->ArcFeedAccel(c.vel, c.acc, plane, back ? cur[i1] : opp1, back ? cur[i2] : opp2, c.center[i1], c.center[i2], ccw ? 1 : 0, mid[i3],
+                                 mid[3], mid[4], mid[5], mid[6], mid[7], seq, 0);
+        }
+    }
+    if (r == 0) {
+        int seq = begin_move(d, c.id);
+        r = cm->ArcFeedAccel(c.vel, c.acc, plane, c.end[i1], c.end[i2], c.center[i1], c.center[i2], ccw ? 1 : 0, c.end[i3],
+                             c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, 0);
+    }
+    if (!r) memcpy(d->cmd_end, c.end, sizeof d->cmd_end);
     harvest(d);
-    if (r) fail(d, "ArcFeed");
+    if (r) fail(d, "ArcFeed", c.id);
 }
 
 static void w_dwell(KmBackend::Impl *d, const Cmd &c)
@@ -355,7 +424,7 @@ static void w_dwell(KmBackend::Impl *d, const Cmd &c)
     int seq = begin_move(d, c.id);
     int r = d->cm->Dwell(c.seconds, seq);
     harvest(d);
-    if (r) fail(d, "Dwell");
+    if (r) fail(d, "Dwell", c.id);
 }
 
 static void w_abort(KmBackend::Impl *d);
@@ -370,10 +439,13 @@ static void w_flush(KmBackend::Impl *d)
     }
     if (!d->cfg.simulate) {
         // the real thing: finishes the plan, downloads the rest, starts the buffer
-        if (cm->FlushSegments()) {
+        double t0 = now_s();
+        if (getenv("KM_DEBUG_STOP")) fprintf(stderr, "kmotion-motion: FlushSegments begins (%d segments planned)\n", nsegs);
+        int fr = cm->FlushSegments();
+        if (getenv("KM_DEBUG_STOP")) fprintf(stderr, "kmotion-motion: FlushSegments returned %d after %.3f s\n", fr, now_s() - t0);
+        if (fr) {
             if (cm->m_AxisDisabled) { d->message("an axis of the coordinate system is disabled: motion refused"); cm->m_AxisDisabled = false; }
-            fail(d, "FlushSegments");
-            w_abort(d);                 // the moves are lost: let LinuxCNC's queue drain
+            fail(d, "FlushSegments");   // stops the run; the moves are lost and LinuxCNC's queue drains
         }
         return;
     }
@@ -391,9 +463,47 @@ static void w_flush(KmBackend::Impl *d)
     d->harvested = 0;
 }
 
+static int board_query(KmBackend::Impl *d, const char *cmd, char *reply);
+
+// bring the board to a stop the way KMotion's own Halt does (CCoordMotion::
+// CheckMotionHalt): StopImmediate0 is the feed hold (every axis decelerates within its
+// limits), GetStopState says when it has come to rest, StopImmediate2 then clears the
+// stop state without resuming and the rest of the buffer is abandoned. StopImmediate2
+// on its own does nothing to a moving board.
+static void board_stop(KmBackend::Impl *d)
+{
+    char reply[MAX_LINE + 1];
+    unsigned c0 = d->status_count;
+    if (d->km->WriteLine("StopImmediate0")) d->message("StopImmediate0 failed");   // abort() has queued one too: harmless twice
+    double t0 = now_s(), t_check = t0;
+    bool was_moving = false;
+    int last_state = -1;
+    // the stop state comes with the status poll (MAIN_STATUS.StopImmediateState): polling
+    // GetStopState here starved the status thread, and the display froze for the whole
+    // stop and then jumped to the rest position
+    for (;;) {
+        int state = d->stop_state;
+        if (d->status_count >= c0 + 2) {                  // two polls after the hold went out
+            if (getenv("KM_DEBUG_STOP") && state != last_state) { fprintf(stderr, "kmotion-motion: stop state %d at %.3f s\n", state, now_s() - t0); last_state = state; }
+            if (state != 1 && state != 2) break;          // at rest, or nothing was moving
+            was_moving = true;
+            // the buffer may run out while the hold is still ramping: at rest as well
+            if (state == 1 && now_s() - t_check > 0.25) {
+                t_check = now_s();
+                if (board_query(d, "CheckDoneBuf", reply) == 0 && strcmp(reply, "0") != 0) break;
+            }
+        }
+        if (now_s() - t0 > 10) { d->message("the board did not come to a stop within 10 s"); break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (d->km->WriteLine("StopImmediate2")) d->message("StopImmediate2 failed");
+    if (was_moving) fprintf(stderr, "kmotion-motion: board stopped (%.2f s)\n", now_s() - t0);
+}
+
 static void w_abort(KmBackend::Impl *d)
 {
     CCoordMotion *cm = d->cm;
+    if (!d->cfg.simulate) board_stop(d);
     cm->SetAbort();
     cm->ClearAbort();                 // re-initializes the planner
     cm->ClearHalt();
@@ -419,7 +529,13 @@ static void w_abort(KmBackend::Impl *d)
             memcpy(d->pos, p, sizeof p);
         }
         cm->ClearAbort();
+        // the planner's current position is the end of the last move it was given, up to
+        // the lookahead ahead of the board; the next move must start where the board
+        // stands or the board jumps there first (seen: a 0.35 in leap at the restart)
+        set_cm_position(d, d->pos);
     }
+    memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
+    d->aborting = false;
 }
 
 static void w_replay(KmBackend::Impl *d, double dt)
@@ -510,12 +626,20 @@ static void w_poll_board(KmBackend::Impl *d)
     }
     int r = d->km->GetStatus(status, false);
     d->km->ReleaseToken();
+    {
+        static double last_ok = 0;
+        double now = now_s();
+        if (getenv("KM_DEBUG_STOP") && last_ok > 0 && now - last_ok > 0.2) fprintf(stderr, "kmotion-motion: status gap %.3f s\n", now - last_ok);
+        last_ok = now;
+    }
     if (r) {
         if (d->connected) d->message("lost the board: GetStatus failed");
         d->connected = false;
         return;
     }
     d->connected = true;
+    d->stop_state = status.StopImmediateState;
+    d->status_count++;
     // positions: the commanded destinations (open-loop machines report no other position)
     double acts[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     double before[9];
@@ -567,6 +691,8 @@ static void w_poll_board(KmBackend::Impl *d)
                 }
             } else if (strcmp(reply, "-1") == 0) {
                 d->message("an axis is disabled: motion aborted");
+                d->errors++;
+                d->aborting = true;
                 cm->SetAbort();
                 Cmd c;
                 memset(&c, 0, sizeof c);
@@ -585,8 +711,10 @@ static void publish(KmBackend::Impl *d)
     KmState &s = d->st;
     memcpy(s.pos, d->pos, sizeof s.pos);
     for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
-    s.depth = d->serial - d->done_upto;
-    s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty();
+    s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
+    for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
+    s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting;
+    s.errors = d->errors;
     s.active_id = s.depth > 0 ? d->id_of(d->done_upto + 1) : 0;
     s.paused = d->paused;
     s.connected = d->cfg.simulate ? true : d->connected;
@@ -602,6 +730,23 @@ static void publish(KmBackend::Impl *d)
 }
 
 // board mode: status at its own pace, whatever the planner is waiting on
+static void urgent_main(KmBackend::Impl *d)
+{
+    while (!d->stop) {
+        std::string cmd;
+        {
+            std::unique_lock<std::mutex> lock(d->umx);
+            if (d->uq.empty()) { d->ucv.wait_for(lock, std::chrono::milliseconds(20)); continue; }
+            cmd = d->uq.front();
+            d->uq.pop_front();
+        }
+        double t0 = now_s();
+        if (d->km->WriteLine(cmd.c_str())) d->message(std::string("board command failed: ") + cmd);
+        if (getenv("KM_DEBUG_STOP") && cmd.compare(0, 13, "StopImmediate") == 0)
+            fprintf(stderr, "kmotion-motion: %s sent, took %.3f s\n", cmd.c_str(), now_s() - t0);
+    }
+}
+
 static void poller_main(KmBackend::Impl *d)
 {
     while (!d->stop) {
@@ -704,16 +849,47 @@ static void worker_main(KmBackend::Impl *d)
                 }
                 break;
             case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
+            case Cmd::PATH_MODE:
+                // in program order with the moves; the planner applies it per waypoint
+                d->cm->SetPathMode(c.term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP,
+                                   (c.term_cond == 2 && c.tolerance > 0) ? c.tolerance : -1.0);
+                break;
             case Cmd::JOG_TO: if (!d->cfg.simulate) w_jog_to(d, c); break;
             }
         }
         double t = now_s();
+        // keep the board (or the replay) fed between waypoints: the planner downloads its
+        // finalized segments in bounded chunks when it gets to it, every 8th waypoint,
+        // which is too rare when task trickles moves in one at a time against a full queue
+        // (the replay ran dry with 19 moves pending; on the board the buffer would starve)
+        if (d->unflushed && !d->aborting && nsegs > d->cm->m_nsegs_downloaded) {
+            if (d->cm->DownloadDoneSegments()) fail(d, "DownloadDoneSegments");
+            else harvest(d);
+        }
         // the planner finalizes the last moves only when told that no more are coming:
-        // flush once task has been quiet for a moment (program end, M0, tool change, dwell)
+        // flush once task has been quiet for a moment (program end, M0, tool change, dwell).
+        // Not while task's queue is full and motion is under way: then task is waiting for
+        // a move to finish before it hands over the next one, and a flush here would end
+        // the run with a stop after every move (seen as arcs stopping at every segment)
         bool flush_now;
         {
             std::lock_guard<std::mutex> lk(d->wmx);
-            flush_now = d->unflushed && t - d->last_move_t > 0.05;
+            int pending = 0;
+            for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) pending++;
+            bool executing = d->cfg.simulate ? (d->have_cur || !d->replay.empty()) : (d->run_active && d->cm->CoordLaunched());
+            if (pending >= d->cfg.queue_limit) d->last_full_t = t;
+            // quiet = no move handed over for 50 ms. With the queue below its limit that means
+            // task has nothing more (program end, M0, tool change, dwell) - but task needs a
+            // few ms to refill a slot a finished move has just freed, so a full queue must
+            // also be 50 ms in the past. With nothing executing, a flush is the only way to
+            // get going again, full queue or not (the planner holds its tail back until
+            // either more moves come or it is told that none will)
+            bool quiet_moves = t - d->last_move_t > 0.05;
+            bool slot_settled = t - d->last_full_t > 0.05;
+            flush_now = d->unflushed && quiet_moves && ((pending < d->cfg.queue_limit && slot_settled) || !executing);
+            if (flush_now && getenv("KM_DEBUG_FLUSH"))
+                fprintf(stderr, "kmotion-motion: flush: %d pending (limit %d), executing %d, quiet %.3f s, serial %d done_upto %d\n",
+                        pending, d->cfg.queue_limit, (int) executing, t - d->last_move_t, d->serial, d->done_upto);
         }
         if (flush_now) w_flush(d);
         if (d->cfg.simulate) {
@@ -738,10 +914,13 @@ KmBackend::KmBackend() : d(new Impl)
 
 KmBackend::~KmBackend()
 {
+    d->cm->SetAbort();                // gets the worker out of a blocking download (e.g. paused mid-run)
     d->stop = true;
     d->qcv.notify_one();
     if (d->worker.joinable()) d->worker.join();
     if (d->poller.joinable()) d->poller.join();
+    d->ucv.notify_one();
+    if (d->urgent.joinable()) d->urgent.join();
     delete d->cm;
     delete d->km;
     delete d;
@@ -858,8 +1037,12 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         for (int i = 0; i < 8; i++) d->st.enabled[i] = true;
         d->st.connected = true;
     }
+    memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
     d->worker = std::thread(worker_main, d);
-    if (!cfg.simulate) d->poller = std::thread(poller_main, d);
+    if (!cfg.simulate) {
+        d->poller = std::thread(poller_main, d);
+        d->urgent = std::thread(urgent_main, d);
+    }
     return true;
 }
 
@@ -896,6 +1079,15 @@ int KmBackend::arc(const double end[9], const double center[3], const double nor
     return 0;
 }
 
+void KmBackend::set_path_mode(int term_cond, double tolerance)
+{
+    Cmd c;
+    memset(&c, 0, sizeof c);
+    c.kind = Cmd::PATH_MODE;
+    c.term_cond = term_cond; c.tolerance = tolerance;
+    d->post(c);
+}
+
 int KmBackend::dwell(double seconds, int id)
 {
     Cmd c;
@@ -908,9 +1100,21 @@ int KmBackend::dwell(double seconds, int id)
 
 void KmBackend::abort()
 {
-    // break the worker out of any wait on the board, and stop the board now
+    // the moves still queued for the worker belong to the program being dropped; the
+    // planner's abort flag gets the worker out of any wait on the board; the board's
+    // feed hold starts now. The worker finishes the stop (waits for the board to come
+    // to rest, clears the stop state, resets the planner) and the state reads
+    // "running" until then
+    d->aborting = true;
+    {
+        std::lock_guard<std::mutex> lock(d->qmx);
+        std::deque<Cmd> keep;
+        for (const Cmd &x : d->q)
+            if (x.kind == Cmd::FEED || x.kind == Cmd::SET_POS || x.kind == Cmd::MACHINE_ON || x.kind == Cmd::PATH_MODE) keep.push_back(x);
+        d->q.swap(keep);
+    }
     d->cm->SetAbort();
-    if (!d->cfg.simulate) d->km->WriteLine("StopImmediate2");
+    if (!d->cfg.simulate) d->send_urgent("StopImmediate0");
     d->paused = false;
     Cmd c;
     memset(&c, 0, sizeof c);
@@ -921,7 +1125,7 @@ void KmBackend::abort()
 void KmBackend::pause(bool on)
 {
     d->paused = on;
-    if (!d->cfg.simulate) d->km->WriteLine(on ? "StopImmediate0" : "StopImmediate1");   // feed hold / resume
+    if (!d->cfg.simulate) d->send_urgent(on ? "StopImmediate0" : "StopImmediate1");   // feed hold / resume
 }
 
 void KmBackend::set_feed_override(double feed_scale, double rapid_scale)
@@ -949,7 +1153,7 @@ void KmBackend::jog(int axis, double vel)
     if (ch < 0) return;
     char cmd[64];
     snprintf(cmd, sizeof cmd, "Jog%d=%.3f", ch, vel * d->scale[axis]);   // counts/s, the board's limits apply
-    if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
+    d->send_urgent(cmd);
 }
 
 void KmBackend::jog_to(int axis, double target, double)

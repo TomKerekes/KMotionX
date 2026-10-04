@@ -36,6 +36,8 @@
 #include <map>
 #include <string>
 #include <signal.h>
+#include <thread>
+#include <chrono>
 #include <unistd.h>
 
 #include <hal.h>
@@ -69,7 +71,8 @@ static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
 
 static const int NAXES = 9;                 // x y z a b c u v w
-static const int QUEUE_LIMIT = 16;          // queueFull from here: bounds task's read-ahead
+static const int QUEUE_LIMIT = 500;         // queueFull from here: bounds task's read-ahead (motmod
+                                            // takes ~2000 segments; the planner wants seconds of it)
 static const char AXIS_LETTERS[NAXES + 1] = "xyzabcuvw";
 
 static void log_print(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -173,6 +176,8 @@ struct Model {
     bool probing;
     // with the KMotion backend
     KmState ks;             // what the backend reported last
+    int errors_seen;        // backend failures already turned into the error flag
+    int step_id;            // stepping: the line that was executing at the STEP command
     double last_move_time;  // when task last handed a move over (flush timing)
     int last_type;          // motion type and tag of the last move handed over
     struct state_tag_t last_tag;
@@ -184,6 +189,8 @@ static void model_init()
     m.queue.clear();
     m.active = m.paused = m.stepping = m.probing = false;
     m.last_id = 0;
+    m.errors_seen = 0;
+    m.step_id = 0;
     m.current_vel = 0;
     for (int i = 0; i < NAXES; i++) {
         m.pos[i] = 0;
@@ -206,8 +213,13 @@ static bool any_jog_active()
 
 static void stop_jogs(int which)       // -1: all
 {
-    for (int i = 0; i < NAXES; i++) if (which < 0 || which == i) m.jog[i].active = false;
-    if (km && km->is_board()) km->jog_stop(which);
+    for (int i = 0; i < NAXES; i++) {
+        if (which >= 0 && which != i) continue;
+        // only a jog that is running gets a stop on the board: a Jog<ch>=0 to an axis in
+        // coordinated motion would interfere with it (ABORT comes through here too)
+        if (m.jog[i].active && km && km->is_board()) km->jog_stop(i);
+        m.jog[i].active = false;
+    }
 }
 
 static void start_segment(Segment &s)
@@ -280,6 +292,20 @@ static void model_step(double dt)
     if (km) {
         km->state(m.ks);                 // the worker thread keeps it current
         if (m.ks.message[0]) report_error("%s", m.ks.message);
+        if (m.stepping && emcmotStatus->id != m.step_id && m.ks.active_id) {
+            km->pause(true);                  // the next line has started: the step is done
+            m.stepping = false;
+        }
+        if (m.ks.errors != m.errors_seen) {
+            // the planner refused a move, or the board dropped out: the backend has stopped
+            // the motion. The error flag makes task abort the program (motmod sets it when
+            // tpAddLine fails); ENABLE, ABORT and the mode changes clear it
+            m.errors_seen = m.ks.errors;
+            SET_MOTION_ERROR_FLAG(1);
+            m.queue.clear();
+            m.active = m.paused = m.stepping = false;
+            stop_jogs(-1);
+        }
         memcpy(m.pos, m.ks.pos, sizeof m.pos);
         m.current_vel = m.ks.current_vel;
         if (m.ks.active_id) m.last_id = m.ks.active_id;
@@ -630,6 +656,7 @@ static void handle_command()
     case EMCMOT_ABORT:
         log_print("ABORT\n");
         if (km) km->abort();
+        SET_MOTION_ERROR_FLAG(0);
         m.queue.clear();
         m.active = false;
         m.paused = false;
@@ -680,8 +707,14 @@ static void handle_command()
         break;
     case EMCMOT_STEP:
         log_print("STEP\n");
-        if (km) { m.paused = false; km->pause(false); }     // no single-step with the planner yet
-        else if (m.paused) { m.paused = false; m.stepping = true; }
+        // motmod: resume the paused motion until the executing line changes, then pause
+        // again; "paused" stays set throughout. With the board that pause is its feed hold,
+        // so the stop lands a little way into the next line
+        if (m.paused) {
+            m.stepping = true;
+            if (km) { m.step_id = emcmotStatus->id; km->pause(false); }
+            else m.paused = false;
+        }
         break;
     case EMCMOT_REVERSE:
         log_print("REVERSE (not supported here)\n");
@@ -934,6 +967,7 @@ static void handle_command()
         break;
     case EMCMOT_SET_TERM_COND:
         log_print("SET_TERM_COND termCond=%d, tolerance=%.6g\n", c->termCond, c->tolerance);
+        if (km) km->set_path_mode(c->termCond, c->tolerance);     // G61/G61.1/G64 P to the planner
         break;
     case EMCMOT_SET_NUM_JOINTS:
         log_print("SET_NUM_JOINTS %d\n", c->joint);
@@ -1218,6 +1252,7 @@ int main(int argc, char *argv[])
         return 1;
     }
     KmConfig cfg;
+    cfg.queue_limit = QUEUE_LIMIT;
     if (mode == "kmotion" && !read_kmotion_config(cfg)) { hal_exit(comp_id); return 1; }
     if (mode == "kmotion") {
         km = new KmBackend;
@@ -1275,6 +1310,21 @@ int main(int argc, char *argv[])
     }
 
     log_print("kmotion-motion stopping\n");
+    if (km) {
+        // a run in progress ends here: stop the board, give the backend a moment to finish
+        // the stop, then take it down - its threads must not outlive the process's
+        // static destructors (the process once hung in exit for good). A watchdog ends
+        // the process if the teardown hangs anyway.
+        std::thread([] { std::this_thread::sleep_for(std::chrono::seconds(3)); _exit(0); }).detach();
+        km->abort();
+        for (int i = 0; i < 200; i++) {
+            km->state(m.ks);
+            if (!m.ks.running) break;
+            usleep(5000);
+        }
+        delete km;
+        km = NULL;
+    }
     rtapi_shmem_delete(shmem_id, comp_id);
     hal_exit(comp_id);
     return 0;

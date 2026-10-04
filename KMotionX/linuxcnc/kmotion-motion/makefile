@@ -50,7 +50,9 @@ clean:
 
 # board-less check of the KMotion backend: the test program's moves through the planner
 test: build/backend-test
-	./build/backend-test 2>/dev/null | tail -14
+	./build/backend-test program 2>/dev/null | tail -14
+	./build/backend-test arcs 2>/dev/null | tail -16
+	./build/backend-test abort 2>/dev/null | tail -14
 
 build/backend-test: backend-test.cc build/kmotion-backend.o kmotion-backend.h | build
 	$(CXX) $(OPT) -std=c++20 -I. -o $@ backend-test.cc build/kmotion-backend.o $(KM_LIBS) -lpthread
