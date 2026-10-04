@@ -508,7 +508,7 @@ int CKMotionDLL::Pipe(const char *s, int n, char *r, int *m)
 				// because callback might throw an exception, delay doing the User Callback
 				// until everything is received back from the Server and we clean up
 
-				ErrorMsg = (TCHAR*)(r + 2);
+				ErrorMsg = (TCHAR*)(r + sizeof(TCHAR));  // the DEST code is one TCHAR wide (a char here, a wchar_t on Windows)
 				ReceivedErrMsg=true;
 			}
 			else

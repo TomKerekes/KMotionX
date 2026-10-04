@@ -285,6 +285,10 @@ SOCKET CKMotionIO::TryConnectToSocket(CString* pReason, unsigned long ipAddress,
 	}
 	int one = 1;  // the protocol is short request/response lines: send them right away
 	setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+	// a board that rebooted or lost power must show up as a socket error within seconds, not
+	// after the kernel's quarter hour of retransmissions: Failed() then reconnects on the next command
+	unsigned int unacked_ms = 10000;
+	setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &unacked_ms, sizeof unacked_ms);
 	return s;
 #endif	
 	return NULL;
@@ -1472,6 +1476,14 @@ int CKMotionIO::Disconnect()
 	Mutex->Lock();
 	
 	m_Connected=false;
+	
+	if (ConnectSocket)
+	{
+		// a Kogna: drop the TCP connection as well, so that the next command connects afresh.
+		// After "reboot!" the board knows nothing of this connection and would never answer on it
+		close(ConnectSocket);
+		ConnectSocket = 0;
+	}
 	
     if (_ftdi_usb_close(ftdi) < 0)
     {
