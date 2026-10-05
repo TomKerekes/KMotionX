@@ -7,6 +7,10 @@
 //   backend-test quit     pause mid-run, then abort and tear the backend down (process exit)
 //   backend-test gated    36 chords of a circle handed over the way task does it: only while
 //                         fewer than 20 moves are pending (the planner must not stop at each)
+//   backend-test home     (KM_BOARD=1 only) homes X through Home.c with a short search travel:
+//                         on a board without a switch the search gives up after that travel
+//                         and the result is "failed", which exercises the whole path;
+//                         KM_HOME_ABORT=1 aborts the homing after a second instead
 //   backend-test letters  the first moves of LinuxCNC's axis.ngc on the kmotion-kogna settings
 //                         (KM_KOGNA=1 selects those settings in simulate mode; KM_CORNER_TOL,
 //                         KM_BREAK_ANGLE override the planner's corner settings)
@@ -271,6 +275,39 @@ static void scenario_gated(KmBackend &km)
     check(f.t < 27, "no stops between the chords (time close to the ideal)");
 }
 
+static void scenario_home(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  home: board mode only (KM_BOARD=1)\n"); return; }
+    KmHomeRequest req;
+    KmHomeJoint &hj = req.joint[0];
+    hj.home = true;
+    hj.search_vel = -0.5;         // toward negative, 0.5 in/s
+    hj.latch_vel = -0.1;
+    hj.offset = 0;
+    hj.home_pos = 0.2;
+    hj.max_travel = 0.3;          // give up after 0.3 in without a switch
+    hj.sequence = 0;
+    Follower f(km);
+    f.km.state(f.st);
+    printf("  homing X from X%.4f: search -0.5 in/s, travel limit 0.3 in\n", f.st.pos[0]);
+    int serial0 = f.st.home_serial;
+    km.home(req);
+    bool aborted = false;
+    for (;;) {
+        f.run(f.t + 0.05, true);
+        if (getenv("KM_HOME_ABORT") && !aborted && f.t > 1.0) { printf("  t=%.2f abort\n", f.t); km.abort(); aborted = true; }
+        if (f.st.home_serial != serial0) break;
+        if (f.t > 30) { printf("  no result within 30 s\n"); break; }
+    }
+    printf("  t=%.2f homing %d, ok mask 0x%x, fail mask 0x%x, X%.4f\n", f.t, f.st.homing, f.st.home_ok_mask, f.st.home_fail_mask, f.st.pos[0]);
+    check(f.st.home_serial != serial0, "a homing result arrived");
+    check(!f.st.homing, "homing flag cleared");
+    if (aborted) check(f.st.home_fail_mask == 1 && f.t < 3.0, "aborted homing reports failure promptly");
+    else check((f.st.home_ok_mask | f.st.home_fail_mask) == 1, "the result names joint 0");
+    f.run(f.t + 1.0, true);
+    check(f.messages.find("home program failed") == std::string::npos, "the program compiled and ran");
+}
+
 static void scenario_abort(KmBackend &km)
 {
     bool board = km.is_board();
@@ -356,6 +393,7 @@ int main(int argc, char **argv)
         cfg.simulate = false;
         snprintf(cfg.init_program, sizeof cfg.init_program, "%s", "/home/tk/KMotionXCNC/settings/c-programs/MinirouterInit.c");
         cfg.init_thread = 1;
+        snprintf(cfg.home_program, sizeof cfg.home_program, "%s", "/home/tk/KMotionX/KMotionX/linuxcnc/configs/kmotion-kogna/Home.c");
         cfg.status_period = getenv("KM_STATUS_MS") ? atof(getenv("KM_STATUS_MS")) / 1000.0 : 0.02;    // 5 ms polling stalls the Kogna link
         for (int i = 0; i < 3; i++) { cfg.axis[i].counts_per_unit = 2540; cfg.axis[i].max_vel = 9.84; cfg.axis[i].max_accel = 98.4; cfg.axis[i].max_jerk = 984; }
     }
@@ -370,6 +408,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "arcspeed") == 0) scenario_arcspeed(*km);
     else if (strcmp(scenario, "quit") == 0) scenario_quit(km);
     else if (strcmp(scenario, "letters") == 0) scenario_letters(*km);
+    else if (strcmp(scenario, "home") == 0) scenario_home(*km);
     else if (strcmp(scenario, "gated") == 0) scenario_gated(*km);
     else scenario_program(*km);
     if (km) {

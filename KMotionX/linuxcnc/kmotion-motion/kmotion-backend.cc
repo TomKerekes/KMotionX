@@ -68,11 +68,12 @@ struct Seg {
 };
 
 struct Cmd {
-    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE } kind;
-    double end[9], center[3], normal[3];
-    double vel, acc, seconds, feed_scale, rapid_scale, tolerance;
-    bool rapid, on;
-    int turn, id, axis, term_cond;
+    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME } kind = LINE;
+    double end[9] = {}, center[3] = {}, normal[3] = {};
+    double vel = 0, acc = 0, seconds = 0, feed_scale = 0, rapid_scale = 0, tolerance = 0;
+    bool rapid = false, on = false;
+    int turn = 0, id = 0, axis = 0, term_cond = 0;
+    KmHomeRequest home;
 };
 
 struct KmBackend::Impl {
@@ -103,6 +104,9 @@ struct KmBackend::Impl {
     std::atomic<int> stop_state{0};    // board: MAIN_STATUS.StopImmediateState from the last status poll
     std::atomic<unsigned> status_count{0};   // board: status polls so far
     std::atomic<int> errors{0};        // planner failures so far (each one stopped the motion)
+    std::atomic<bool> homing{false};   // board: the home program is running
+    int home_serial = 0;               // under smx
+    unsigned home_ok_mask = 0, home_fail_mask = 0;
 
     // published state
     std::mutex smx;
@@ -694,8 +698,7 @@ static void w_poll_board(KmBackend::Impl *d)
                 d->errors++;
                 d->aborting = true;
                 cm->SetAbort();
-                Cmd c;
-                memset(&c, 0, sizeof c);
+                Cmd c{};
                 c.kind = Cmd::ABORT;
                 d->post(c);
             }
@@ -715,6 +718,10 @@ static void publish(KmBackend::Impl *d)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
     s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting;
     s.errors = d->errors;
+    s.homing = d->homing;
+    s.home_serial = d->home_serial;
+    s.home_ok_mask = d->home_ok_mask;
+    s.home_fail_mask = d->home_fail_mask;
     s.active_id = s.depth > 0 ? d->id_of(d->done_upto + 1) : 0;
     s.paused = d->paused;
     s.connected = d->cfg.simulate ? true : d->connected;
@@ -816,6 +823,112 @@ static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
 }
 
 // ---- worker loop --------------------------------------------------------------------------
+// homing through the board: LinuxCNC's parameters go to the program through the persist
+// array (layout in Home.c), the program runs on its thread, and when it is done the
+// planner is set to where the board stands. Aborts kill the thread and stop the jogs.
+static int set_persist(KmBackend::Impl *d, int index, long value)
+{
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "SetPersistDec %d %ld", index, value);
+    if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    return 0;
+}
+
+static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
+{
+    enum { P_MASK = 120, P_OK = 121, P_FAILED = 122, P_CURRENT = 123, P_JOINT = 128, P_STRIDE = 8 };
+    unsigned chmask = 0;                     // by board channel
+    unsigned jmask = 0;                      // by LinuxCNC joint
+    int ch_of[8];
+    for (int j = 0; j < 8; j++) {
+        ch_of[j] = d->cfg.channel[j];
+        if (!req.joint[j].home || ch_of[j] < 0 || ch_of[j] >= 8) continue;
+        const KmHomeJoint &hj = req.joint[j];
+        double k = d->scale[j];
+        int base = P_JOINT + P_STRIDE * ch_of[j];
+        int flags = (hj.use_index ? 1 : 0) | (hj.no_final_move ? 4 : 0);
+        if (set_persist(d, base + 0, lround(hj.search_vel * k)) || set_persist(d, base + 1, lround(hj.latch_vel * k)) ||
+            set_persist(d, base + 2, lround(hj.offset * k)) || set_persist(d, base + 3, lround(hj.home_pos * k)) ||
+            set_persist(d, base + 4, lround(fabs(hj.final_vel) * k)) || set_persist(d, base + 5, flags) ||
+            set_persist(d, base + 6, lround(fabs(hj.max_travel) * k)) || set_persist(d, base + 7, hj.sequence)) {
+            jmask |= 1u << j;
+            goto failed_all;
+        }
+        chmask |= 1u << ch_of[j];
+        jmask |= 1u << j;
+    }
+    if (chmask == 0) return;
+    if (set_persist(d, P_OK, 0) || set_persist(d, P_FAILED, 0) || set_persist(d, P_CURRENT, -1) || set_persist(d, P_MASK, (long) chmask)) goto failed_all;
+    {
+        d->homing = true;
+        char err[512] = "";
+        char cmd[64], reply[MAX_LINE + 1];
+        int thread = d->cfg.home_thread;
+        if (d->km->CompileAndLoadCoff(d->cfg.home_program, thread, err, sizeof err - 1)) {
+            d->message(std::string("home program failed: ") + d->cfg.home_program + ": " + err);
+            goto finish_failed;
+        }
+        snprintf(cmd, sizeof cmd, "Execute%d", thread);
+        if (d->km->WriteLine(cmd)) { d->message("Execute failed for the home program"); goto finish_failed; }
+        snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
+        double t0 = now_s();
+        bool killed = false;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (d->aborting || d->stop) {
+                killed = true;
+                d->message("homing aborted");
+            } else if (now_s() - t0 > d->cfg.home_timeout) {
+                killed = true;
+                d->message("the home program did not finish in time");
+            }
+            if (killed) {
+                snprintf(cmd, sizeof cmd, "Kill%d", thread);
+                d->km->WriteLine(cmd);
+                for (int ch = 0; ch < 8; ch++)
+                    if (chmask & (1u << ch)) { snprintf(cmd, sizeof cmd, "Jog%d=0", ch); d->km->WriteLine(cmd); }
+                break;
+            }
+            if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); killed = true; break; }
+            if (strcmp(reply, "0") == 0) break;
+        }
+        unsigned ok_ch = 0;
+        if (!killed) {
+            snprintf(cmd, sizeof cmd, "GetPersistDec %d", (int) P_OK);
+            if (board_query(d, cmd, reply) == 0) ok_ch = (unsigned) strtol(reply, NULL, 10);
+        }
+        // where the board stands now is where the planner continues from
+        double x, y, z, a, bb, c, u, v;
+        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &bb, &c, &u, &v) == 0) {
+            double p[9] = {x, y, z, a, bb, c, u, v, 0};
+            memcpy(d->pos, p, sizeof p);
+        } else {
+            d->cm->ClearAbort();
+        }
+        set_cm_position(d, d->pos);
+        unsigned ok_j = 0;
+        for (int j = 0; j < 8; j++)
+            if ((jmask & (1u << j)) && ch_of[j] >= 0 && (ok_ch & (1u << ch_of[j]))) ok_j |= 1u << j;
+        {
+            std::lock_guard<std::mutex> lock(d->smx);
+            d->home_ok_mask = ok_j;
+            d->home_fail_mask = jmask & ~ok_j;
+            d->home_serial++;
+        }
+        d->homing = false;
+        return;
+    }
+finish_failed:
+    d->homing = false;
+failed_all:
+    {
+        std::lock_guard<std::mutex> lock(d->smx);
+        d->home_ok_mask = 0;
+        d->home_fail_mask = jmask;
+        d->home_serial++;
+    }
+}
+
 static void worker_main(KmBackend::Impl *d)
 {
     d->last_tick = d->last_poll = now_s();
@@ -849,6 +962,7 @@ static void worker_main(KmBackend::Impl *d)
                 }
                 break;
             case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
+            case Cmd::HOME: if (!d->cfg.simulate) w_home(d, c.home); break;
             case Cmd::PATH_MODE:
                 // in program order with the moves; the planner applies it per waypoint
                 d->cm->SetPathMode(c.term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP,
@@ -927,6 +1041,15 @@ KmBackend::~KmBackend()
 }
 
 bool KmBackend::is_board() const { return !d->cfg.simulate; }
+bool KmBackend::has_home_program() const { return !d->cfg.simulate && d->cfg.home_program[0] != 0; }
+
+void KmBackend::home(const KmHomeRequest &req)
+{
+    Cmd c{};
+    c.kind = Cmd::HOME;
+    c.home = req;
+    d->post(c);
+}
 
 const char *KmBackend::mode_name() const
 {
@@ -1048,8 +1171,7 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
 
 void KmBackend::set_position(const double pos[9])
 {
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::SET_POS;
     memcpy(c.end, pos, sizeof c.end);
     d->post(c);
@@ -1057,8 +1179,7 @@ void KmBackend::set_position(const double pos[9])
 
 int KmBackend::line(const double end[9], double vel, double acc, bool rapid, int id)
 {
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::LINE;
     memcpy(c.end, end, sizeof c.end);
     c.vel = vel; c.acc = acc; c.rapid = rapid; c.id = id;
@@ -1068,8 +1189,7 @@ int KmBackend::line(const double end[9], double vel, double acc, bool rapid, int
 
 int KmBackend::arc(const double end[9], const double center[3], const double normal[3], int turn, double vel, double acc, int id)
 {
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::ARC;
     memcpy(c.end, end, sizeof c.end);
     memcpy(c.center, center, sizeof c.center);
@@ -1081,8 +1201,7 @@ int KmBackend::arc(const double end[9], const double center[3], const double nor
 
 void KmBackend::set_path_mode(int term_cond, double tolerance)
 {
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::PATH_MODE;
     c.term_cond = term_cond; c.tolerance = tolerance;
     d->post(c);
@@ -1090,8 +1209,7 @@ void KmBackend::set_path_mode(int term_cond, double tolerance)
 
 int KmBackend::dwell(double seconds, int id)
 {
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::DWELL;
     c.seconds = seconds; c.id = id;
     d->post(c);
@@ -1116,8 +1234,7 @@ void KmBackend::abort()
     d->cm->SetAbort();
     if (!d->cfg.simulate) d->send_urgent("StopImmediate0");
     d->paused = false;
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::ABORT;
     d->post(c);
 }
@@ -1130,8 +1247,7 @@ void KmBackend::pause(bool on)
 
 void KmBackend::set_feed_override(double feed_scale, double rapid_scale)
 {
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::FEED;
     c.feed_scale = feed_scale; c.rapid_scale = rapid_scale;
     d->post(c);
@@ -1139,8 +1255,7 @@ void KmBackend::set_feed_override(double feed_scale, double rapid_scale)
 
 void KmBackend::machine_on(bool on)
 {
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::MACHINE_ON;
     c.on = on;
     d->post(c);
@@ -1159,8 +1274,7 @@ void KmBackend::jog(int axis, double vel)
 void KmBackend::jog_to(int axis, double target, double)
 {
     if (d->cfg.simulate || axis < 0 || axis >= 8) return;
-    Cmd c;
-    memset(&c, 0, sizeof c);
+    Cmd c{};
     c.kind = Cmd::JOG_TO;
     c.axis = axis;
     c.end[axis] = target;

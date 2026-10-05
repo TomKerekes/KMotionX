@@ -44,6 +44,7 @@
 #include "motion/motion.h"
 #include "motion/motion_struct.h"
 #include "motion/mot_priv.h"
+#include "motion/homing.h"
 #include <motion_types.h>
 
 #include "kmotion-backend.h"
@@ -173,6 +174,10 @@ struct Model {
     Jog jog[NAXES];
     double jog_min[NAXES], jog_max[NAXES];
     double joint_home[EMCMOT_MAX_JOINTS];
+    struct HomingParams { double home, offset, final_vel, search_vel, latch_vel; int flags, sequence; };
+    HomingParams hp[EMCMOT_MAX_JOINTS];       // from SET_JOINT_HOMING_PARAMS
+    int home_seen;          // backend homing runs already taken into account
+    unsigned home_pending;  // joints the board is homing
     bool probing;
     // with the KMotion backend
     KmState ks;             // what the backend reported last
@@ -198,7 +203,9 @@ static void model_init()
         m.jog_min[i] = -1e9;
         m.jog_max[i] = 1e9;
     }
-    for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) m.joint_home[j] = 0;
+    for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) { m.joint_home[j] = 0; m.hp[j] = Model::HomingParams(); }
+    m.home_seen = 0;
+    m.home_pending = 0;
     memset(&m.ks, 0, sizeof m.ks);
     m.last_move_time = 0;
     m.last_type = 0;
@@ -285,6 +292,8 @@ static double net_feed_scale()
     return s;
 }
 
+static void mark_joint_homed(int j, bool homed, bool move_to_home = true);
+
 static void model_step(double dt)
 {
     m.current_vel = 0;
@@ -295,6 +304,16 @@ static void model_step(double dt)
         if (m.stepping && emcmotStatus->id != m.step_id && m.ks.active_id) {
             km->pause(true);                  // the next line has started: the step is done
             m.stepping = false;
+        }
+        if (m.ks.home_serial != m.home_seen) {
+            // the board's home program has finished (or was stopped)
+            m.home_seen = m.ks.home_serial;
+            for (int j = 0; j < EMCMOT_MAX_JOINTS && j < 8; j++) {
+                if (!(m.home_pending & (1u << j))) continue;
+                if (m.ks.home_ok_mask & (1u << j)) mark_joint_homed(j, true, false);
+                else { mark_joint_homed(j, false); report_error("homing of joint %d failed", j); }
+            }
+            m.home_pending = 0;
         }
         if (m.ks.errors != m.errors_seen) {
             // the planner refused a move, or the board dropped out: the backend has stopped
@@ -500,7 +519,7 @@ static void update_motion_state()
 // everything derived from the model, once per cycle
 static void update_status()
 {
-    bool coord_busy = km ? m.ks.running : (m.active || !m.queue.empty());
+    bool coord_busy = km ? (m.ks.running || m.ks.homing) : (m.active || !m.queue.empty());
     bool inpos = !coord_busy && !any_jog_active();
     SET_MOTION_INPOS_FLAG(inpos ? 1 : 0);
     emcmotStatus->carte_pos_cmd = array_to_pose(m.pos);
@@ -607,13 +626,13 @@ static void update_pins()
 }
 
 // ---- commands --------------------------------------------------------------------------
-static void mark_joint_homed(int j, bool homed)
+static void mark_joint_homed(int j, bool homed, bool move_to_home)
 {
     if (j < 0 || j >= EMCMOT_MAX_JOINTS) return;
     emcmot_joint_status_t *js = &emcmotStatus->joint_status[j];
     js->homing = 0;
     js->homed = homed;
-    if (homed && j < NAXES) m.pos[j] = m.joint_home[j];   // homing ends at the HOME position
+    if (homed && move_to_home && j < NAXES) m.pos[j] = m.joint_home[j];   // homing ends at the HOME position
 }
 
 static void queue_segment(Segment &s)
@@ -780,15 +799,37 @@ static void handle_command()
         log_print("OVERRIDE_LIMITS joint=%d\n", c->joint);
         emcmotStatus->overrideLimitMask = c->joint < 0 ? 0 : 1;
         break;
-    case EMCMOT_JOINT_HOME:
+    case EMCMOT_JOINT_HOME: {
         log_print("JOINT_HOME joint=%d\n", c->joint);
-        if (c->joint < 0) {
-            for (int j = 0; j < num_joints; j++) mark_joint_homed(j, true);
-        } else {
-            mark_joint_homed(c->joint, true);
+        // with a home program on the board, joints with a search velocity are homed there
+        // (the result comes back through the backend's state); a joint with HOME_SEARCH_VEL 0
+        // is declared homed where it stands, as in LinuxCNC
+        KmHomeRequest req;
+        unsigned mask = 0;
+        for (int j = 0; j < num_joints; j++) {
+            if (c->joint >= 0 && j != c->joint) continue;
+            bool on_board = km && km->has_home_program() && j < 8 && m.hp[j].search_vel != 0;
+            if (!on_board) { mark_joint_homed(j, true); continue; }
+            KmHomeJoint &hj = req.joint[j];
+            hj.home = true;
+            hj.search_vel = m.hp[j].search_vel;
+            hj.latch_vel = m.hp[j].latch_vel;
+            hj.final_vel = m.hp[j].final_vel;
+            hj.offset = m.hp[j].offset;
+            hj.home_pos = m.hp[j].home;
+            hj.use_index = (m.hp[j].flags & HOME_USE_INDEX) != 0;
+            hj.no_final_move = (m.hp[j].flags & HOME_NO_FINAL_MOVE) != 0;
+            hj.sequence = m.hp[j].sequence;
+            double travel = joints[j].max_pos_limit - joints[j].min_pos_limit;
+            hj.max_travel = (travel > 0 && travel < 1e6) ? travel : 0;
+            emcmotStatus->joint_status[j].homing = 1;
+            emcmotStatus->joint_status[j].homed = 0;
+            mask |= 1u << j;
         }
-        if (km) km->set_position(m.pos);
+        if (mask) { m.home_pending |= mask; km->home(req); }
+        else if (km) km->set_position(m.pos);
         break;
+    }
     case EMCMOT_JOINT_UNHOME:
         log_print("JOINT_UNHOME joint=%d\n", c->joint);
         if (c->joint < 0) {
@@ -992,7 +1033,12 @@ static void handle_command()
     case EMCMOT_SET_JOINT_HOMING_PARAMS:
         log_print("SET_JOINT_HOMING_PARAMS joint=%d, offset=%.6g home=%.6g, final_vel=%.6g, search_vel=%.6g, latch_vel=%.6g, flags=0x%08x, sequence=%d, volatile=%d\n",
                   c->joint, c->offset, c->home, c->home_final_vel, c->search_vel, c->latch_vel, c->flags, c->home_sequence, c->volatile_home);
-        if (c->joint >= 0 && c->joint < EMCMOT_MAX_JOINTS) m.joint_home[c->joint] = c->home;
+        if (c->joint >= 0 && c->joint < EMCMOT_MAX_JOINTS) {
+            m.joint_home[c->joint] = c->home;
+            Model::HomingParams &hp = m.hp[c->joint];
+            hp.home = c->home; hp.offset = c->offset; hp.final_vel = c->home_final_vel;
+            hp.search_vel = c->search_vel; hp.latch_vel = c->latch_vel; hp.flags = c->flags; hp.sequence = c->home_sequence;
+        }
         break;
     case EMCMOT_SET_JOINT_JERK_LIMIT:
         log_print("SET_JOINT_JERK_LIMIT joint=%d, jerk=%.6g\n", c->joint, c->jerk);
@@ -1000,7 +1046,10 @@ static void handle_command()
         break;
     case EMCMOT_UPDATE_JOINT_HOMING_PARAMS:
         log_print("UPDATE_JOINT_HOMING_PARAMS joint=%d, offset=%.6g home=%.6g home_sequence=%d\n", c->joint, c->offset, c->home, c->home_sequence);
-        if (c->joint >= 0 && c->joint < EMCMOT_MAX_JOINTS) m.joint_home[c->joint] = c->home;
+        if (c->joint >= 0 && c->joint < EMCMOT_MAX_JOINTS) {
+            m.joint_home[c->joint] = c->home;
+            m.hp[c->joint].home = c->home; m.hp[c->joint].offset = c->offset; m.hp[c->joint].sequence = c->home_sequence;
+        }
         break;
     case EMCMOT_SET_DEBUG:
         log_print("SET_DEBUG %d\n", c->debug);
@@ -1178,6 +1227,18 @@ static bool read_kmotion_config(KmConfig &cfg)
     const char *prog = ini.get(K, "INIT_PROGRAM");
     if (prog) snprintf(cfg.init_program, sizeof cfg.init_program, "%s", prog);
     cfg.init_thread = (int) ini.num(K, "INIT_THREAD", 1);
+    const char *home = ini.get(K, "HOME_PROGRAM");
+    if (home && home[0]) {
+        if (home[0] == '/') snprintf(cfg.home_program, sizeof cfg.home_program, "%s", home);
+        else {                                        // relative to the ini file's directory
+            std::string dir = ini_path;
+            size_t slash = dir.rfind('/');
+            dir = slash == std::string::npos ? "." : dir.substr(0, slash);
+            snprintf(cfg.home_program, sizeof cfg.home_program, "%s/%s", dir.c_str(), home);
+        }
+    }
+    cfg.home_thread = (int) ini.num(K, "HOME_THREAD", 2);
+    cfg.home_timeout = ini.num(K, "HOME_TIMEOUT_S", 120);
     cfg.status_period = ini.num(K, "STATUS_PERIOD_MS", 20) * 1e-3;
     cfg.third_order = ini.num(K, "THIRD_ORDER", 1) != 0;
     cfg.cubic_knots = ini.num(K, "CUBIC_KNOTS", 1) != 0;

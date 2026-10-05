@@ -38,8 +38,20 @@ through the same shared memory block.
     once, `GetStopState` until the board is at rest, then `StopImmediate2`, which clears the
     stop state and abandons the rest of the buffer, and a planner reset - the state reads
     busy until that is done (`StopImmediate2` alone does nothing to a moving board); feed
-    override = the board's FRO; jogs = `Jog<ch>=counts/s` and `Move<ch>=counts`. Homing is
-    still immediate (board-side homing comes later).
+    override = the board's FRO; jogs = `Jog<ch>=counts/s` and `Move<ch>=counts`.
+  - **Homing** (board mode) runs a C program on the board, `[KMOTION] HOME_PROGRAM`
+    (`configs/kmotion-kogna/Home.c`, after Dynomotion's `SimpleHomeIndexFunction.c`: jog to
+    the switch, back off, latch slowly, optionally on to the index, set the position, move to
+    HOME). LinuxCNC's `[JOINT_n]` homing parameters, as task sends them (`HOME_SEARCH_VEL`
+    with its sign as the direction, `HOME_LATCH_VEL`, `HOME_OFFSET`, `HOME`, `HOME_FINAL_VEL`,
+    `HOME_USE_INDEX`, `HOME_SEQUENCE`, and `MAX_LIMIT - MIN_LIMIT` as the search travel), go to
+    the program in counts through the board's persist variables 120-191 (layout at the top of
+    Home.c); the program runs on `HOME_THREAD` and is polled with `CheckThread`; when it ends
+    the planner is set to where the board stands, the joints it reports in persist 121 become
+    `homed`, the others get an error. Which input bit each switch is on, and the index bit,
+    are the machine's business and sit in a table at the top of Home.c. Stop or machine-off
+    during homing kills the thread and stops the jogs. A joint with `HOME_SEARCH_VEL = 0`, or
+    no `HOME_PROGRAM`, is declared homed where it stands.
   - Planner settings come from the ini: `[KMOTION]` (mode, init program, 3rd order, cubic
     knots, actuator limits, segment log, break angle, tolerances, lookahead, board
     channels), the axis limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK`
@@ -156,9 +168,9 @@ program zeroes the positions and the test moves the axes.
 
 ## Next
 
-1. Retest on the Kogna: Stop mid-arc (any jump afterwards?), Pause/Resume mid-arc, Step
-   while paused; then board-side homing, in-position from the board's `AxisDone`, jogging
-   while paused.
+1. Homing on the Kogna: `KM_BOARD=1 ./build/backend-test home` (and with `KM_HOME_ABORT=1`),
+   then Home All from AXIS with the switch bits in Home.c set for the machine; then
+   in-position from the board's `AxisDone`, jogging while paused.
 2. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
    module is bypassed and only gets joint positions to display.
 3. mm configs (LinuxCNC machine units vs KMotion's inches).

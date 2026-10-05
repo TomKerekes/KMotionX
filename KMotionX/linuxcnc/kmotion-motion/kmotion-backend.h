@@ -44,6 +44,30 @@ struct KmConfig {
     char init_program[512] = "";  // C program run once at start (axis setup), "" for none
     int init_thread = 1;
     double status_period = 0.02;  // board status poll period, seconds
+    char home_program[512] = "";  // C program that homes (see configs/kmotion-kogna/Home.c), "" = none:
+                                  // joints are then declared homed where they stand
+    int home_thread = 2;
+    double home_timeout = 120;    // seconds the program may take
+};
+
+// homing through the board (HOME_PROGRAM): LinuxCNC's per-joint homing parameters, in
+// machine units, as task sends them. The backend converts to counts and hands them to the
+// program through the board's persist variables (layout documented in Home.c).
+struct KmHomeJoint {
+    bool home = false;            // this joint is to be homed
+    double search_vel = 0;        // units/s, the sign is the direction toward the switch
+    double latch_vel = 0;         // units/s; same sign as the search: approach again slowly,
+                                  // opposite sign: the switch's trailing edge is home
+    double final_vel = 0;         // units/s for the move to home_pos, 0 = the axis default
+    double offset = 0;            // position the switch edge gets (HOME_OFFSET)
+    double home_pos = 0;          // where to go afterwards (HOME)
+    double max_travel = 0;        // search distance limit, 0 = none
+    bool use_index = false;
+    bool no_final_move = false;
+    int sequence = 0;             // homing order, lower first
+};
+struct KmHomeRequest {
+    KmHomeJoint joint[8];
 };
 
 struct KmState {
@@ -55,6 +79,10 @@ struct KmState {
     bool paused;
     bool connected;               // board mode: status is coming from the board
     int errors;                   // planner failures so far; each one stopped the motion
+    bool homing;                  // board: the home program is running
+    int home_serial;              // counts finished homing runs; the masks below belong to the last
+    unsigned home_ok_mask;        // joints homed by it (bit = LinuxCNC joint)
+    unsigned home_fail_mask;      // joints it did not home (switch not found, aborted, program failed)
     double current_vel;
     double distance_to_go;
     char message[512];            // non-empty: a message for the operator (cleared by the call)
@@ -81,6 +109,8 @@ public:
     void pause(bool on);
     void set_feed_override(double feed_scale, double rapid_scale);
     // board mode
+    bool has_home_program() const;
+    void home(const KmHomeRequest &req);         // runs HOME_PROGRAM; the result comes through state()
     void machine_on(bool on);                    // enable/disable the axes
     void jog(int axis, double vel);              // continuous jog, units/s; 0 stops
     void jog_to(int axis, double target, double vel);
