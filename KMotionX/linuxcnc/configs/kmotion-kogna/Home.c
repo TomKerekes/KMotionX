@@ -95,23 +95,22 @@ int HomeChannel(int ch)
 	if (r) { chan[ch].LimitSwitchOptions = SaveLimits; return r; }
 	if (StopAndWait(ch)) return 1;
 
-	// 2. the latch, slowly
+	// 2. the latch, slowly. Both moves are held to the search travel too: a switch that stays
+	//    made, or never makes again, must not send the axis off for ever
 	if (latchdir == dir)
 	{
 		// back off until the switch opens, then approach again: the leading edge is home
-		r = JogUntilBit(ch, -lv * dir, sw, !pol, chan[ch].Dest, 0);
-		if (r) { chan[ch].LimitSwitchOptions = SaveLimits; return r; }
+		r = JogUntilBit(ch, -lv * dir, sw, !pol, chan[ch].Dest, travel);
+		if (r) { chan[ch].LimitSwitchOptions = SaveLimits; return r == 2 ? 3 : r; }
 		if (StopAndWait(ch)) return 1;
-		Jog(ch, lv * dir);
-		while (ReadBit(sw) != pol)
-			if (!chan[ch].Enable) return 1;
+		r = JogUntilBit(ch, lv * dir, sw, pol, chan[ch].Dest, travel);
+		if (r) { chan[ch].LimitSwitchOptions = SaveLimits; return r == 2 ? 3 : r; }
 	}
 	else
 	{
 		// back off until the switch opens: that edge is home
-		Jog(ch, -lv * dir);
-		while (ReadBit(sw) == pol)
-			if (!chan[ch].Enable) return 1;
+		r = JogUntilBit(ch, -lv * dir, sw, !pol, chan[ch].Dest, travel);
+		if (r) { chan[ch].LimitSwitchOptions = SaveLimits; return r == 2 ? 3 : r; }
 	}
 	trig = chan[ch].Dest;                      // where the edge was seen
 
@@ -187,7 +186,8 @@ main()
 		{
 			persist.UserData[P_FAILED] |= 1 << best;
 			printf("Home: channel %d failed (%s)\n", best,
-			       r == 1 ? "axis disabled" : r == 2 ? "switch not found within the travel" : "no search velocity");
+			       r == 1 ? "axis disabled" : r == 2 ? "switch not found within the travel" :
+			       r == 3 ? "the switch did not change state during the latch" : "no search velocity");
 			break;                             // a failure ends the sequence, as in LinuxCNC
 		}
 	}
