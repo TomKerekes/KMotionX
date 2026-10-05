@@ -27,6 +27,9 @@ same board; the board token serializes the commands.
 - `kmotion_tool.py`: the window, the status poller, the console dock. The board's `printf`
   output goes to the one client that last asked for it, so capturing it here takes it away
   from kmotion-motion: the checkbox in the console dock does that only on request.
+- `icons/`: KMotion.exe's icon at the six sizes it was drawn at (16-256). The small ones are
+  their own art, not a downscale, so the taskbar shows a readable "DM". The window's class is
+  `kmotion-tool`, so a launcher with `StartupWMClass=kmotion-tool` is tied to it.
 
 - `axis_screen.py`: the Axis screen, 16 rows on a Kogna, 8 on a KFLOP: destination and
   position formatted as KMotion.exe does, Enable (`EnableAxis`/`DisableAxis`, parameters

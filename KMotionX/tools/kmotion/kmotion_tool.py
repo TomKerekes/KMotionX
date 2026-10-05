@@ -8,7 +8,9 @@ whatever else runs (LinuxCNC's kmotion-motion, kmxWeb).
 import signal
 import sys
 import time
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from pathlib import Path
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QLabel, QWidget, QVBoxLayout, QPlainTextEdit,
                                QDockWidget, QCheckBox, QHBoxLayout, QPushButton)
 import kmx
@@ -171,8 +173,33 @@ class MainWindow(QMainWindow):
         super().closeEvent(ev)
 
 
+ICON_SIZES = (16, 32, 48, 64, 128, 256)
+
+
+def app_icon():
+    """KMotion.exe's icon at every size it was drawn at. The small sizes are their own art (a
+    bold "DM" at 16), not a downscale of the big one, which turns to mush at taskbar size."""
+    icon = QIcon()
+    folder = Path(__file__).resolve().parent / "icons"
+    for n in ICON_SIZES:
+        f = folder / f"kmotion-{n}.png"
+        if f.exists():
+            icon.addFile(str(f), QSize(n, n))
+    return icon
+
+
+def setup_application(app):
+    """the icon for the window, the taskbar and the window switcher. The name becomes the
+    window's WM_CLASS, which lets the taskbar tie the window to the kmotion-tool.desktop
+    launcher (its StartupWMClass); QSettings keep their own explicit names."""
+    app.setApplicationName("kmotion-tool")
+    app.setDesktopFileName("kmotion-tool")
+    app.setWindowIcon(app_icon())
+
+
 def main():
     app = QApplication(sys.argv)
+    setup_application(app)
     # Ctrl-C in the terminal quits the tool cleanly: Qt's event loop would otherwise only
     # print the KeyboardInterrupt from whatever slot it hit and carry on. The window's
     # half-second timer keeps the interpreter running so the handler gets its turn.
