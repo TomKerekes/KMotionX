@@ -38,7 +38,11 @@ through the same shared memory block.
     once, `GetStopState` until the board is at rest, then `StopImmediate2`, which clears the
     stop state and abandons the rest of the buffer, and a planner reset - the state reads
     busy until that is done (`StopImmediate2` alone does nothing to a moving board); feed
-    override = the board's FRO; jogs = `Jog<ch>=counts/s` and `Move<ch>=counts`.
+    override = the board's FRO; jogs = `Jog<ch>=counts/s`, and an increment
+    `MoveAtVel<ch>=counts counts/s` at LinuxCNC's jog speed. For LinuxCNC a jog runs (in
+    position off, jogging on) until a status read made after its last command reached the
+    board shows the axis done (`AxisDone`) or disabled: releasing a jog button stops the
+    board, and the slow-down to rest is part of the jog.
   - **Homing** (board mode) runs a C program on the board, `[KMOTION] HOME_PROGRAM`
     (`configs/kmotion-kogna/Home.c`, after Dynomotion's `SimpleHomeIndexFunction.c`: jog to
     the switch, back off, latch slowly, optionally on to the index, set the position, move to
@@ -52,6 +56,34 @@ through the same shared memory block.
     are the machine's business and sit in a table at the top of Home.c. Stop or machine-off
     during homing kills the thread and stops the jogs. A joint with `HOME_SEARCH_VEL = 0`, or
     no `HOME_PROGRAM`, is declared homed where it stands.
+  - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
+    Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
+    each one of KMotion's M-code actions, carried out as the G-code interpreter's
+    `InvokeActionDirect` does: `SETBIT`/`SETTWOBITS` (relay bits), `DAC` (S x scale + offset,
+    clamped), or `PROGRAM`/`PROGRAM_WAIT`/`PROGRAM_WAIT_SYNC <thread> <var> <file>` (a C program
+    gets its persist variable, S the RPM as a float and M3/M4/M5 their number, is compiled and
+    loaded into the thread and executed). LinuxCNC's spindle on runs S then M3/M4, a speed or
+    override change S, spindle off M5; the speed is motmod's (override, `[SPINDLE_0]` limits),
+    and "M4 S0" keeps its direction. Motion reads busy while a spindle command is under way,
+    so task's next command waits for a "wait" program as KMotionCNC's interpreter does. A
+    stream of override steps collapses to the latest; a start, stop or reversal never does.
+    Machine off and kmotion-motion's exit stop the spindle too, and the first stop after
+    start-up always runs M5. G96 constant surface speed is refused with an error for now.
+    `INIT_PROGRAM` may be given more than once (run in order); program paths are absolute or
+    relative to the ini. The kmotion-kogna bench uses Dynomotion's Spindle Using Jogs programs
+    (`configs/kmotion-kogna/spindle/`, `MySpindleDefs.h` set for channel 3, which
+    `SpindleAxis.c` sets up): `KM_BOARD=1 ./build/backend-test spindle` checks 600/1200 RPM CW,
+    600 RPM CCW and off on channel 3 (10000 counts/s at 600 RPM) and the direction bits.
+  - **Spindle speed** measured on the board, for the GUI: the status poller takes
+    `[KMOTION] SPINDLE_SPEED_AXIS`'s channel, its commanded `Dest` (a jogged spindle's real
+    ramps, no encoder needed) or its encoder `Position` (`SPINDLE_SPEED_FROM = DEST|POSITION`),
+    over the board's own clock, in `SPINDLE_COUNTS_PER_REV`, low-pass filtered with
+    `SPINDLE_SPEED_TAU` seconds, onto the HAL pins `kmotion.spindle-rpm` (signed),
+    `kmotion.spindle-rpm-abs` and `kmotion.spindle-rps`. The kmotion-kogna config runs
+    gmoccapy, whose spindle bar shows it (`gmoccapy-postgui.hal`); a spin-down shows as it
+    happens, where the commanded speed drops to 0 at once. On the bench, `SpindleAxis.c` also
+    feeds channel 3's step/dir output back into encoder 4 as quadrature, so `POSITION` works too
+    (`KM_SPINDLE_FROM=POSITION` in the harness).
   - Planner settings come from the ini: `[KMOTION]` (mode, init program, 3rd order, cubic
     knots, actuator limits, segment log, break angle, tolerances, lookahead, board
     channels), the axis limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK`
@@ -60,7 +92,8 @@ through the same shared memory block.
   `motmod` in simulate mode (the sim/axis config, inches, 3 joints, trivkins), plus
   `drive.py`, which runs the whole thing from the command line.
 - `configs/kmotion-kogna/` – the same for Tom's Kogna: board mode, 2540 counts/inch,
-  250 mm/s, 2500 mm/s², jerk 25000 mm/s³ in inches, `MinirouterInit.c` as the init program.
+  250 mm/s, 2500 mm/s², jerk 25000 mm/s³ in inches, `MinirouterInit.c` as the init program,
+  homing through `Home.c`, the bench spindle on channel 3 (`spindle/`), gmoccapy as the GUI.
 
 ## Build and run
 
@@ -85,7 +118,8 @@ planner settings). Each check prints ok or FAIL. The planner writes `/tmp/TPSegL
 next run, LinuxCNC's included.
 With `KM_BOARD=1` the harness runs against the Kogna with the kmotion-kogna settings
 (`abort` then measures the real stop and the move after it; `KM_DEBUG_STOP=1` prints the
-timeline). Never do that while a LinuxCNC or kmxWeb is connected to the board: the init
+timeline; `home`, `spindle` and `jog` run homing, the spindle actions and jogs on the board).
+Never do that while a LinuxCNC or kmxWeb is connected to the board: the init
 program zeroes the positions and the test moves the axes.
 
 ## Notes on the KMotion side
@@ -168,9 +202,12 @@ program zeroes the positions and the test moves the axes.
 
 ## Next
 
-1. Homing on the Kogna: `KM_BOARD=1 ./build/backend-test home` (and with `KM_HOME_ABORT=1`),
-   then Home All from AXIS with the switch bits in Home.c set for the machine; then
-   in-position from the board's `AxisDone`, jogging while paused.
-2. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
+1. Homing on a real machine (the switch bits in Home.c); in-position from the board's
+   `AxisDone` for moves as well as jogs; jogging while paused.
+2. Spindle: G96 constant surface speed (KMotionCNC passes it to a `ServiceCSS()` loop in
+   persist 110-114); at-speed from the measured speed (gmoccapy has
+   `gmoccapy.spindle_at_speed_led`); spindle-synchronized motion (G33/G76) would need the
+   board's threading.
+3. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
    module is bypassed and only gets joint positions to display.
-3. mm configs (LinuxCNC machine units vs KMotion's inches).
+4. mm configs (LinuxCNC machine units vs KMotion's inches).

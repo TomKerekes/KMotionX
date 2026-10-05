@@ -17,12 +17,35 @@
  */
 #pragma once
 
+#include <string>
+#include <vector>
+
 struct KmAxisParams {
     double counts_per_unit = 0;   // 0: axis not in use
     double max_vel = 0;           // units/s
     double max_accel = 0;         // units/s^2
     double max_jerk = 0;          // units/s^3, 0 = 10 x accel
 };
+
+// Spindle control as KMotionCNC's Tool Setup does it for M3, M4, M5 and S (Dynomotion's help
+// page "KMotionCNC Spindle Control"): each is one of KMotion's M-code actions, carried out the
+// way the G-code interpreter's InvokeActionDirect does. The numbers are GCodeInterpreter.h's
+// M_Action_*.
+enum KmActionType {
+    KM_ACTION_NONE = 0,
+    KM_ACTION_SETBIT = 1,         // p: bit state
+    KM_ACTION_SETTWOBITS = 2,     // p: bit state bit state
+    KM_ACTION_DAC = 3,            // p: dac scale offset min max: RPM x scale + offset, clamped
+    KM_ACTION_PROGRAM = 4,        // p: thread var; file: a .c (compiled and loaded each time) or a .out
+    KM_ACTION_PROGRAM_WAIT = 5,   // ... and wait until the thread is done
+    KM_ACTION_PROGRAM_WAIT_SYNC = 6   // ... wait, then re-read the axis positions
+};
+struct KmAction {
+    int type = KM_ACTION_NONE;
+    double p[5] = {};             // MCODE_ACTION.dParams
+    char file[512] = "";
+};
+enum { KM_SPINDLE_M3, KM_SPINDLE_M4, KM_SPINDLE_M5, KM_SPINDLE_S, KM_SPINDLE_ACTIONS };
 
 struct KmConfig {
     bool simulate = true;         // true: plan and time without a board, replay the plan
@@ -41,13 +64,20 @@ struct KmConfig {
     int queue_limit = 500;        // LinuxCNC moves the protocol side lets task queue: while that
                                   // many are pending, task is waiting for us, not out of moves
     // board mode
-    char init_program[512] = "";  // C program run once at start (axis setup), "" for none
+    std::vector<std::string> init_programs;   // C programs run once at start, in order (axis setup)
     int init_thread = 1;
     double status_period = 0.02;  // board status poll period, seconds
     char home_program[512] = "";  // C program that homes (see configs/kmotion-kogna/Home.c), "" = none:
                                   // joints are then declared homed where they stand
     int home_thread = 2;
     double home_timeout = 120;    // seconds the program may take
+    KmAction spindle[KM_SPINDLE_ACTIONS];   // LinuxCNC's spindle 0 (all NONE: the board is not told)
+    // the spindle's measured speed (board mode): from the axis channel that turns it, either its
+    // commanded Dest (a jogged spindle's real ramps, no encoder needed) or its encoder Position
+    int spindle_speed_axis = -1;              // board channel, -1 = not measured
+    bool spindle_speed_from_dest = true;      // false: Position
+    double spindle_counts_per_rev = 0;
+    double spindle_speed_tau = 0.1;           // seconds, low-pass filter; 0 = none
 };
 
 // homing through the board (HOME_PROGRAM): LinuxCNC's per-joint homing parameters, in
@@ -83,6 +113,11 @@ struct KmState {
     int home_serial;              // counts finished homing runs; the masks below belong to the last
     unsigned home_ok_mask;        // joints homed by it (bit = LinuxCNC joint)
     unsigned home_fail_mask;      // joints it did not home (switch not found, aborted, program failed)
+    int spindle_state;            // board: the spindle as last given to it: 1 CW, -1 CCW, 0 off, 2 not yet
+    double spindle_rpm;           // ... and the RPM its S action got
+    int spindle_done;             // counts spindle() calls carried out (or superseded)
+    double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
+    unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
     double current_vel;
     double distance_to_go;
     char message[512];            // non-empty: a message for the operator (cleared by the call)
@@ -111,6 +146,11 @@ public:
     // board mode
     bool has_home_program() const;
     void home(const KmHomeRequest &req);         // runs HOME_PROGRAM; the result comes through state()
+    bool has_spindle() const;                    // SPINDLE_* actions configured
+    // LinuxCNC's spindle 0: state 1 CW, -1 CCW, 0 off; rpm = |speed| after the override and
+    // the limits; css = G96 constant surface speed was asked for (not supported yet: an
+    // error). Runs S and then M3/M4 when it turns on, S on a speed change, M5 when it stops.
+    void spindle(int state, double rpm, bool css);
     void machine_on(bool on);                    // enable/disable the axes
     void jog(int axis, double vel);              // continuous jog, units/s; 0 stops
     void jog_to(int axis, double target, double vel);

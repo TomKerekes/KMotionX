@@ -1,2 +1,4 @@
 build/
 kmotion-motion
+# KMotionServer writes its logs into the working directory of whoever started it (the harness)
+kmx_server_*

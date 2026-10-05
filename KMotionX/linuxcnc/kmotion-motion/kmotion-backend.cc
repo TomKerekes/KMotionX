@@ -26,9 +26,11 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <strings.h>
 
 #include "GCodeInterpreterX.h"
 #include "CoordMotion.h"
@@ -68,12 +70,15 @@ struct Seg {
 };
 
 struct Cmd {
-    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME } kind = LINE;
+    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME, SPINDLE } kind = LINE;
     double end[9] = {}, center[3] = {}, normal[3] = {};
     double vel = 0, acc = 0, seconds = 0, feed_scale = 0, rapid_scale = 0, tolerance = 0;
     bool rapid = false, on = false;
     int turn = 0, id = 0, axis = 0, term_cond = 0;
     KmHomeRequest home;
+    int sp_state = 0;             // SPINDLE: 1 CW, -1 CCW, 0 off
+    double sp_rpm = 0;
+    bool sp_css = false;
 };
 
 struct KmBackend::Impl {
@@ -96,7 +101,8 @@ struct KmBackend::Impl {
     std::thread urgent;
     std::mutex umx;
     std::condition_variable ucv;
-    std::deque<std::string> uq;
+    struct Urgent { std::string cmd; int jog_axis; };   // jog_axis >= 0: a counted jog command
+    std::deque<Urgent> uq;
     std::mutex wmx;                 // the run bookkeeping below, shared by the two threads
     std::atomic<bool> stop{false};
     std::atomic<bool> paused{false};
@@ -107,6 +113,17 @@ struct KmBackend::Impl {
     std::atomic<bool> homing{false};   // board: the home program is running
     int home_serial = 0;               // under smx
     unsigned home_ok_mask = 0, home_fail_mask = 0;
+    std::atomic<int> sp_state{2};      // board: the spindle as last told (1 CW, -1 CCW, 0 off; 2 not known yet:
+                                       // a spindle left turning by an earlier session must still get its M5)
+    std::atomic<double> sp_rpm{-1};    // ... the RPM its S action got (-1: none yet)
+    std::atomic<int> spindle_done{0};  // spindle commands carried out or superseded
+    std::atomic<double> sp_measured{0};    // the spindle axis's filtered speed, RPM (poller)
+    double sp_prev = 0;                    // poller: the last Dest/Position read, and whether there is one
+    bool sp_have_prev = false;
+    // board jogs, counted per axis: issued (protocol thread), written to the board or dropped
+    // (urgent and worker threads), and finished (poller: the count written before a status
+    // read that shows the axis done or disabled). A jog runs until finished catches up
+    std::atomic<unsigned> jog_issued[8], jog_written[8], jog_finished[8];
 
     // published state
     std::mutex smx;
@@ -153,10 +170,10 @@ struct KmBackend::Impl {
         q.push_back(c);
         qcv.notify_one();
     }
-    void send_urgent(const std::string &cmd)
+    void send_urgent(const std::string &cmd, int jog_axis = -1)
     {
         std::lock_guard<std::mutex> lock(umx);
-        uq.push_back(cmd);
+        uq.push_back(Urgent{cmd, jog_axis});
         ucv.notify_one();
     }
     void message(const std::string &m)
@@ -624,6 +641,8 @@ static void w_poll_board(KmBackend::Impl *d)
     CCoordMotion *cm = d->cm;
     MAIN_STATUS status;
     memset(&status, 0, sizeof status);
+    unsigned jog_written[8];                 // jogs this status read comes after
+    for (int i = 0; i < 8; i++) jog_written[i] = d->jog_written[i];
     if (d->km->WaitToken(false, 100, "kmotion-motion") != KMOTION_LOCKED) {
         d->connected = false;
         return;
@@ -658,6 +677,12 @@ static void w_poll_board(KmBackend::Impl *d)
         }
     }
     acts_to_cad(d, acts, d->pos);
+    // jogs: an axis with no trajectory (or disabled) has finished every jog written before this read
+    for (int i = 0; i < 8; i++) {
+        int ch = d->cfg.channel[i];
+        if (ch < 0 || ch >= N_CHANNELS_KOGNA || ((status.AxisDone >> ch) & 1) || !((status.Enables >> ch) & 1))
+            d->jog_finished[i] = jog_written[i];
+    }
     // speed from the board's own clock between two status reads (the host-side interval
     // includes the query latency and reads low)
     static double last_stamp = 0;
@@ -666,6 +691,23 @@ static void w_poll_board(KmBackend::Impl *d)
     double dd = 0;
     for (int i = 0; i < 3; i++) dd += (d->pos[i] - before[i]) * (d->pos[i] - before[i]);
     if (dt > 0.001 && dt < 1.0) d->current_vel = sqrt(dd) / dt;
+    // the spindle's speed from its axis channel over the same interval: Dest (what a jogged
+    // spindle is told, ramps included) or Position (its encoder), low-pass filtered. A jump far
+    // beyond any spindle (Zero, EnableAxisDest) is no speed and is skipped
+    if (d->cfg.spindle_speed_axis >= 0 && d->cfg.spindle_speed_axis < N_CHANNELS_KOGNA && d->cfg.spindle_counts_per_rev > 0) {
+        int ch = d->cfg.spindle_speed_axis;
+        double p = d->cfg.spindle_speed_from_dest ? status.Dest[ch] : status.Position[ch];
+        if (d->sp_have_prev && dt > 0.001 && dt < 1.0) {
+            double rpm = (p - d->sp_prev) / dt / d->cfg.spindle_counts_per_rev * 60.0;
+            if (fabs(rpm) < 100000) {
+                double tau = d->cfg.spindle_speed_tau;
+                double a = tau > 0 ? 1.0 - exp(-dt / tau) : 1.0;
+                d->sp_measured = d->sp_measured + (rpm - d->sp_measured) * a;
+            }
+        }
+        d->sp_prev = p;
+        d->sp_have_prev = true;
+    }
 
     bool active, flushed;
     {
@@ -722,6 +764,10 @@ static void publish(KmBackend::Impl *d)
     s.home_serial = d->home_serial;
     s.home_ok_mask = d->home_ok_mask;
     s.home_fail_mask = d->home_fail_mask;
+    s.spindle_state = d->sp_state;
+    s.spindle_rpm = d->sp_rpm;
+    s.spindle_done = d->spindle_done;
+    s.spindle_rpm_measured = d->sp_measured;
     s.active_id = s.depth > 0 ? d->id_of(d->done_upto + 1) : 0;
     s.paused = d->paused;
     s.connected = d->cfg.simulate ? true : d->connected;
@@ -741,14 +787,17 @@ static void urgent_main(KmBackend::Impl *d)
 {
     while (!d->stop) {
         std::string cmd;
+        int jog_axis;
         {
             std::unique_lock<std::mutex> lock(d->umx);
             if (d->uq.empty()) { d->ucv.wait_for(lock, std::chrono::milliseconds(20)); continue; }
-            cmd = d->uq.front();
+            cmd = d->uq.front().cmd;
+            jog_axis = d->uq.front().jog_axis;
             d->uq.pop_front();
         }
         double t0 = now_s();
         if (d->km->WriteLine(cmd.c_str())) d->message(std::string("board command failed: ") + cmd);
+        if (jog_axis >= 0) d->jog_written[jog_axis]++;
         if (getenv("KM_DEBUG_STOP") && cmd.compare(0, 13, "StopImmediate") == 0)
             fprintf(stderr, "kmotion-motion: %s sent, took %.3f s\n", cmd.c_str(), now_s() - t0);
     }
@@ -808,7 +857,8 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
 
 static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
 {
-    // an incremental or absolute jog: a move of the one actuator to the target counts
+    // an incremental or absolute jog: a move of the one actuator to the target counts, at
+    // LinuxCNC's jog speed (with none, the board's own Vel)
     if (c.axis < 0 || c.axis >= 8) return;
     int ch = d->cfg.channel[c.axis];
     if (ch < 0) return;
@@ -818,7 +868,9 @@ static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
     double acts[MAX_ACTUATORS];
     if (d->cm->Kinematics->TransformCADtoActuators(target[0], target[1], target[2], target[3], target[4], target[5], target[6], target[7], acts)) return;
     char cmd[64];
-    snprintf(cmd, sizeof cmd, "Move%d=%.3f", ch, acts[c.axis]);
+    double vel = fabs(c.vel * d->scale[c.axis]);
+    if (vel > 0) snprintf(cmd, sizeof cmd, "MoveAtVel%d=%.3f %.3f", ch, acts[c.axis], vel);
+    else snprintf(cmd, sizeof cmd, "Move%d=%.3f", ch, acts[c.axis]);
     if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
 }
 
@@ -929,6 +981,143 @@ failed_all:
     }
 }
 
+// ---- worker: spindle ------------------------------------------------------------------
+// LinuxCNC's spindle through KMotionCNC's M3, M4, M5 and S actions ([KMOTION] SPINDLE_*).
+// One action, carried out as the G-code interpreter's InvokeActionDirect does: bits and DACs
+// at once (the board is idle by now: task waits for motion before a spindle command); a
+// program gets its persist variable (S: the RPM as a float, M3/M4/M5: the M code's number),
+// is compiled and loaded into its thread (a .out is loaded as it is), executed, and for the
+// wait types waited for. issued() runs once the board has the action. Returns 0 done,
+// 1 failed (message posted), 2 stopped waiting on an abort (the program carries on, as in
+// KMotionCNC).
+static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm, const std::function<void()> &issued)
+{
+    char cmd[640], reply[MAX_LINE + 1];
+    switch (a.type) {
+    case KM_ACTION_NONE:
+        issued();
+        return 0;
+    case KM_ACTION_SETBIT:
+    case KM_ACTION_SETTWOBITS:
+        for (int k = 0; k < (a.type == KM_ACTION_SETTWOBITS ? 2 : 1); k++) {
+            snprintf(cmd, sizeof cmd, "SetStateBit%d=%d", (int) a.p[2 * k], (int) a.p[2 * k + 1]);
+            if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+        }
+        issued();
+        return 0;
+    case KM_ACTION_DAC: {
+        int v = (int) floor(rpm * a.p[1] + a.p[2] + 0.5);          // scale and offset, then the limits
+        if (v < (int) a.p[3]) v = (int) a.p[3];
+        if (v > (int) a.p[4]) v = (int) a.p[4];
+        snprintf(cmd, sizeof cmd, "DAC%d=%d", (int) a.p[0], v);
+        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+        issued();
+        return 0;
+    }
+    default:
+        break;
+    }
+    // a program. One that wasn't waited for may still be running in the thread, and loading
+    // over it would cut it short: let it finish (a thread that never ends is an error)
+    int thread = (int) a.p[0], var = (int) a.p[1];
+    snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
+    for (double t0 = now_s();;) {
+        if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); return 1; }
+        if (strcmp(reply, "0") == 0) break;
+        if (d->aborting || d->stop) return 2;
+        if (now_s() - t0 > 10) {
+            d->message(std::string("spindle: thread ") + std::to_string(thread) + " is busy with another program, " + a.file + " was not run");
+            return 1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (var >= 0) {
+        unsigned bits = (unsigned) mcode;
+        if (mcode == 10) { float f = (float) rpm; memcpy(&bits, &f, sizeof bits); }   // S: the speed as a float
+        snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var, bits);
+        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    }
+    if (a.file[0]) {
+        size_t n = strlen(a.file);
+        if (n > 4 && !strcasecmp(a.file + n - 4, ".out")) {
+            if (d->km->LoadCoff(thread, a.file, 0)) { d->message(std::string("spindle: loading ") + a.file + " failed"); return 1; }
+        } else {
+            char err[512] = "";
+            if (d->km->CompileAndLoadCoff(a.file, thread, err, sizeof err - 1)) {
+                d->message(std::string("spindle program failed: ") + a.file + ": " + err);
+                return 1;
+            }
+        }
+    }
+    snprintf(cmd, sizeof cmd, "Execute%d", thread);
+    if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    issued();
+    if (a.type == KM_ACTION_PROGRAM) return 0;
+    snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
+    for (double t0 = now_s();;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (d->aborting || d->stop) return 2;
+        if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); return 1; }
+        if (strcmp(reply, "0") == 0) break;
+        if (now_s() - t0 > 120) { d->message(std::string("spindle: ") + a.file + " did not finish within 120 s"); return 1; }
+    }
+    if (a.type == KM_ACTION_PROGRAM_WAIT_SYNC) {
+        // the program may have moved axes: carry on from where the board stands
+        double x, y, z, aa, bb, cc, u, v;
+        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &aa, &bb, &cc, &u, &v) == 0) {
+            double p[9] = {x, y, z, aa, bb, cc, u, v, 0};
+            memcpy(d->pos, p, sizeof p);
+            set_cm_position(d, d->pos);
+        } else {
+            d->cm->ClearAbort();
+        }
+    }
+    return 0;
+}
+
+static void w_spindle(KmBackend::Impl *d, const Cmd &c)
+{
+    // a speed change superseded by the next queued one (the override slider sends a stream
+    // of them) is skipped; a start, stop or reversal never is
+    {
+        std::lock_guard<std::mutex> lock(d->qmx);
+        if (c.sp_state == d->sp_state && !d->q.empty() && d->q.front().kind == Cmd::SPINDLE && d->q.front().sp_state == c.sp_state)
+            return;
+    }
+    if (c.sp_css && c.sp_state != 0) {
+        if (!d->aborting) {
+            d->message("G96 constant surface speed is not supported yet: the spindle was not started");
+            d->errors++;
+            w_abort(d);
+        }
+        return;
+    }
+    if (d->cfg.simulate) {
+        d->sp_state = c.sp_state;
+        if (c.sp_state) d->sp_rpm = c.sp_rpm;
+        return;
+    }
+    const KmAction *A = d->cfg.spindle;
+    int r = 0;
+    if (c.sp_state != 0) {
+        // S before M3/M4, as a block "M3 S600" runs in KMotionCNC: the S program saves the
+        // speed, the M3 program spins up to it. While it turns, a new speed is S alone
+        if (d->sp_state == 0 || c.sp_state != d->sp_state || c.sp_rpm != d->sp_rpm)
+            r = w_action(d, A[KM_SPINDLE_S], 10, c.sp_rpm, [&] { d->sp_rpm = c.sp_rpm; });
+        if (r == 0 && c.sp_state != d->sp_state) {
+            bool cw = c.sp_state > 0;
+            r = w_action(d, A[cw ? KM_SPINDLE_M3 : KM_SPINDLE_M4], cw ? 3 : 4, c.sp_rpm, [&] { d->sp_state = c.sp_state; });
+        }
+    } else if (d->sp_state != 0) {
+        r = w_action(d, A[KM_SPINDLE_M5], 5, c.sp_rpm, [&] { d->sp_state = 0; });
+    }
+    if (r == 1 && !d->aborting) {
+        // the spindle isn't doing what LinuxCNC believes: stop, as a planner failure does
+        d->errors++;
+        w_abort(d);
+    }
+}
+
 static void worker_main(KmBackend::Impl *d)
 {
     d->last_tick = d->last_poll = now_s();
@@ -963,12 +1152,13 @@ static void worker_main(KmBackend::Impl *d)
                 break;
             case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
             case Cmd::HOME: if (!d->cfg.simulate) w_home(d, c.home); break;
+            case Cmd::SPINDLE: w_spindle(d, c); d->spindle_done++; break;
             case Cmd::PATH_MODE:
                 // in program order with the moves; the planner applies it per waypoint
                 d->cm->SetPathMode(c.term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP,
                                    (c.term_cond == 2 && c.tolerance > 0) ? c.tolerance : -1.0);
                 break;
-            case Cmd::JOG_TO: if (!d->cfg.simulate) w_jog_to(d, c); break;
+            case Cmd::JOG_TO: if (!d->cfg.simulate) w_jog_to(d, c); d->jog_written[c.axis]++; break;
             }
         }
         double t = now_s();
@@ -1041,6 +1231,22 @@ KmBackend::~KmBackend()
 }
 
 bool KmBackend::is_board() const { return !d->cfg.simulate; }
+bool KmBackend::has_spindle() const
+{
+    for (const KmAction &a : d->cfg.spindle) if (a.type != KM_ACTION_NONE) return true;
+    return false;
+}
+
+void KmBackend::spindle(int state, double rpm, bool css)
+{
+    Cmd c{};
+    c.kind = Cmd::SPINDLE;
+    c.sp_state = state;
+    c.sp_rpm = rpm;
+    c.sp_css = css;
+    d->post(c);
+}
+
 bool KmBackend::has_home_program() const { return !d->cfg.simulate && d->cfg.home_program[0] != 0; }
 
 void KmBackend::home(const KmHomeRequest &req)
@@ -1131,11 +1337,13 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         }
         fprintf(stderr, "kmotion-motion: connected to a %s\n", type == BOARD_TYPE_KOGNA ? "Kogna" : "KFLOP");
         d->km->SetConsoleCallback(console_handler);     // registers with the server: board mode only
-        if (cfg.init_program[0] && run_program(d, cfg.init_program, cfg.init_thread)) {
-            std::string m;
-            { std::lock_guard<std::mutex> lock(d->smx); m = d->messages; }
-            fprintf(stderr, "kmotion-motion: %s\n", m.c_str());
-            return false;
+        for (const std::string &prog : cfg.init_programs) {
+            if (run_program(d, prog.c_str(), cfg.init_thread)) {
+                std::string m;
+                { std::lock_guard<std::mutex> lock(d->smx); m = d->messages; }
+                fprintf(stderr, "kmotion-motion: %s\n", m.c_str());
+                return false;
+            }
         }
         if (cm->SetAxisDefinitions(cfg.channel[0], cfg.channel[1], cfg.channel[2], cfg.channel[3],
                                    cfg.channel[4], cfg.channel[5], cfg.channel[6], cfg.channel[7])) {
@@ -1228,7 +1436,9 @@ void KmBackend::abort()
         std::lock_guard<std::mutex> lock(d->qmx);
         std::deque<Cmd> keep;
         for (const Cmd &x : d->q)
-            if (x.kind == Cmd::FEED || x.kind == Cmd::SET_POS || x.kind == Cmd::MACHINE_ON || x.kind == Cmd::PATH_MODE) keep.push_back(x);
+            if (x.kind == Cmd::FEED || x.kind == Cmd::SET_POS || x.kind == Cmd::MACHINE_ON || x.kind == Cmd::PATH_MODE ||
+                x.kind == Cmd::SPINDLE) keep.push_back(x);
+            else if (x.kind == Cmd::JOG_TO) d->jog_written[x.axis]++;   // dropped: nothing to wait for
         d->q.swap(keep);
     }
     d->cm->SetAbort();
@@ -1268,16 +1478,19 @@ void KmBackend::jog(int axis, double vel)
     if (ch < 0) return;
     char cmd[64];
     snprintf(cmd, sizeof cmd, "Jog%d=%.3f", ch, vel * d->scale[axis]);   // counts/s, the board's limits apply
-    d->send_urgent(cmd);
+    d->jog_issued[axis]++;
+    d->send_urgent(cmd, axis);
 }
 
-void KmBackend::jog_to(int axis, double target, double)
+void KmBackend::jog_to(int axis, double target, double vel)
 {
-    if (d->cfg.simulate || axis < 0 || axis >= 8) return;
+    if (d->cfg.simulate || axis < 0 || axis >= 8 || d->cfg.channel[axis] < 0) return;
     Cmd c{};
     c.kind = Cmd::JOG_TO;
     c.axis = axis;
     c.end[axis] = target;
+    c.vel = vel;
+    d->jog_issued[axis]++;
     d->post(c);
 }
 
@@ -1292,6 +1505,8 @@ void KmBackend::state(KmState &out)
 {
     std::lock_guard<std::mutex> lock(d->smx);
     out = d->st;
+    out.jog_busy = 0;
+    for (int i = 0; i < 8; i++) if (d->jog_finished[i] != d->jog_issued[i]) out.jog_busy |= 1u << i;
     out.message[0] = 0;
     if (!d->messages.empty()) {
         snprintf(out.message, sizeof out.message, "%s", d->messages.c_str());

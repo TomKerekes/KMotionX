@@ -1,0 +1,5 @@
+# Run by LinuxCNC after gmoccapy has made its pins ([HAL] POSTGUI_HALFILE in kmotion-kogna.ini):
+# gmoccapy's spindle bar shows the spindle speed measured on the board ([KMOTION] SPINDLE_SPEED_*),
+# so a spin-down shows as it happens. Its "Spindle [rpm]" label stays the commanded speed.
+# With DISPLAY = axis there are no gmoccapy pins: comment POSTGUI_HALFILE out.
+net spindle-rpm-measured kmotion.spindle-rpm-abs => gmoccapy.spindle_feedback_bar

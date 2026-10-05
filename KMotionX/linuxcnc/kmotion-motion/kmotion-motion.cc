@@ -34,6 +34,8 @@
 #include <deque>
 #include <fstream>
 #include <map>
+#include <sstream>
+#include <vector>
 #include <string>
 #include <signal.h>
 #include <thread>
@@ -157,7 +159,8 @@ struct Segment {
 };
 
 struct Jog {
-    bool active;
+    bool active;            // stand-in model: moving m.pos
+    bool held;              // board mode: a continuous jog, running on the board until it is stopped
     bool to_target;
     double target;
     double vel;             // signed for continuous jogs
@@ -178,6 +181,7 @@ struct Model {
     HomingParams hp[EMCMOT_MAX_JOINTS];       // from SET_JOINT_HOMING_PARAMS
     int home_seen;          // backend homing runs already taken into account
     unsigned home_pending;  // joints the board is homing
+    int spindle_posted;     // spindle commands handed to the backend (it counts the ones done)
     bool probing;
     // with the KMotion backend
     KmState ks;             // what the backend reported last
@@ -205,11 +209,20 @@ static void model_init()
     }
     for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) { m.joint_home[j] = 0; m.hp[j] = Model::HomingParams(); }
     m.home_seen = 0;
+    m.spindle_posted = 0;
     m.home_pending = 0;
     memset(&m.ks, 0, sizeof m.ks);
     m.last_move_time = 0;
     m.last_type = 0;
     memset(&m.last_tag, 0, sizeof m.last_tag);
+}
+
+// a jog in either mode; on the board it runs until the board reports the axis done
+static bool jog_running(int i) { return m.jog[i].active || m.jog[i].held || ((m.ks.jog_busy >> i) & 1); }
+static bool any_jog_running()
+{
+    for (int i = 0; i < NAXES; i++) if (jog_running(i)) return true;
+    return false;
 }
 
 static bool any_jog_active()
@@ -224,8 +237,9 @@ static void stop_jogs(int which)       // -1: all
         if (which >= 0 && which != i) continue;
         // only a jog that is running gets a stop on the board: a Jog<ch>=0 to an axis in
         // coordinated motion would interfere with it (ABORT comes through here too)
-        if (m.jog[i].active && km && km->is_board()) km->jog_stop(i);
+        if (jog_running(i) && km && km->is_board()) km->jog_stop(i);
         m.jog[i].active = false;
+        m.jog[i].held = false;
     }
 }
 
@@ -293,6 +307,31 @@ static double net_feed_scale()
 }
 
 static void mark_joint_homed(int j, bool homed, bool move_to_home = true);
+
+// LinuxCNC's spindle 0 to the board ([KMOTION] SPINDLE_*): its speed after the override and
+// the [SPINDLE_0] limits, exactly as motmod computes spindle.0.speed-out, then its state. The
+// direction of "M4 S0" survives as -0.0. The backend works out which actions that takes.
+static void spindle_to_board()
+{
+    if (!km || !km->has_spindle()) return;
+    const spindle_status_t &ss = emcmotStatus->spindle_status[0];
+    double speed = ss.speed * ss.net_scale;
+    if (speed > 0) {
+        if (speed > ss.max_pos_speed) speed = ss.max_pos_speed;
+        else if (speed < ss.min_pos_speed) speed = ss.min_pos_speed;
+    } else if (speed < 0) {
+        if (speed < ss.min_neg_speed) speed = ss.min_neg_speed;
+        else if (speed > ss.max_neg_speed) speed = ss.max_neg_speed;
+    }
+    int state = ss.state ? (std::signbit(speed) ? -1 : 1) : 0;
+    km->spindle(state, fabs(speed), ss.css_factor != 0);
+    m.spindle_posted++;
+}
+
+static void spindle_net_scale(spindle_status_t &ss)
+{
+    ss.net_scale = (emcmotStatus->enables_new & SS_ENABLED) ? ss.scale : 1.0;
+}
 
 static void model_step(double dt)
 {
@@ -390,6 +429,9 @@ struct Pins {
         hal_bool_t on, forward, reverse, brake, at_speed;
         hal_real_t speed_out, speed_out_abs, speed_out_rps, speed_out_rps_abs, speed_cmd_rps;
     } spindle[EMCMOT_MAX_SPINDLES];
+    // the spindle's speed measured on the board ([KMOTION] SPINDLE_SPEED_*), for a GUI's
+    // feedback display or spindle.0.speed-in
+    hal_real_t kspindle_rpm, kspindle_rpm_abs, kspindle_rps;
 };
 static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires that
 
@@ -434,6 +476,9 @@ static int create_pins()
         PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->spindle[s].speed_out_rps_abs, 0, "spindle.%d.speed-out-rps-abs", s));
         PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->spindle[s].speed_cmd_rps, 0, "spindle.%d.speed-cmd-rps", s));
     }
+    PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rpm, 0, "kmotion.spindle-rpm"));
+    PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rpm_abs, 0, "kmotion.spindle-rpm-abs"));
+    PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rps, 0, "kmotion.spindle-rps"));
     return 0;
 }
 
@@ -484,6 +529,11 @@ static int init_comm_buffers()
         emcmotStatus->spindle_status[n].net_scale = 1.0;
         emcmotStatus->spindle_status[n].at_speed = 1;
         emcmotStatus->spindle_status[n].brake = 1;
+        // no limits until task sends SET_SPINDLE_PARAMS (its defaults when the ini has none)
+        emcmotStatus->spindle_status[n].max_pos_speed = 1e99;
+        emcmotStatus->spindle_status[n].min_pos_speed = 0;
+        emcmotStatus->spindle_status[n].min_neg_speed = -1e99;
+        emcmotStatus->spindle_status[n].max_neg_speed = 0;
     }
     emcmotStatus->net_feed_scale = 1.0;
     // adaptive feed off, feed override, spindle override and feed hold on (motmod's defaults)
@@ -519,8 +569,9 @@ static void update_motion_state()
 // everything derived from the model, once per cycle
 static void update_status()
 {
-    bool coord_busy = km ? (m.ks.running || m.ks.homing) : (m.active || !m.queue.empty());
-    bool inpos = !coord_busy && !any_jog_active();
+    bool coord_busy = km ? (m.ks.running || m.ks.homing || m.spindle_posted != m.ks.spindle_done)
+                         : (m.active || !m.queue.empty());
+    bool inpos = !coord_busy && !any_jog_running();
     SET_MOTION_INPOS_FLAG(inpos ? 1 : 0);
     emcmotStatus->carte_pos_cmd = array_to_pose(m.pos);
     emcmotStatus->carte_pos_fb = emcmotStatus->carte_pos_cmd;
@@ -531,7 +582,7 @@ static void update_status()
     emcmotStatus->queueFull = depth >= QUEUE_LIMIT;
     emcmotStatus->paused = m.paused;
     emcmotStatus->stepping = m.stepping;
-    emcmotStatus->jogging_active = any_jog_active();
+    emcmotStatus->jogging_active = any_jog_running();
     emcmotStatus->current_vel = m.current_vel;
     emcmotStatus->net_feed_scale = net_feed_scale();
     emcmotStatus->enables_queued = emcmotStatus->enables_new;
@@ -567,7 +618,7 @@ static void update_status()
             joint->pos_fb = m.pos[j];
             joint->motor_pos_cmd = m.pos[j] + joint->motor_offset;
             joint->motor_pos_fb = joint->motor_pos_cmd;
-            SET_JOINT_INPOS_FLAG(joint, m.jog[j].active ? 0 : 1);
+            SET_JOINT_INPOS_FLAG(joint, jog_running(j) ? 0 : 1);
         }
         SET_JOINT_ENABLE_FLAG(joint, GET_MOTION_ENABLE_FLAG() && (km == NULL || j >= 8 || m.ks.enabled[j]));
         js->flag = joint->flag;
@@ -586,7 +637,7 @@ static void update_status()
     for (int a = 0; a < NAXES; a++) {
         emcmotStatus->axis_status[a].max_pos_limit = m.jog_max[a];
         emcmotStatus->axis_status[a].min_pos_limit = m.jog_min[a];
-        emcmotStatus->axis_status[a].teleop_vel_cmd = m.jog[a].active ? m.jog[a].vel : 0;
+        emcmotStatus->axis_status[a].teleop_vel_cmd = jog_running(a) ? m.jog[a].vel : 0;
     }
     emcmotStatus->heartbeat++;
 }
@@ -623,6 +674,10 @@ static void update_pins()
         hal_set_real(pins->spindle[s].speed_out_rps_abs, fabs(rpm) / 60.0);
         hal_set_real(pins->spindle[s].speed_cmd_rps, ss.speed / 60.0);
     }
+    double measured = km ? m.ks.spindle_rpm_measured : 0;
+    hal_set_real(pins->kspindle_rpm, measured);
+    hal_set_real(pins->kspindle_rpm_abs, fabs(measured));
+    hal_set_real(pins->kspindle_rps, measured / 60.0);
 }
 
 // ---- commands --------------------------------------------------------------------------
@@ -656,9 +711,15 @@ static void start_jog(int index, bool to_target, double target, double vel)
     if (index < 0 || index >= NAXES) return;
     if (!GET_MOTION_ENABLE_FLAG() || (km ? m.ks.running : (m.active && !m.paused))) return;
     if (km && km->is_board()) {
-        // the board jogs the actuator itself, within its own axis limits
+        // the board jogs the actuator itself, within its own axis limits; a continuous jog is
+        // remembered so the stop (the jog button released) reaches the board
         if (to_target) km->jog_to(index, target, vel);
         else km->jog(index, vel);
+        Jog &bj = m.jog[index];
+        bj.held = !to_target;
+        bj.to_target = to_target;
+        bj.target = target;
+        bj.vel = vel;
         return;
     }
     Jog &j = m.jog[index];
@@ -699,6 +760,11 @@ static void handle_command()
         SET_MOTION_ENABLE_FLAG(0);
         if (km) km->abort();
         if (km && km->is_board()) km->machine_on(false);
+        if (emcmotStatus->spindle_status[0].state) {
+            spindle_status_t &ss = emcmotStatus->spindle_status[0];
+            ss.speed = 0; ss.direction = 0; ss.state = 0;
+            spindle_to_board();
+        }
         m.queue.clear();
         m.active = false;
         m.paused = false;
@@ -765,12 +831,15 @@ static void handle_command()
         log_print("SPINDLE_SCALE spindle=%d scale=%.6g\n", c->spindle, c->scale);
         if (c->spindle >= 0 && c->spindle < EMCMOT_MAX_SPINDLES) {
             emcmotStatus->spindle_status[c->spindle].scale = c->scale;
-            emcmotStatus->spindle_status[c->spindle].net_scale = (emcmotStatus->enables_new & SS_ENABLED) ? c->scale : 1.0;
+            spindle_net_scale(emcmotStatus->spindle_status[c->spindle]);
+            if (c->spindle == 0 && emcmotStatus->spindle_status[0].state) spindle_to_board();
         }
         break;
     case EMCMOT_SS_ENABLE:
         log_print("SS_ENABLE %d\n", c->mode);
         if (c->mode) emcmotStatus->enables_new |= SS_ENABLED; else emcmotStatus->enables_new &= ~SS_ENABLED;
+        for (int n = 0; n < EMCMOT_MAX_SPINDLES; n++) spindle_net_scale(emcmotStatus->spindle_status[n]);
+        if (emcmotStatus->spindle_status[0].state) spindle_to_board();
         break;
     case EMCMOT_FEED_SCALE:
         log_print("FEED_SCALE %.6g\n", c->scale);
@@ -846,7 +915,7 @@ static void handle_command()
         int i = GET_MOTION_TELEOP_FLAG() ? c->axis : c->joint;
         log_print("JOG_INCR joint=%d axis=%d offset=%.6g vel=%.6g\n", c->joint, c->axis, c->offset, c->vel);
         if (i >= 0 && i < NAXES) {
-            double from = m.jog[i].active && m.jog[i].to_target ? m.jog[i].target : m.pos[i];
+            double from = jog_running(i) && m.jog[i].to_target ? m.jog[i].target : m.pos[i];
             start_jog(i, true, from + c->offset, c->vel);
         }
         break;
@@ -1089,6 +1158,7 @@ static void handle_command()
             ss.brake = 0;
             ss.state = 1;
             ss.at_speed = 1;
+            if (c->spindle == 0) spindle_to_board();
         }
         break;
     case EMCMOT_SPINDLE_OFF:
@@ -1096,6 +1166,7 @@ static void handle_command()
         if (c->spindle >= 0 && c->spindle < EMCMOT_MAX_SPINDLES) {
             spindle_status_t &ss = emcmotStatus->spindle_status[c->spindle];
             ss.speed = 0; ss.direction = 0; ss.state = 0;
+            if (c->spindle == 0) spindle_to_board();
         }
         break;
     case EMCMOT_SPINDLE_INCREASE:
@@ -1103,6 +1174,7 @@ static void handle_command()
         if (c->spindle >= 0 && c->spindle < EMCMOT_MAX_SPINDLES) {
             spindle_status_t &ss = emcmotStatus->spindle_status[c->spindle];
             ss.speed += ss.speed > 0 ? 100 : (ss.speed < 0 ? -100 : 0);
+            if (c->spindle == 0 && ss.state) spindle_to_board();
         }
         break;
     case EMCMOT_SPINDLE_DECREASE:
@@ -1110,6 +1182,7 @@ static void handle_command()
         if (c->spindle >= 0 && c->spindle < EMCMOT_MAX_SPINDLES) {
             spindle_status_t &ss = emcmotStatus->spindle_status[c->spindle];
             if (ss.speed > 100) ss.speed -= 100; else if (ss.speed < -100) ss.speed += 100;
+            if (c->spindle == 0 && ss.state) spindle_to_board();
         }
         break;
     case EMCMOT_SPINDLE_BRAKE_ENGAGE:
@@ -1117,6 +1190,7 @@ static void handle_command()
         if (c->spindle >= 0 && c->spindle < EMCMOT_MAX_SPINDLES) {
             spindle_status_t &ss = emcmotStatus->spindle_status[c->spindle];
             ss.speed = 0; ss.direction = 0; ss.state = 0; ss.brake = 1;
+            if (c->spindle == 0) spindle_to_board();
         }
         break;
     case EMCMOT_SPINDLE_BRAKE_RELEASE:
@@ -1178,7 +1252,7 @@ static void handle_command()
 // Minimal ini reader: "[SECTION]" headers and "KEY = value" lines, '#' and ';' comments,
 // the first occurrence of a key wins (LinuxCNC's own convention).
 struct Ini {
-    std::map<std::string, std::string> kv;
+    std::multimap<std::string, std::string> kv;   // a repeated key keeps every value, in file order
     bool load(const char *path)
     {
         std::ifstream f(path);
@@ -1202,8 +1276,15 @@ struct Ini {
     }
     const char *get(const std::string &sec, const std::string &key) const
     {
-        std::map<std::string, std::string>::const_iterator it = kv.find(sec + "." + key);
-        return it == kv.end() ? NULL : it->second.c_str();
+        auto r = kv.equal_range(sec + "." + key);                 // the first value
+        return r.first == r.second ? NULL : r.first->second.c_str();
+    }
+    std::vector<std::string> all(const std::string &sec, const std::string &key) const
+    {
+        std::vector<std::string> v;
+        auto r = kv.equal_range(sec + "." + key);
+        for (auto it = r.first; it != r.second; ++it) v.push_back(it->second);
+        return v;
     }
     double num(const std::string &sec, const std::string &key, double dflt) const
     {
@@ -1211,6 +1292,63 @@ struct Ini {
         return v ? atof(v) : dflt;
     }
 };
+
+// a program path from the ini: absolute, or relative to the ini file's folder
+static std::string ini_relative(const char *ini_path, const std::string &file)
+{
+    if (file.empty() || file[0] == '/') return file;
+    std::string dir = ini_path;
+    size_t slash = dir.rfind('/');
+    dir = slash == std::string::npos ? "." : dir.substr(0, slash);
+    return dir + "/" + file;
+}
+
+// [KMOTION] SPINDLE_M3 / _M4 / _M5 / _S: one of KMotion's M-code actions, as KMotionCNC's
+// Tool Setup takes them:
+//   SETBIT <bit> <state>                  SETTWOBITS <bit> <state> <bit> <state>
+//   DAC <dac> <scale> <offset> <min> <max>
+//   PROGRAM | PROGRAM_WAIT | PROGRAM_WAIT_SYNC <thread> <var> <file>
+// The file is the rest of the line (it may contain spaces), relative to the ini.
+static bool parse_spindle_action(const char *ini_path, const char *key, const char *value, KmAction &a)
+{
+    static const struct { const char *name; int type, nparams; bool file; } T[] = {
+        {"NONE", KM_ACTION_NONE, 0, false},          {"SETBIT", KM_ACTION_SETBIT, 2, false},
+        {"SETTWOBITS", KM_ACTION_SETTWOBITS, 4, false}, {"DAC", KM_ACTION_DAC, 5, false},
+        {"PROGRAM", KM_ACTION_PROGRAM, 2, true},      {"PROGRAM_WAIT", KM_ACTION_PROGRAM_WAIT, 2, true},
+        {"PROGRAM_WAIT_SYNC", KM_ACTION_PROGRAM_WAIT_SYNC, 2, true}};
+    std::istringstream in(value);
+    std::string name;
+    in >> name;
+    for (const auto &t : T) {
+        if (strcasecmp(name.c_str(), t.name)) continue;
+        a.type = t.type;
+        for (int i = 0; i < t.nparams; i++) {
+            if (!(in >> a.p[i])) {
+                fprintf(stderr, "kmotion-motion: [KMOTION] %s = %s: %s takes %d numbers\n", key, value, t.name, t.nparams);
+                return false;
+            }
+        }
+        if (t.file) {
+            std::string rest;
+            std::getline(in, rest);
+            size_t b = rest.find_first_not_of(" \t"), e = rest.find_last_not_of(" \t\r");
+            if (b == std::string::npos) {
+                fprintf(stderr, "kmotion-motion: [KMOTION] %s = %s: %s needs a program file after <thread> <var>\n", key, value, t.name);
+                return false;
+            }
+            if (a.p[0] < 1 || a.p[0] > 7) {
+                fprintf(stderr, "kmotion-motion: [KMOTION] %s = %s: the thread must be 1-7\n", key, value);
+                return false;
+            }
+            std::string file = ini_relative(ini_path, rest.substr(b, e - b + 1));
+            snprintf(a.file, sizeof a.file, "%s", file.c_str());
+        }
+        return true;
+    }
+    fprintf(stderr, "kmotion-motion: [KMOTION] %s = %s: unknown action \"%s\" (NONE, SETBIT, SETTWOBITS, DAC, PROGRAM, PROGRAM_WAIT, PROGRAM_WAIT_SYNC)\n",
+            key, value, name.c_str());
+    return false;
+}
 
 static bool read_kmotion_config(KmConfig &cfg)
 {
@@ -1224,21 +1362,35 @@ static bool read_kmotion_config(KmConfig &cfg)
     const char *mode_ini = ini.get(K, "MODE");
     if (mode_ini && !strcasecmp(mode_ini, "board")) cfg.simulate = false;
     else if (mode_ini && !strcasecmp(mode_ini, "standin")) mode = "standin";
-    const char *prog = ini.get(K, "INIT_PROGRAM");
-    if (prog) snprintf(cfg.init_program, sizeof cfg.init_program, "%s", prog);
+    for (const std::string &prog : ini.all(K, "INIT_PROGRAM"))    // one or more, run in order
+        if (!prog.empty()) cfg.init_programs.push_back(ini_relative(ini_path, prog));
     cfg.init_thread = (int) ini.num(K, "INIT_THREAD", 1);
     const char *home = ini.get(K, "HOME_PROGRAM");
-    if (home && home[0]) {
-        if (home[0] == '/') snprintf(cfg.home_program, sizeof cfg.home_program, "%s", home);
-        else {                                        // relative to the ini file's directory
-            std::string dir = ini_path;
-            size_t slash = dir.rfind('/');
-            dir = slash == std::string::npos ? "." : dir.substr(0, slash);
-            snprintf(cfg.home_program, sizeof cfg.home_program, "%s/%s", dir.c_str(), home);
-        }
-    }
+    if (home && home[0]) snprintf(cfg.home_program, sizeof cfg.home_program, "%s", ini_relative(ini_path, home).c_str());
     cfg.home_thread = (int) ini.num(K, "HOME_THREAD", 2);
     cfg.home_timeout = ini.num(K, "HOME_TIMEOUT_S", 120);
+    cfg.spindle_speed_axis = (int) ini.num(K, "SPINDLE_SPEED_AXIS", -1);
+    cfg.spindle_counts_per_rev = ini.num(K, "SPINDLE_COUNTS_PER_REV", 0);
+    cfg.spindle_speed_tau = ini.num(K, "SPINDLE_SPEED_TAU", 0.1);
+    if (const char *from = ini.get(K, "SPINDLE_SPEED_FROM")) {
+        std::string f = from;
+        f.erase(f.find_last_not_of(" \t\r") + 1);
+        if (!strcasecmp(f.c_str(), "DEST")) cfg.spindle_speed_from_dest = true;
+        else if (!strcasecmp(f.c_str(), "POSITION")) cfg.spindle_speed_from_dest = false;
+        else {
+            fprintf(stderr, "kmotion-motion: [KMOTION] SPINDLE_SPEED_FROM = %s: DEST or POSITION\n", from);
+            return false;
+        }
+    }
+    if (cfg.spindle_speed_axis >= 0 && cfg.spindle_counts_per_rev <= 0) {
+        fprintf(stderr, "kmotion-motion: [KMOTION] SPINDLE_SPEED_AXIS needs SPINDLE_COUNTS_PER_REV\n");
+        return false;
+    }
+    static const char *spindle_keys[KM_SPINDLE_ACTIONS] = {"SPINDLE_M3", "SPINDLE_M4", "SPINDLE_M5", "SPINDLE_S"};
+    for (int i = 0; i < KM_SPINDLE_ACTIONS; i++) {
+        const char *v = ini.get(K, spindle_keys[i]);
+        if (v && v[0] && !parse_spindle_action(ini_path, spindle_keys[i], v, cfg.spindle[i])) return false;
+    }
     cfg.status_period = ini.num(K, "STATUS_PERIOD_MS", 20) * 1e-3;
     cfg.third_order = ini.num(K, "THIRD_ORDER", 1) != 0;
     cfg.cubic_knots = ini.num(K, "CUBIC_KNOTS", 1) != 0;
@@ -1377,6 +1529,17 @@ int main(int argc, char *argv[])
         // static destructors (the process once hung in exit for good). A watchdog ends
         // the process if the teardown hangs anyway.
         std::thread([] { std::this_thread::sleep_for(std::chrono::seconds(3)); _exit(0); }).detach();
+        if (km->has_spindle()) {
+            // a turning spindle stops with the program that drives it: hand over M5 and wait
+            // until the board has it (not for the spin-down)
+            emcmotStatus->spindle_status[0].state = 0;
+            spindle_to_board();
+            for (int i = 0; i < 300; i++) {
+                km->state(m.ks);
+                if (m.ks.spindle_state == 0 || m.ks.spindle_done == m.spindle_posted) break;
+                usleep(5000);
+            }
+        }
         km->abort();
         for (int i = 0; i < 200; i++) {
             km->state(m.ks);

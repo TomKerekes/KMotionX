@@ -11,6 +11,13 @@
 //                         on a board without a switch the search gives up after that travel
 //                         and the result is "failed", which exercises the whole path;
 //                         KM_HOME_ABORT=1 aborts the homing after a second instead
+//   backend-test spindle  (KM_BOARD=1 only) LinuxCNC's spindle through the bench's Spindle Using
+//                         Jogs programs (configs/kmotion-kogna/spindle): channel 3 turns at
+//                         RPM x 1000/60 counts/s, CW positive, CCW negative; G96 is refused
+//   backend-test jog      (KM_BOARD=1 only) jogs X as the protocol side does: a continuous jog
+//                         runs until it is stopped and the board has slowed to a stop, an
+//                         increment until the board is at the target (at the jog speed), a
+//                         stop ends an increment early, and an increment of 0 ends at once
 //   backend-test letters  the first moves of LinuxCNC's axis.ngc on the kmotion-kogna settings
 //                         (KM_KOGNA=1 selects those settings in simulate mode; KM_CORNER_TOL,
 //                         KM_BREAK_ANGLE override the planner's corner settings)
@@ -20,6 +27,8 @@
 // settings (2540 counts/in, 9.84 in/s, MinirouterInit.c): "abort" then measures the real
 // stop on the Kogna, with KM_JOG0=1 adding the Jog<ch>=0 the protocol side used to send.
 #include "kmotion-backend.h"
+#include "KMotionDLL.h"   // the spindle scenario watches channel 3 through a second connection
+#undef check              // KMotionX's dbg.h has a check() macro; the harness has its own
 #include <array>
 #include <chrono>
 #include <deque>
@@ -30,6 +39,7 @@
 #include <map>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 static int failures = 0;
 static void check(bool ok, const char *what)
@@ -308,6 +318,161 @@ static void scenario_home(KmBackend &km)
     check(f.messages.find("home program failed") == std::string::npos, "the program compiled and ran");
 }
 
+// configs/kmotion-kogna, found from where this program is (kmotion-motion/build/backend-test)
+static std::string kogna_config_dir()
+{
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (n <= 0) return "../configs/kmotion-kogna";
+    exe[n] = 0;
+    std::string p = exe;
+    for (int up = 0; up < 3; up++) p = p.substr(0, p.rfind('/'));     // the file, build, kmotion-motion
+    return p + "/configs/kmotion-kogna";
+}
+
+static void scenario_spindle(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  spindle: board mode only (KM_BOARD=1)\n"); return; }
+    CKMotionDLL board(0);
+    // channel 3's speed from its Dest over half a second of the board's own time, and the
+    // direction bits 1024 (CW) and 1025 (CCW)
+    double pos_rate = NAN;                 // channel 3's Position speed, counts/s (encoder 4, the quadrature trick)
+    auto measure = [&](double &counts_s, int &bits) {
+        MAIN_STATUS a, b;
+        memset(&a, 0, sizeof a);
+        memset(&b, 0, sizeof b);
+        if (board.GetStatus(a, true)) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (board.GetStatus(b, true)) return false;
+        double dt = b.TimeStamp - a.TimeStamp;
+        counts_s = dt > 0 ? (b.Dest[3] - a.Dest[3]) / dt : NAN;
+        pos_rate = dt > 0 ? (b.Position[3] - a.Position[3]) / dt : NAN;
+        bits = b.VirtualBitsEx0 & 3;
+        return true;
+    };
+    KmState st;
+    km.state(st);
+    const int done0 = st.spindle_done;
+    int posted = 0;
+    auto command = [&](int state, double rpm, bool css) {
+        auto t0 = std::chrono::steady_clock::now();
+        km.spindle(state, rpm, css);
+        posted++;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            km.state(st);
+            if (st.message[0]) printf("  message: %s\n", st.message);
+            double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            if (st.spindle_done - done0 >= posted) return t;
+            if (t > 30) { printf("  no result within 30 s\n"); return t; }
+        }
+    };
+    struct Step { int state; double rpm, counts_s; int bits; const char *what; };
+    const Step steps[] = {
+        {1, 600, 10000, 1, "M3 S600: CW at 10000 counts/s, bit 1024"},
+        {1, 1200, 20000, 1, "S1200 while turning: 20000 counts/s"},
+        {-1, 600, -10000, 2, "M4 S600: spins down, then CCW at -10000 counts/s, bit 1025"},
+        {0, 600, 0, 0, "M5: stops, both bits clear"},
+    };
+    for (const Step &x : steps) {
+        double took = command(x.state, x.rpm, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2500));     // the ramp, at 10000 counts/s^2
+        double v = NAN;
+        int bits = -1;
+        measure(v, bits);
+        km.state(st);
+        double rpm = x.counts_s * 60 / 1000;           // MySpindleDefs.h: 1000 counts/rev
+        printf("  the command took %.2f s; then Dest %.0f counts/s, Position %.0f counts/s, bits %d, measured %.1f RPM\n",
+               took, v, pos_rate, bits, st.spindle_rpm_measured);
+        check(fabs(v - x.counts_s) < 0.02 * fabs(x.counts_s) + 20, x.what);
+        check(bits == x.bits, "  the direction bits");
+        check(st.spindle_state == x.state, "  the backend's spindle state");
+        check(fabs(st.spindle_rpm_measured - rpm) < 0.02 * fabs(rpm) + 5, "  the measured spindle speed");
+    }
+    int errors = st.errors;
+    command(1, 600, true);
+    check(st.errors == errors + 1, "G96 (constant surface speed) is refused with an error");
+    double v = NAN;
+    int bits = -1;
+    measure(v, bits);
+    check(fabs(v) < 20 && bits == 0 && st.spindle_state == 0, "  and the spindle stays off");
+}
+
+static void scenario_jog(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  jog: board mode only (KM_BOARD=1)\n"); return; }
+    KmState st;
+    auto secs = [](std::chrono::steady_clock::time_point a) {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - a).count();
+    };
+    // until the backend reports X's jog finished: the time it took (-1: not within the limit)
+    auto wait_done = [&](double limit) {
+        auto t0 = std::chrono::steady_clock::now();
+        for (;;) {
+            km.state(st);
+            if (st.message[0]) printf("  message: %s\n", st.message);
+            if (!(st.jog_busy & 1)) return secs(t0);
+            if (secs(t0) > limit) return -1.0;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    };
+    const double count = 1.0 / 2540;
+    km.state(st);
+    const double x0 = st.pos[0];
+    printf("  X starts at %.5f\n", x0);
+    check(!(st.jog_busy & 1), "no jog before the first one");
+
+    // continuous at 1 in/s: busy while held, still busy right after the stop (the board slows
+    // down), then done with X standing still
+    km.jog(0, 1.0);
+    km.state(st);
+    check(st.jog_busy & 1, "a continuous jog is running as soon as it is issued");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    km.state(st);
+    printf("  after 1 s: X%.5f\n", st.pos[0]);
+    check((st.jog_busy & 1) && st.pos[0] > x0 + 0.8 && st.pos[0] < x0 + 1.1, "  still running a second later, X about 1 in further");
+    km.jog_stop(0);
+    km.state(st);
+    check(st.jog_busy & 1, "  still running right after the stop");
+    double t = wait_done(5);
+    printf("  stopped at X%.5f, %.3f s after the stop\n", st.pos[0], t);
+    check(t >= 0, "  finished after the stop");
+    double xs = st.pos[0];
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    km.state(st);
+    check(fabs(st.pos[0] - xs) < 1e-6, "  and X stands still");
+
+    // an increment of -0.5 at 1 in/s: about half a second, finished at the target
+    double target = st.pos[0] - 0.5;
+    km.jog_to(0, target, 1.0);
+    km.state(st);
+    check(st.jog_busy & 1, "an increment is running as soon as it is issued");
+    t = wait_done(5);
+    printf("  increment of -0.5 at 1 in/s: finished after %.3f s at X%.5f\n", t, st.pos[0]);
+    check(t > 0.45 && t < 1.0, "  it took about half a second (the jog speed, not the board's Vel)");
+    check(fabs(st.pos[0] - target) < count, "  finished at the target");
+
+    // an increment of +2 stopped after half a second
+    target = st.pos[0] + 2;
+    km.jog_to(0, target, 1.0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    km.jog_stop(0);
+    t = wait_done(5);
+    printf("  increment of +2 stopped after 0.5 s: finished %.3f s later at X%.5f\n", t, st.pos[0]);
+    check(t >= 0 && st.pos[0] < target - 1, "  the stop ends it short of the target");
+
+    // an increment of 0: nothing to move, finished at once
+    km.jog_to(0, st.pos[0], 1.0);
+    t = wait_done(1);
+    printf("  increment of 0: finished after %.3f s\n", t);
+    check(t >= 0 && t < 0.2, "an increment of 0 finishes at once");
+
+    // back to the start
+    km.jog_to(0, x0, 2.0);
+    t = wait_done(10);
+    check(t >= 0 && fabs(st.pos[0] - x0) < count, "back at the start");
+}
+
 static void scenario_abort(KmBackend &km)
 {
     bool board = km.is_board();
@@ -391,9 +556,25 @@ int main(int argc, char **argv)
     if (strcmp(scenario, "gated") == 0) cfg.queue_limit = 20;     // the backend must know task's limit
     if (getenv("KM_BOARD")) {
         cfg.simulate = false;
-        snprintf(cfg.init_program, sizeof cfg.init_program, "%s", "/home/tk/KMotionXCNC/settings/c-programs/MinirouterInit.c");
+        cfg.init_programs.push_back("/home/tk/KMotionXCNC/settings/c-programs/MinirouterInit.c");
         cfg.init_thread = 1;
-        snprintf(cfg.home_program, sizeof cfg.home_program, "%s", "/home/tk/KMotionX/KMotionX/linuxcnc/configs/kmotion-kogna/Home.c");
+        const std::string kogna = kogna_config_dir();
+        snprintf(cfg.home_program, sizeof cfg.home_program, "%s", (kogna + "/Home.c").c_str());
+        if (strcmp(scenario, "spindle") == 0) {           // as kmotion-kogna.ini sets it up
+            cfg.init_programs.push_back(kogna + "/spindle/SpindleAxis.c");
+            cfg.spindle_speed_axis = 3;
+            cfg.spindle_counts_per_rev = 1000;
+            cfg.spindle_speed_from_dest = !(getenv("KM_SPINDLE_FROM") && !strcasecmp(getenv("KM_SPINDLE_FROM"), "POSITION"));
+            cfg.spindle_speed_tau = 0.1;
+            printf("spindle speed measured from channel 3's %s\n", cfg.spindle_speed_from_dest ? "Dest" : "Position");
+            const char *file[KM_SPINDLE_ACTIONS] = {"OnCWJog.c", "OnCCWJog.c", "OffJog.c", "SpindleJog.c"};
+            for (int i = 0; i < KM_SPINDLE_ACTIONS; i++) {
+                cfg.spindle[i].type = KM_ACTION_PROGRAM_WAIT;
+                cfg.spindle[i].p[0] = 3;
+                cfg.spindle[i].p[1] = i == KM_SPINDLE_S ? 113 : 1;
+                snprintf(cfg.spindle[i].file, sizeof cfg.spindle[i].file, "%s/spindle/%s", kogna.c_str(), file[i]);
+            }
+        }
         cfg.status_period = getenv("KM_STATUS_MS") ? atof(getenv("KM_STATUS_MS")) / 1000.0 : 0.02;    // 5 ms polling stalls the Kogna link
         for (int i = 0; i < 3; i++) { cfg.axis[i].counts_per_unit = 2540; cfg.axis[i].max_vel = 9.84; cfg.axis[i].max_accel = 98.4; cfg.axis[i].max_jerk = 984; }
     }
@@ -410,6 +591,8 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "letters") == 0) scenario_letters(*km);
     else if (strcmp(scenario, "home") == 0) scenario_home(*km);
     else if (strcmp(scenario, "gated") == 0) scenario_gated(*km);
+    else if (strcmp(scenario, "spindle") == 0) scenario_spindle(*km);
+    else if (strcmp(scenario, "jog") == 0) scenario_jog(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();

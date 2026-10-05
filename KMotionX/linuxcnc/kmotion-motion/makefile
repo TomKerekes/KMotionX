@@ -55,6 +55,6 @@ test: build/backend-test
 	./build/backend-test abort 2>/dev/null | tail -14
 
 build/backend-test: backend-test.cc build/kmotion-backend.o kmotion-backend.h | build
-	$(CXX) $(OPT) -std=c++20 -I. -o $@ backend-test.cc build/kmotion-backend.o $(KM_LIBS) -lpthread
+	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) -I. $(KM_INC) -Wno-unknown-pragmas -Wno-overloaded-virtual -o $@ backend-test.cc build/kmotion-backend.o $(KM_LIBS) -lpthread
 
 .PHONY: test
