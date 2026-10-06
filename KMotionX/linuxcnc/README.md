@@ -118,6 +118,24 @@ through the same shared memory block.
     in a row with the board idle let the moves go, so a read from before the spin-up (or before
     `ServiceCSS()`'s next update) cannot. `kmotion.spindle-at-speed` shows it (the kmotion-kogna
     config lights gmoccapy's at-speed LED with it); the bench uses `AXIS 3`.
+  - **Board I/O bits as HAL pins**: `[KMOTION] OUTPUT_BITS = <bit> ...` makes a pin
+    `kmotion.out.<bit>` (HAL in) per bit, which the board bit follows (`SetStateBit`, set once
+    at start, then on every change); `INPUT_BITS` makes `kmotion.in.<bit>` (HAL out) from the
+    status read every `STATUS_PERIOD_MS`. Any HAL signal can then drive a board output: the
+    kmotion-kogna config nets `iocontrol.0.coolant-mist` (M7) and `-flood` (M8) to virtual bits
+    1026 and 1029 (M9 clears both). LinuxCNC's digital outputs `motion.digital-out-NN`
+    (`[KMOTION] NUM_DIO`, default 4) follow M64/M65 P<n> at once; the config nets
+    `motion.digital-out-00` to virtual bit 1028. M62/M63, which switch in step with the next
+    move, are refused for now (the moves are on the board by then).
+  - **User M codes M100-M199** as KMotionCNC's M-code actions: task runs the executable `M1xx`
+    it finds in `[RS274NGC] USER_M_PATH` as `M1xx <P> <Q>` (-1 for a word not given) and waits
+    for it. The config's `M1xx` is a two-line wrapper around `kmotion-mcode`, which sends the
+    code, P and Q to kmotion-motion on a Unix socket (abstract name `kmotion-motion`);
+    kmotion-motion carries out `[KMOTION] MCODE_<n>` (the spindle actions' syntax; P and Q go
+    to `<var>` and `<var>+1` as floats) through the backend, in order with its other board
+    work, and answers when it is over; an error stops the program. The kmotion-kogna bench has
+    `mcodes/M100` and `mcodes/M100.c` (thread 5, P and Q in persist 10 and 11: virtual bit 1027
+    on when P is not 0). `KM_BOARD=1 ./build/backend-test io` checks the bits and M100.
   - Planner settings come from the ini: `[KMOTION]` (mode, init program, 3rd order, cubic
     knots, actuator limits, segment log, break angle, tolerances, lookahead, board
     channels), the axis limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK`

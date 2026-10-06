@@ -26,7 +26,7 @@ KM_INC = -I$(KMOTIONX_DIR)/KMotionDLL -I$(KMOTIONX_DIR)/GCodeInterpreter -I$(KMO
 KM_DEFS = -D_KMOTIONX -DLIB_FTDI
 KM_LIBS = -L$(KMOTIONX_DIR)/bin -Wl,-rpath,$(KMOTIONX_DIR)/bin -lGCodeInterpreter -lKMotion -lKMotionX
 
-all: kmotion-motion
+all: kmotion-motion kmotion-mcode
 
 kmotion-motion: $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS) $(LIBS) $(KM_LIBS)
@@ -37,6 +37,10 @@ build/kmotion-motion.o: kmotion-motion.cc kmotion-backend.h | build
 build/kmotion-backend.o: kmotion-backend.cc kmotion-backend.h | build
 	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) $(KM_INC) -Wall -Wno-unknown-pragmas -Wno-overloaded-virtual -c -o $@ $<
 
+# the helper a config's M100-M199 wrappers run (see kmotion-mcode.c)
+kmotion-mcode: kmotion-mcode.c
+	$(CC) $(OPT) -Wall -Wextra -o $@ $<
+
 build/%.o: $(LINUXCNC_DIR)/src/emc/motion/%.c | build
 	$(CC) $(OPT) $(DEFS) $(INC) -std=gnu11 -c -o $@ $<
 
@@ -44,7 +48,7 @@ build:
 	mkdir -p build
 
 clean:
-	rm -rf build kmotion-motion
+	rm -rf build kmotion-motion kmotion-mcode
 
 .PHONY: all clean
 

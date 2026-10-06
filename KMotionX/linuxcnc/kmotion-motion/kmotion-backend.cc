@@ -71,7 +71,7 @@ struct Seg {
 };
 
 struct Cmd {
-    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME, SPINDLE } kind = LINE;
+    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME, SPINDLE, MCODE } kind = LINE;
     double end[9] = {}, center[3] = {}, normal[3] = {};
     double vel = 0, acc = 0, seconds = 0, feed_scale = 0, rapid_scale = 0, tolerance = 0;
     bool rapid = false, on = false;
@@ -81,6 +81,8 @@ struct Cmd {
     double sp_rpm = 0;
     bool sp_css = false;          // ... G96, with these
     KmSpindleCss css;
+    int mc = 0, ticket = 0;       // MCODE: the M code, its ticket, P and Q
+    double p = 0, q = 0;
 };
 
 struct KmBackend::Impl {
@@ -126,6 +128,8 @@ struct KmBackend::Impl {
     // G96 as last written to the board (w_css), for the AXIS target: the X counts of radius 0,
     // X's counts per inch, the surface speed in in/s and the maximum RPM
     std::atomic<double> css_xoff{0}, css_k{0}, css_surface{0}, css_max_rpm{0};
+    std::atomic<unsigned long long> input_states{0};   // poller: KmConfig.input_bits as last read
+    std::atomic<int> mcode_posted{0}, mcode_done{0}, mcode_result{0};   // user M codes: tickets
     std::atomic<int> spindle_done{0};  // spindle commands carried out or superseded
     std::atomic<double> sp_measured{0};    // the spindle axis's filtered speed, RPM (poller)
     double sp_prev = 0;                    // poller: the last Dest/Position read, and whether there is one
@@ -753,6 +757,10 @@ static void w_poll_board(KmBackend::Impl *d)
         d->sp_at_speed = at;
     }
     d->sp_at_speed_done = spindle_done;
+    unsigned long long in = 0;
+    for (size_t i = 0; i < d->cfg.input_bits.size() && i < 64; i++)
+        if (status_bit(status, d->cfg.input_bits[i]) == 1) in |= 1ull << i;
+    d->input_states = in;
     // jogs: an axis with no trajectory (or disabled) has finished every jog written before this read
     for (int i = 0; i < 8; i++) {
         int ch = d->cfg.channel[i];
@@ -1087,9 +1095,11 @@ failed_all:
 // wait types waited for. issued() runs once the board has the action. Returns 0 done,
 // 1 failed (message posted), 2 stopped waiting on an abort (the program carries on, as in
 // KMotionCNC).
-static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm, const std::function<void()> &issued)
+static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm, const std::function<void()> &issued,
+                    const double *pq = nullptr)
 {
     char cmd[640], reply[MAX_LINE + 1];
+    const std::string who = mcode >= 100 ? "M" + std::to_string(mcode) : "spindle";
     switch (a.type) {
     case KM_ACTION_NONE:
         issued();
@@ -1123,12 +1133,21 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
         if (strcmp(reply, "0") == 0) break;
         if (d->aborting || d->stop) return 2;
         if (now_s() - t0 > 10) {
-            d->message(std::string("spindle: thread ") + std::to_string(thread) + " is busy with another program, " + a.file + " was not run");
+            d->message(who + ": thread " + std::to_string(thread) + " is busy with another program, " + a.file + " was not run");
             return 1;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    if (var >= 0) {
+    if (var >= 0 && pq) {
+        // a user M code: P and Q as floats, in <var> and <var>+1 (LinuxCNC sends -1 for a word not given)
+        for (int k = 0; k < 2; k++) {
+            float f = (float) pq[k];
+            unsigned bits;
+            memcpy(&bits, &f, sizeof bits);
+            snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var + k, bits);
+            if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+        }
+    } else if (var >= 0) {
         unsigned bits = (unsigned) mcode;
         if (mcode == 10) { float f = (float) rpm; memcpy(&bits, &f, sizeof bits); }   // S: the speed as a float
         snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var, bits);
@@ -1137,11 +1156,11 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
     if (a.file[0]) {
         size_t n = strlen(a.file);
         if (n > 4 && !strcasecmp(a.file + n - 4, ".out")) {
-            if (d->km->LoadCoff(thread, a.file, 0)) { d->message(std::string("spindle: loading ") + a.file + " failed"); return 1; }
+            if (d->km->LoadCoff(thread, a.file, 0)) { d->message(who + ": loading " + a.file + " failed"); return 1; }
         } else {
             char err[512] = "";
             if (d->km->CompileAndLoadCoff(a.file, thread, err, sizeof err - 1)) {
-                d->message(std::string("spindle program failed: ") + a.file + ": " + err);
+                d->message(who + " program failed: " + a.file + ": " + err);
                 return 1;
             }
         }
@@ -1156,7 +1175,7 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
         if (d->aborting || d->stop) return 2;
         if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); return 1; }
         if (strcmp(reply, "0") == 0) break;
-        if (now_s() - t0 > 120) { d->message(std::string("spindle: ") + a.file + " did not finish within 120 s"); return 1; }
+        if (now_s() - t0 > 120) { d->message(who + ": " + a.file + " did not finish within 120 s"); return 1; }
     }
     if (a.type == KM_ACTION_PROGRAM_WAIT_SYNC) {
         // the program may have moved axes: carry on from where the board stands
@@ -1290,6 +1309,17 @@ static void worker_main(KmBackend::Impl *d)
             case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
             case Cmd::HOME: if (!d->cfg.simulate) w_home(d, c.home); break;
             case Cmd::SPINDLE: w_spindle(d, c); d->spindle_done++; break;
+            case Cmd::MCODE: {
+                // a user M code: its action with P and Q (in simulate mode nothing to do)
+                int r = 0;
+                if (!d->cfg.simulate && c.mc >= 100 && c.mc < 200) {
+                    const double pq[2] = {c.p, c.q};
+                    r = w_action(d, d->cfg.mcode[c.mc - 100], c.mc, c.p, [] {}, pq);
+                }
+                d->mcode_result = r;
+                d->mcode_done = c.ticket;
+                break;
+            }
             case Cmd::PATH_MODE:
                 // in program order with the moves; the planner applies it per waypoint
                 d->cm->SetPathMode(c.term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP,
@@ -1383,6 +1413,33 @@ void KmBackend::spindle(int state, double rpm, const KmSpindleCss *css)
     c.sp_css = css != nullptr;
     if (css) c.css = *css;
     d->post(c);
+}
+
+void KmBackend::set_bit(int bit, bool on)
+{
+    if (d->cfg.simulate) return;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "SetStateBit%d=%d", bit, on ? 1 : 0);
+    d->send_urgent(cmd);
+}
+
+int KmBackend::mcode(int n, double p, double q)
+{
+    Cmd c{};
+    c.kind = Cmd::MCODE;
+    c.mc = n;
+    c.p = p;
+    c.q = q;
+    c.ticket = ++d->mcode_posted;
+    d->post(c);
+    return c.ticket;
+}
+
+bool KmBackend::mcode_finished(int ticket, int &result)
+{
+    if (d->mcode_done < ticket) return false;
+    result = d->mcode_result;
+    return true;
 }
 
 bool KmBackend::has_home_program() const { return !d->cfg.simulate && d->cfg.home_program[0] != 0; }
@@ -1586,6 +1643,7 @@ void KmBackend::abort()
             if (x.kind == Cmd::FEED || x.kind == Cmd::SET_POS || x.kind == Cmd::MACHINE_ON || x.kind == Cmd::PATH_MODE ||
                 x.kind == Cmd::SPINDLE) keep.push_back(x);
             else if (x.kind == Cmd::JOG_TO) d->jog_written[x.axis]++;   // dropped: nothing to wait for
+            else if (x.kind == Cmd::MCODE) { d->mcode_result = 2; d->mcode_done = x.ticket; }
         d->q.swap(keep);
     }
     d->cm->SetAbort();
@@ -1655,6 +1713,7 @@ void KmBackend::state(KmState &out)
     out.jog_busy = 0;
     for (int i = 0; i < 8; i++) if (d->jog_finished[i] != d->jog_issued[i]) out.jog_busy |= 1u << i;
     out.status_count = d->status_count;
+    out.input_states = d->input_states;
     if (d->cfg.simulate || d->cfg.spindle_at_speed == KM_AT_SPEED_NONE) {
         out.spindle_at_speed = true;              // nothing to wait for
         out.spindle_at_speed_done = d->spindle_done;

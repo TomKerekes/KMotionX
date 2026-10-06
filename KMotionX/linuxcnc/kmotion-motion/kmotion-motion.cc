@@ -41,6 +41,11 @@
 #include <thread>
 #include <chrono>
 #include <unistd.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <atomic>
+#include <cstddef>
 
 #include <hal.h>
 #include "motion/motion.h"
@@ -71,6 +76,13 @@ static const char *logfile_name = NULL;
 static double period_s = 0.005;
 static KmBackend *km = NULL;                // KMotion's planner; NULL: the stand-in model below
 static int at_speed_source = KM_AT_SPEED_NONE;   // [KMOTION] SPINDLE_AT_SPEED (board mode)
+// board I/O bits as HAL pins ([KMOTION] OUTPUT_BITS, INPUT_BITS), LinuxCNC's digital outputs
+// (M64/M65, [KMOTION] NUM_DIO) and the user M codes with an action ([KMOTION] MCODE_<n>)
+static std::vector<int> output_bits, input_bits;
+static hal_bool_t *out_pins = NULL, *in_pins = NULL, *dout_pins = NULL;   // in HAL shared memory
+static std::vector<int> out_sent;            // what each output bit was last set to (-1: not yet)
+static int num_dio = 4;
+static bool mcode_configured[100];
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
 
@@ -1259,7 +1271,13 @@ static void handle_command()
         break;
     case EMCMOT_SET_DOUT:
         log_print("SET_DOUT out=%d start=%d end=%d now=%d\n", c->out, c->start, c->end, c->now);
-        if (c->out < EMCMOT_MAX_DIO) emcmotStatus->synch_do[c->out] = c->start;
+        if (!c->now) {
+            // M62/M63 switch with the next move; the moves are on the board by then
+            emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND;
+            report_error("M62/M63 (an output in step with motion) are not supported yet; M64/M65 set it at once");
+            break;
+        }
+        if (c->out < EMCMOT_MAX_DIO) emcmotStatus->synch_do[c->out] = c->start;   // motion.digital-out-NN
         break;
     case EMCMOT_SET_AOUT:
         log_print("SET_AOUT out=%d value=%.6g now=%d\n", c->out, c->minLimit, c->now);
@@ -1559,6 +1577,40 @@ static bool read_kmotion_config(KmConfig &cfg)
             return false;
         }
     }
+    // board I/O bits for HAL, and LinuxCNC's digital outputs
+    auto bit_list = [&](const char *key, std::vector<int> &bits, bool need_status) {
+        const char *v = ini.get(K, key);
+        if (!v) return true;
+        std::istringstream in(v);
+        int b;
+        while (in >> b) {
+            if (b < 0 || b > 2047 || (need_status && !km_status_has_bit(b))) {
+                fprintf(stderr, "kmotion-motion: [KMOTION] %s = %s: bit %d is not %s\n", key, v, b,
+                        need_status ? "one the board's status carries" : "a board bit (0-2047)");
+                return false;
+            }
+            bits.push_back(b);
+        }
+        return true;
+    };
+    if (!bit_list("OUTPUT_BITS", output_bits, false) || !bit_list("INPUT_BITS", input_bits, true)) return false;
+    if (input_bits.size() > 64) { fprintf(stderr, "kmotion-motion: [KMOTION] INPUT_BITS: at most 64\n"); return false; }
+    cfg.input_bits = input_bits;
+    num_dio = (int) ini.num(K, "NUM_DIO", 4);
+    if (num_dio < 0 || num_dio > EMCMOT_MAX_DIO) {
+        fprintf(stderr, "kmotion-motion: [KMOTION] NUM_DIO: 0-%d\n", EMCMOT_MAX_DIO);
+        return false;
+    }
+    // user M codes M100-M199: the same actions as the spindle's
+    for (int n = 100; n < 200; n++) {
+        char key[32];
+        snprintf(key, sizeof key, "MCODE_%d", n);
+        const char *v = ini.get(K, key);
+        if (v && v[0]) {
+            if (!parse_spindle_action(ini_path, key, v, cfg.mcode[n - 100])) return false;
+            mcode_configured[n - 100] = cfg.mcode[n - 100].type != KM_ACTION_NONE;
+        }
+    }
     static const char *spindle_keys[KM_SPINDLE_ACTIONS] = {"SPINDLE_M3", "SPINDLE_M4", "SPINDLE_M5", "SPINDLE_S"};
     for (int i = 0; i < KM_SPINDLE_ACTIONS; i++) {
         const char *v = ini.get(K, spindle_keys[i]);
@@ -1568,9 +1620,11 @@ static bool read_kmotion_config(KmConfig &cfg)
         bool clash = sp.first == cfg.home_thread && cfg.home_program[0];
         for (const KmAction &a : cfg.spindle)
             if (a.type >= KM_ACTION_PROGRAM && (int) a.p[0] == sp.first) clash = true;
+        for (const KmAction &a : cfg.mcode)
+            if (a.type >= KM_ACTION_PROGRAM && (int) a.p[0] == sp.first) clash = true;
         if (clash) {
-            fprintf(stderr, "kmotion-motion: [KMOTION] START_PROGRAM %s: thread %d is also used for homing or the "
-                    "spindle, whose programs would stop it\n", sp.second.c_str(), sp.first);
+            fprintf(stderr, "kmotion-motion: [KMOTION] START_PROGRAM %s: thread %d is also used for homing, the "
+                    "spindle or an M code, whose programs would stop it\n", sp.second.c_str(), sp.first);
             return false;
         }
     }
@@ -1605,6 +1659,107 @@ static bool read_kmotion_config(KmConfig &cfg)
 }
 
 // ---- main ----------------------------------------------------------------------------------
+// the pins that depend on the ini: kmotion.out.<bit>, kmotion.in.<bit>, motion.digital-out-NN
+static int create_io_pins()
+{
+    if (!output_bits.empty()) {
+        out_pins = (hal_bool_t *) hal_malloc(sizeof(hal_bool_t) * output_bits.size());
+        if (!out_pins) return -1;
+        for (size_t i = 0; i < output_bits.size(); i++)
+            PIN(hal_pin_new_bool(comp_id, HAL_IN, &out_pins[i], 0, "kmotion.out.%d", output_bits[i]));
+        out_sent.assign(output_bits.size(), -1);
+    }
+    if (!input_bits.empty()) {
+        in_pins = (hal_bool_t *) hal_malloc(sizeof(hal_bool_t) * input_bits.size());
+        if (!in_pins) return -1;
+        for (size_t i = 0; i < input_bits.size(); i++)
+            PIN(hal_pin_new_bool(comp_id, HAL_OUT, &in_pins[i], 0, "kmotion.in.%d", input_bits[i]));
+    }
+    if (num_dio > 0) {
+        dout_pins = (hal_bool_t *) hal_malloc(sizeof(hal_bool_t) * num_dio);
+        if (!dout_pins) return -1;
+        for (int i = 0; i < num_dio; i++)
+            PIN(hal_pin_new_bool(comp_id, HAL_OUT, &dout_pins[i], 0, "motion.digital-out-%02d", i));
+    }
+    return 0;
+}
+
+// every cycle: an output bit follows its pin (board mode; at start it is set once to the pin's
+// value), the input pins and the digital outputs follow the status
+static void update_io()
+{
+    for (size_t i = 0; i < output_bits.size(); i++) {
+        int v = hal_get_bool(out_pins[i]) ? 1 : 0;
+        if (v != out_sent[i] && km && km->is_board()) {
+            km->set_bit(output_bits[i], v);
+            log_print("bit %d = %d\n", output_bits[i], v);
+            out_sent[i] = v;
+        }
+    }
+    for (size_t i = 0; i < input_bits.size(); i++) hal_set_bool(in_pins[i], km && ((m.ks.input_states >> i) & 1));
+    for (int i = 0; i < num_dio; i++) hal_set_bool(dout_pins[i], emcmotStatus->synch_do[i] != 0);
+}
+
+// LinuxCNC's user M codes M100-M199 ([KMOTION] MCODE_<n>): task runs the executable M1xx it
+// finds in [RS274NGC] USER_M_PATH as "M1xx <P> <Q>" and waits for it; the config's M1xx is a
+// wrapper around kmotion-mcode, which sends "<n> <P> <Q>" here on a Unix socket (abstract name
+// "kmotion-motion") and waits for "ok" or "error". The action runs on the board through the
+// backend, in order with the rest of its board work; an error message reaches the GUI as any
+// backend message does, and the nonzero exit stops the program
+static std::atomic<bool> mcode_stop{false};
+
+static void mcode_server()
+{
+    int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    sockaddr_un addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sun_family = AF_UNIX;
+    static const char name[] = "\0kmotion-motion";
+    memcpy(addr.sun_path, name, sizeof name - 1);
+    socklen_t len = (socklen_t) (offsetof(sockaddr_un, sun_path) + sizeof name - 1);
+    if (s < 0 || bind(s, (sockaddr *) &addr, len) < 0 || listen(s, 4) < 0) {
+        log_print("user M codes: no socket (%s)\n", strerror(errno));
+        fprintf(stderr, "kmotion-motion: user M codes unavailable: socket: %s\n", strerror(errno));
+        if (s >= 0) close(s);
+        return;
+    }
+    while (!mcode_stop && !quit) {
+        pollfd pf = {s, POLLIN, 0};
+        if (poll(&pf, 1, 200) <= 0) continue;
+        int c = accept4(s, NULL, NULL, SOCK_CLOEXEC);
+        if (c < 0) continue;
+        char req[256];
+        size_t n = 0;
+        while (n < sizeof req - 1) {          // one line, within 2 s
+            pollfd pc = {c, POLLIN, 0};
+            if (poll(&pc, 1, 2000) <= 0) break;
+            ssize_t r = read(c, req + n, sizeof req - 1 - n);
+            if (r <= 0) break;
+            n += (size_t) r;
+            if (memchr(req, '\n', n)) break;
+        }
+        req[n] = 0;
+        int code = 0;
+        double p = -1, q = -1;
+        std::string reply;
+        if (sscanf(req, "%d %lf %lf", &code, &p, &q) < 1 || code < 100 || code > 199) {
+            reply = "error: expected <100-199> <P> <Q>";
+        } else if (!km || !mcode_configured[code - 100]) {
+            reply = "error: M" + std::to_string(code) + " has no [KMOTION] MCODE_" + std::to_string(code) + " action";
+        } else {
+            log_print("M%d P%g Q%g\n", code, p, q);
+            int ticket = km->mcode(code, p, q), result = 0;
+            while (!km->mcode_finished(ticket, result) && !mcode_stop) usleep(10000);
+            reply = result == 0 ? "ok" : result == 2 ? "error: aborted" : "error: failed";
+            log_print("M%d %s\n", code, reply.c_str());
+        }
+        reply += "\n";
+        if (write(c, reply.c_str(), reply.size()) < 0) { /* the client is gone (task aborted it) */ }
+        close(c);
+    }
+    close(s);
+}
+
 static void sighandler(int) { quit = 1; }
 
 static double now_s()
@@ -1651,6 +1806,7 @@ int main(int argc, char *argv[])
     cfg.queue_limit = QUEUE_LIMIT;
     if (mode == "kmotion" && !read_kmotion_config(cfg)) { hal_exit(comp_id); return 1; }
     at_speed_source = cfg.spindle_at_speed;
+    if (create_io_pins() < 0) { hal_exit(comp_id); return 1; }
     if (mode == "kmotion") {
         km = new KmBackend;
         if (!km->init(cfg, m.pos)) {
@@ -1678,6 +1834,9 @@ int main(int argc, char *argv[])
         return 1;
     }
     log_print("kmotion-motion started, period %.1f ms\n", period_s * 1e3);
+    std::thread mcode_thread;
+    for (bool any : mcode_configured)
+        if (any) { mcode_thread = std::thread(mcode_server); break; }
 
     double last = now_s();
     double next = last + period_s;
@@ -1699,6 +1858,7 @@ int main(int argc, char *argv[])
         emcmotStatus->tail = emcmotStatus->head;
         rtapi_mutex_give(&emcmotStruct->command_mutex);
         update_pins();
+        update_io();
 
         next += period_s;
         double sleep_s = next - now_s();
@@ -1707,6 +1867,8 @@ int main(int argc, char *argv[])
     }
 
     log_print("kmotion-motion stopping\n");
+    mcode_stop = true;
+    if (mcode_thread.joinable()) mcode_thread.join();
     if (km) {
         // a run in progress ends here: stop the board, give the backend a moment to finish
         // the stop, then take it down - its threads must not outlive the process's

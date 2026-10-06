@@ -23,6 +23,10 @@
 //                         stop ends an increment early, and an increment of 0 ends at once
 //   backend-test atbit    (KM_BOARD=1 only) SPINDLE_AT_SPEED = BIT 1030 1: the at-speed state
 //                         follows virtual bit 1030 as the test sets and clears it
+//   backend-test io       (KM_BOARD=1 only) an output bit (set_bit 1026) read back as an input
+//                         bit, and the user M code M100 (configs/kmotion-kogna/mcodes/M100.c in
+//                         thread 5, P and Q in persist 10 and 11), which sets virtual bit 1027
+//                         when P is not 0
 //   backend-test letters  the first moves of LinuxCNC's axis.ngc on the kmotion-kogna settings
 //                         (KM_KOGNA=1 selects those settings in simulate mode; KM_CORNER_TOL,
 //                         KM_BREAK_ANGLE override the planner's corner settings)
@@ -580,6 +584,44 @@ static void scenario_atbit(KmBackend &km)
     check(board.WriteLine("ClearBit1030") == 0 && settle(false), "clear again: not at speed");
 }
 
+static void scenario_io(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  io: board mode only (KM_BOARD=1)\n"); return; }
+    KmState st;
+    // until the published input bits (1026 = bit 0, 1027 = bit 1) match, within 2 s
+    auto inputs = [&](unsigned want) {
+        for (int i = 0; i < 200; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            km.state(st);
+            if (st.message[0]) printf("  message: %s\n", st.message);
+            if ((st.input_states & 3) == want) return true;
+        }
+        printf("  inputs read 0x%llx\n", st.input_states & 3);
+        return false;
+    };
+    km.set_bit(1026, false);
+    km.set_bit(1027, false);
+    check(inputs(0), "bits 1026 and 1027 clear");
+    km.set_bit(1026, true);
+    check(inputs(1), "set_bit(1026): read back set");
+    km.set_bit(1026, false);
+    check(inputs(0), "and clear again");
+    // M100 P1.5 Q2.5: the program sets bit 1027; M100 P0: clears it
+    auto mcode = [&](double p, double q) {
+        auto t0 = std::chrono::steady_clock::now();
+        int ticket = km.mcode(100, p, q), result = -1;
+        while (!km.mcode_finished(ticket, result)) {
+            if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(30)) { printf("  M100 not finished in 30 s\n"); return -1; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        printf("  M100 P%g Q%g: result %d after %.2f s\n", p, q, result,
+               std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        return result;
+    };
+    check(mcode(1.5, 2.5) == 0 && inputs(2), "M100 P1.5: done, bit 1027 set");
+    check(mcode(0, -1) == 0 && inputs(0), "M100 P0: done, bit 1027 clear");
+}
+
 static void scenario_abort(KmBackend &km)
 {
     bool board = km.is_board();
@@ -686,6 +728,14 @@ int main(int argc, char **argv)
                 snprintf(cfg.spindle[i].file, sizeof cfg.spindle[i].file, "%s/spindle/%s", kogna.c_str(), file[i]);
             }
         }
+        if (strcmp(scenario, "io") == 0) {            // as kmotion-kogna.ini sets M100 up
+            cfg.input_bits = {1026, 1027};
+            KmAction &a = cfg.mcode[0];
+            a.type = KM_ACTION_PROGRAM_WAIT;
+            a.p[0] = 5;
+            a.p[1] = 10;
+            snprintf(a.file, sizeof a.file, "%s/mcodes/M100.c", kogna.c_str());
+        }
         if (strcmp(scenario, "atbit") == 0) {
             cfg.spindle_at_speed = KM_AT_SPEED_BIT;
             cfg.spindle_at_speed_bit = 1030;
@@ -710,6 +760,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "spindle") == 0) scenario_spindle(*km);
     else if (strcmp(scenario, "jog") == 0) scenario_jog(*km);
     else if (strcmp(scenario, "atbit") == 0) scenario_atbit(*km);
+    else if (strcmp(scenario, "io") == 0) scenario_io(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();

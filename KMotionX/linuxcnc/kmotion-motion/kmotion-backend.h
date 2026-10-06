@@ -98,6 +98,11 @@ struct KmConfig {
     int spindle_at_speed_bit = -1;            // BIT: the I/O bit and the level meaning at speed
     int spindle_at_speed_level = 1;
     int spindle_at_speed_axis = -1;           // AXIS: the board channel (spindle_counts_per_rev converts)
+    // board input bits whose states every status read publishes (KmState.input_states)
+    std::vector<int> input_bits;              // at most 64, each one the status carries
+    // LinuxCNC's user M codes M100-M199 (index n - 100): KMotionCNC's M-code actions; P and Q
+    // go to the action's persist variable and the next one, as floats
+    KmAction mcode[100];
 };
 
 // the board's status carries this I/O bit (SPINDLE_AT_SPEED = BIT)
@@ -149,6 +154,7 @@ struct KmState {
     bool spindle_at_speed;        // at speed as of the last status read (always, without SPINDLE_AT_SPEED)
     int spindle_at_speed_done;    // ... a read made once this many spindle commands were done (cf. spindle_done)
     unsigned status_count;        // board: status reads so far
+    unsigned long long input_states;  // board: bit i = KmConfig.input_bits[i] in the last status read
     int spindle_done;             // counts spindle() calls carried out (or superseded)
     double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
@@ -187,6 +193,11 @@ public:
     // gets it through persist 110-114 first, and S gets the surface speed in units/s, as
     // KMotionCNC passes it; without css (G97) persist 110 goes back to RPM mode.
     void spindle(int state, double rpm, const KmSpindleCss *css = nullptr);
+    void set_bit(int bit, bool on);              // board: an output bit, in order with the jogs and stops
+    // user M code n (100-199): runs mcode[n - 100] with P and Q, in order with the other board
+    // work; the ticket is finished once the action is over (thread-safe, unlike state())
+    int mcode(int n, double p, double q);
+    bool mcode_finished(int ticket, int &result);   // result: 0 done, 1 failed (message posted), 2 aborted
     void machine_on(bool on);                    // enable/disable the axes
     void jog(int axis, double vel);              // continuous jog, units/s; 0 stops
     void jog_to(int axis, double target, double vel);
