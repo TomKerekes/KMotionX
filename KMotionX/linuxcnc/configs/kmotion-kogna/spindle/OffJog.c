@@ -11,11 +11,11 @@ int main()
 {
 	// spin down
 	
+	persist.UserData[STATEVAR] = 0;  // remember we are Off (first: ServiceCSS() (G96) jogs a spindle that is on)
 	ClearBit(SPINDLECW_BIT);
 	ClearBit(SPINDLECCW_BIT);
 	Jog(SPINDLEAXIS,0);
 	printf("Jogging Spindle Stop\n");
-	persist.UserData[STATEVAR] = 0;  // remember we are Off
 	while (!CheckDone(SPINDLEAXIS)) ;
 }
 

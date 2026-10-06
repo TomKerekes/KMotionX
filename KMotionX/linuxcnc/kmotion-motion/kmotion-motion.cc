@@ -308,14 +308,22 @@ static double net_feed_scale()
 
 static void mark_joint_homed(int j, bool homed, bool move_to_home = true);
 
-// LinuxCNC's spindle 0 to the board ([KMOTION] SPINDLE_*): its speed after the override and
-// the [SPINDLE_0] limits, exactly as motmod computes spindle.0.speed-out, then its state. The
-// direction of "M4 S0" survives as -0.0. The backend works out which actions that takes.
-static void spindle_to_board()
+// a spindle's commanded speed exactly as motmod computes spindle.N.speed-out: with G96
+// (css_factor) from X's distance to the css offset, capped at D (ss.speed), then the
+// override, then the [SPINDLE_N] limits. The direction of "M4 S0" survives as -0.0
+static double spindle_speed_cmd(const spindle_status_t &ss)
 {
-    if (!km || !km->has_spindle()) return;
-    const spindle_status_t &ss = emcmotStatus->spindle_status[0];
-    double speed = ss.speed * ss.net_scale;
+    double speed;
+    if (ss.css_factor) {
+        double denom = fabs(ss.xoffset - m.pos[0]);
+        speed = denom > 0 ? ss.css_factor / denom : ss.speed;
+        speed *= ss.net_scale;
+        double maxpositive = fabs(ss.speed);
+        if (speed < -maxpositive) speed = -maxpositive;
+        if (speed > maxpositive) speed = maxpositive;
+    } else {
+        speed = ss.speed * ss.net_scale;
+    }
     if (speed > 0) {
         if (speed > ss.max_pos_speed) speed = ss.max_pos_speed;
         else if (speed < ss.min_pos_speed) speed = ss.min_pos_speed;
@@ -323,8 +331,31 @@ static void spindle_to_board()
         if (speed < ss.min_neg_speed) speed = ss.min_neg_speed;
         else if (speed > ss.max_neg_speed) speed = ss.max_neg_speed;
     }
+    return speed;
+}
+
+// LinuxCNC's spindle 0 to the board ([KMOTION] SPINDLE_*): its speed and state. With G96 the
+// board works the speed out from X itself (a ServiceCSS() loop, as under KMotionCNC), so it
+// gets what that needs: the surface speed (units/s, override included), the maximum RPM (D,
+// within the [SPINDLE_0] limit for the direction; no D: KMotionCNC's 1e9) and the X of
+// radius 0. The backend works out which actions that takes.
+static void spindle_to_board()
+{
+    if (!km || !km->has_spindle()) return;
+    const spindle_status_t &ss = emcmotStatus->spindle_status[0];
+    double speed = spindle_speed_cmd(ss);
     int state = ss.state ? (std::signbit(speed) ? -1 : 1) : 0;
-    km->spindle(state, fabs(speed), ss.css_factor != 0);
+    if (ss.css_factor != 0 && state != 0) {
+        KmSpindleCss css;
+        css.surface_speed = fabs(ss.css_factor) * 2 * M_PI / 60 * ss.net_scale;
+        double max = fabs(ss.speed), limit = state > 0 ? ss.max_pos_speed : -ss.min_neg_speed;
+        if (limit < max) max = limit;
+        css.max_rpm = max < 1e9 ? max : 1e9;
+        css.x_offset = ss.xoffset;
+        km->spindle(state, fabs(speed), &css);
+    } else {
+        km->spindle(state, fabs(speed));
+    }
     m.spindle_posted++;
 }
 
@@ -663,7 +694,7 @@ static void update_pins()
     for (int a = 0; a < NAXES; a++) hal_set_real(pins->axis[a].pos_cmd, m.pos[a]);
     for (int s = 0; s < EMCMOT_MAX_SPINDLES; s++) {
         const spindle_status_t &ss = emcmotStatus->spindle_status[s];
-        double rpm = ss.speed * ss.net_scale;
+        double rpm = spindle_speed_cmd(ss);     // G96: follows X
         hal_set_bool(pins->spindle[s].on, ss.speed != 0);
         hal_set_bool(pins->spindle[s].forward, ss.speed > 0);
         hal_set_bool(pins->spindle[s].reverse, ss.speed < 0);
@@ -1365,6 +1396,20 @@ static bool read_kmotion_config(KmConfig &cfg)
     for (const std::string &prog : ini.all(K, "INIT_PROGRAM"))    // one or more, run in order
         if (!prog.empty()) cfg.init_programs.push_back(ini_relative(ini_path, prog));
     cfg.init_thread = (int) ini.num(K, "INIT_THREAD", 1);
+    for (const std::string &sp : ini.all(K, "START_PROGRAM")) {   // <thread> <file>, left running
+        std::istringstream in(sp);
+        int thread = 0;
+        std::string rest;
+        in >> thread;
+        std::getline(in, rest);
+        size_t b = rest.find_first_not_of(" \t"), e = rest.find_last_not_of(" \t\r");
+        if (thread < 1 || thread > 7 || b == std::string::npos) {
+            fprintf(stderr, "kmotion-motion: [KMOTION] START_PROGRAM = %s: <thread 1-7> <file>\n", sp.c_str());
+            return false;
+        }
+        cfg.start_programs.emplace_back(thread, ini_relative(ini_path, rest.substr(b, e - b + 1)));
+    }
+    cfg.spindle_css = ini.num(K, "SPINDLE_CSS", 0) != 0;
     const char *home = ini.get(K, "HOME_PROGRAM");
     if (home && home[0]) snprintf(cfg.home_program, sizeof cfg.home_program, "%s", ini_relative(ini_path, home).c_str());
     cfg.home_thread = (int) ini.num(K, "HOME_THREAD", 2);
@@ -1390,6 +1435,16 @@ static bool read_kmotion_config(KmConfig &cfg)
     for (int i = 0; i < KM_SPINDLE_ACTIONS; i++) {
         const char *v = ini.get(K, spindle_keys[i]);
         if (v && v[0] && !parse_spindle_action(ini_path, spindle_keys[i], v, cfg.spindle[i])) return false;
+    }
+    for (const auto &sp : cfg.start_programs) {
+        bool clash = sp.first == cfg.home_thread && cfg.home_program[0];
+        for (const KmAction &a : cfg.spindle)
+            if (a.type >= KM_ACTION_PROGRAM && (int) a.p[0] == sp.first) clash = true;
+        if (clash) {
+            fprintf(stderr, "kmotion-motion: [KMOTION] START_PROGRAM %s: thread %d is also used for homing or the "
+                    "spindle, whose programs would stop it\n", sp.second.c_str(), sp.first);
+            return false;
+        }
     }
     cfg.status_period = ini.num(K, "STATUS_PERIOD_MS", 20) * 1e-3;
     cfg.third_order = ini.num(K, "THIRD_ORDER", 1) != 0;

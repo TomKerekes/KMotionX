@@ -68,12 +68,31 @@ through the same shared memory block.
     so task's next command waits for a "wait" program as KMotionCNC's interpreter does. A
     stream of override steps collapses to the latest; a start, stop or reversal never does.
     Machine off and kmotion-motion's exit stop the spindle too, and the first stop after
-    start-up always runs M5. G96 constant surface speed is refused with an error for now.
+    start-up always runs M5.
     `INIT_PROGRAM` may be given more than once (run in order); program paths are absolute or
-    relative to the ini. The kmotion-kogna bench uses Dynomotion's Spindle Using Jogs programs
+    relative to the ini. `START_PROGRAM = <thread> <file>` (any number) starts a program after
+    the init programs and leaves it running: forever loops on the board.
+  - **G96 constant surface speed** (`[KMOTION] SPINDLE_CSS = 1`; without it G96 is refused with
+    an error) as KMotionCNC does it, on the board: LinuxCNC hands motion a CSS factor, X's
+    offset and the D maximum with every spindle on (motmod would recompute the RPM from X each
+    cycle; here a speed change runs a C program, far too slow for that). kmotion-motion turns
+    them into what KMotionCNC's `SetCSS()` writes: the X counts of radius 0, inches per count,
+    the surface speed in in/s (override included) and the maximum RPM (floats in persist
+    111-114), then the mode in 110 (2 for G96, 1 for G97); the S action gets the surface speed
+    too. A `ServiceCSS()` loop on the board (Dynomotion's `C Programs/SpindleUsingJogs/CSS/
+    CSSJog.c`) then sets the spindle's speed from X every 50 ms; Dynomotion's CSS spindle
+    programs leave the speed to it in mode 2. LinuxCNC's own display (`spindle.0.speed-out`)
+    follows X as motmod's does. No D: KMotionCNC's 10^9 RPM, within the `[SPINDLE_0]` limit.
+  - The kmotion-kogna bench uses Dynomotion's Spindle Using Jogs programs, the CSS set
     (`configs/kmotion-kogna/spindle/`, `MySpindleDefs.h` set for channel 3, which
-    `SpindleAxis.c` sets up): `KM_BOARD=1 ./build/backend-test spindle` checks 600/1200 RPM CW,
-    600 RPM CCW and off on channel 3 (10000 counts/s at 600 RPM) and the direction bits.
+    `SpindleAxis.c` sets up), with `TestIncludingCSS.c` (the `ServiceCSS()` loop) started in
+    thread 4. One fix in the copies: `OnCWJog.c` and `OnCCWJog.c` clear the spindle state
+    (`STATEVAR`) before a reversal's spin-down, and `OffJog.c` before its stop; otherwise, in
+    G96, `ServiceCSS()` jogs the spindle back up while they wait for it to stop, and an M3 to M4
+    reversal never finishes. `KM_BOARD=1 ./build/backend-test spindle` checks 600/1200 RPM CW,
+    600 RPM CCW and off on channel 3 (10000 counts/s at 600 RPM) and the direction bits, then
+    G96 S100 at a radius of 1 in (191 RPM), X moved out to 2 in with nothing sent (95.5 RPM),
+    D60, M4 in G96, G97 S600 and M5.
   - **Spindle speed** measured on the board, for the GUI: the status poller takes
     `[KMOTION] SPINDLE_SPEED_AXIS`'s channel, its commanded `Dest` (a jogged spindle's real
     ramps, no encoder needed) or its encoder `Position` (`SPINDLE_SPEED_FROM = DEST|POSITION`),
@@ -204,10 +223,8 @@ program zeroes the positions and the test moves the axes.
 
 1. Homing on a real machine (the switch bits in Home.c); in-position from the board's
    `AxisDone` for moves as well as jogs; jogging while paused.
-2. Spindle: G96 constant surface speed (KMotionCNC passes it to a `ServiceCSS()` loop in
-   persist 110-114); at-speed from the measured speed (gmoccapy has
-   `gmoccapy.spindle_at_speed_led`); spindle-synchronized motion (G33/G76) would need the
-   board's threading.
+2. Spindle: at-speed from the measured speed (gmoccapy has `gmoccapy.spindle_at_speed_led`);
+   spindle-synchronized motion (G33/G76) would need the board's threading.
 3. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
    module is bypassed and only gets joint positions to display.
 4. mm configs (LinuxCNC machine units vs KMotion's inches).

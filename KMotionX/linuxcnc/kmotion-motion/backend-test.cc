@@ -11,9 +11,11 @@
 //                         on a board without a switch the search gives up after that travel
 //                         and the result is "failed", which exercises the whole path;
 //                         KM_HOME_ABORT=1 aborts the homing after a second instead
-//   backend-test spindle  (KM_BOARD=1 only) LinuxCNC's spindle through the bench's Spindle Using
-//                         Jogs programs (configs/kmotion-kogna/spindle): channel 3 turns at
-//                         RPM x 1000/60 counts/s, CW positive, CCW negative; G96 is refused
+//   backend-test spindle  LinuxCNC's spindle through the bench's Spindle Using Jogs programs
+//                         (configs/kmotion-kogna/spindle; KM_BOARD=1): channel 3 turns at
+//                         RPM x 1000/60 counts/s, CW positive, CCW negative; then G96 through
+//                         Dynomotion's ServiceCSS() loop (started in thread 4) as X moves, its
+//                         D cap, and G97. Without a board: G96 refused without SPINDLE_CSS
 //   backend-test jog      (KM_BOARD=1 only) jogs X as the protocol side does: a continuous jog
 //                         runs until it is stopped and the board has slowed to a stop, an
 //                         increment until the board is at the target (at the jog speed), a
@@ -332,7 +334,22 @@ static std::string kogna_config_dir()
 
 static void scenario_spindle(KmBackend &km)
 {
-    if (!km.is_board()) { printf("  spindle: board mode only (KM_BOARD=1)\n"); return; }
+    if (!km.is_board()) {
+        KmState st;
+        km.state(st);
+        const int errors = st.errors;
+        KmSpindleCss css;
+        css.surface_speed = 20;
+        km.spindle(1, 191, &css);
+        for (int i = 0; i < 200 && st.spindle_done == 0; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            km.state(st);
+            if (st.message[0]) printf("  message: %s\n", st.message);
+        }
+        check(st.errors == errors + 1, "without SPINDLE_CSS, G96 is refused with an error");
+        printf("  (the spindle on the board: KM_BOARD=1)\n");
+        return;
+    }
     CKMotionDLL board(0);
     // channel 3's speed from its Dest over half a second of the board's own time, and the
     // direction bits 1024 (CW) and 1025 (CCW)
@@ -354,7 +371,7 @@ static void scenario_spindle(KmBackend &km)
     km.state(st);
     const int done0 = st.spindle_done;
     int posted = 0;
-    auto command = [&](int state, double rpm, bool css) {
+    auto command = [&](int state, double rpm, const KmSpindleCss *css) {
         auto t0 = std::chrono::steady_clock::now();
         km.spindle(state, rpm, css);
         posted++;
@@ -375,7 +392,7 @@ static void scenario_spindle(KmBackend &km)
         {0, 600, 0, 0, "M5: stops, both bits clear"},
     };
     for (const Step &x : steps) {
-        double took = command(x.state, x.rpm, false);
+        double took = command(x.state, x.rpm, nullptr);
         std::this_thread::sleep_for(std::chrono::milliseconds(2500));     // the ramp, at 10000 counts/s^2
         double v = NAN;
         int bits = -1;
@@ -389,13 +406,62 @@ static void scenario_spindle(KmBackend &km)
         check(st.spindle_state == x.state, "  the backend's spindle state");
         check(fabs(st.spindle_rpm_measured - rpm) < 0.02 * fabs(rpm) + 5, "  the measured spindle speed");
     }
-    int errors = st.errors;
-    command(1, 600, true);
-    check(st.errors == errors + 1, "G96 (constant surface speed) is refused with an error");
-    double v = NAN;
-    int bits = -1;
-    measure(v, bits);
-    check(fabs(v) < 20 && bits == 0 && st.spindle_state == 0, "  and the spindle stays off");
+    // G96 through the board's ServiceCSS() loop (TestIncludingCSS.c, started in thread 4):
+    // S100 ft/min = 20 in/s at the tool. X's offset puts the radius at 1 in (191.0 RPM); X then
+    // moves out to 2 in (95.5 RPM); D 60 caps it; M4 reverses it in G96 (the spin-down used
+    // to hang there: ServiceCSS() jogged it back up); G97 S600 goes back to RPM mode; M5
+    auto persist110 = [&] {
+        char reply[256] = "";
+        if (board.WriteLineReadLine("GetPersistHex 110", reply)) return -1;
+        return (int) strtol(reply, nullptr, 16);
+    };
+    auto wait_jog = [&] {
+        for (int i = 0; i < 1000; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            km.state(st);
+            if (!(st.jog_busy & 1)) return;
+        }
+        printf("  X did not finish its move within 10 s\n");
+    };
+    km.state(st);
+    const double x0 = st.pos[0];
+    KmSpindleCss css;
+    css.surface_speed = 20.0;
+    css.max_rpm = 1e9;
+    css.x_offset = x0 - 1.0;
+    struct CssStep { double x, max_rpm; bool send, css; int state; double rpm; int bits, mode; const char *what; };
+    const double r1 = 20.0 * 60 / (2 * M_PI * 1.0), r2 = 20.0 * 60 / (2 * M_PI * 2.0);
+    const CssStep css_steps[] = {
+        {x0, 1e9, true, true, 1, r1, 1, 2, "G96 S100 M3 at radius 1 in: 191.0 RPM, persist 110 = 2"},
+        {x0 + 1.0, 1e9, false, true, 1, r2, 1, 2, "X out to radius 2 in, nothing sent: the board halves it to 95.5 RPM"},
+        {x0 + 1.0, 60, true, true, 1, 60, 1, 2, "G96 D60: capped at 60 RPM"},
+        {x0 + 1.0, 60, true, true, -1, 60, 2, 2, "M4 in G96: spins down and back up CCW at 60 RPM"},
+        {x0 + 1.0, 1e9, true, false, -1, 600, 2, 1, "G97 S600: 600 RPM CCW, persist 110 = 1"},
+        {x0 + 1.0, 1e9, true, false, 0, 0, 0, 1, "M5: stops"},
+    };
+    for (const CssStep &x : css_steps) {
+        km.state(st);
+        if (fabs(st.pos[0] - x.x) > 1e-4) { km.jog_to(0, x.x, 2.0); wait_jog(); }
+        css.max_rpm = x.max_rpm;
+        double took = 0;
+        if (x.send) took = command(x.state, x.rpm > 0 ? x.rpm : 600, x.css ? &css : nullptr);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+        double v = NAN;
+        int bits = -1;
+        measure(v, bits);
+        km.state(st);
+        double counts_s = x.state * x.rpm * 1000 / 60;
+        printf("  the command took %.2f s; X%.4f; then Dest %.0f counts/s (expected %.0f), bits %d, persist 110 = %d, measured %.1f RPM\n",
+               took, st.pos[0], v, counts_s, bits, persist110(), st.spindle_rpm_measured);
+        check(fabs(v - counts_s) < 0.02 * fabs(counts_s) + 20, x.what);
+        check(bits == x.bits, "  the direction bits");
+        check(persist110() == x.mode && st.spindle_css == (x.mode == 2), "  the CSS mode on the board");
+        check(fabs(st.spindle_rpm_measured - x.state * x.rpm) < 0.02 * x.rpm + 5, "  the measured spindle speed");
+    }
+    km.jog_to(0, x0, 2.0);
+    wait_jog();
+    km.state(st);
+    check(fabs(st.pos[0] - x0) < 1e-3, "X back where it started");
 }
 
 static void scenario_jog(KmBackend &km)
@@ -562,6 +628,8 @@ int main(int argc, char **argv)
         snprintf(cfg.home_program, sizeof cfg.home_program, "%s", (kogna + "/Home.c").c_str());
         if (strcmp(scenario, "spindle") == 0) {           // as kmotion-kogna.ini sets it up
             cfg.init_programs.push_back(kogna + "/spindle/SpindleAxis.c");
+            cfg.start_programs.emplace_back(4, kogna + "/spindle/TestIncludingCSS.c");
+            cfg.spindle_css = true;
             cfg.spindle_speed_axis = 3;
             cfg.spindle_counts_per_rev = 1000;
             cfg.spindle_speed_from_dest = !(getenv("KM_SPINDLE_FROM") && !strcasecmp(getenv("KM_SPINDLE_FROM"), "POSITION"));

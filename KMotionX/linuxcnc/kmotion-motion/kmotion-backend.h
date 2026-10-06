@@ -18,6 +18,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 
 struct KmAxisParams {
@@ -66,6 +67,9 @@ struct KmConfig {
     // board mode
     std::vector<std::string> init_programs;   // C programs run once at start, in order (axis setup)
     int init_thread = 1;
+    // C programs started after the init programs and left running, {thread, file}: forever
+    // loops on the board, e.g. Dynomotion's ServiceCSS() for G96
+    std::vector<std::pair<int, std::string>> start_programs;
     double status_period = 0.02;  // board status poll period, seconds
     char home_program[512] = "";  // C program that homes (see configs/kmotion-kogna/Home.c), "" = none:
                                   // joints are then declared homed where they stand
@@ -78,6 +82,18 @@ struct KmConfig {
     bool spindle_speed_from_dest = true;      // false: Position
     double spindle_counts_per_rev = 0;
     double spindle_speed_tau = 0.1;           // seconds, low-pass filter; 0 = none
+    // G96 constant surface speed, handed to the board as KMotionCNC does it: X's offset, the
+    // surface speed and the maximum RPM in persist 111-114 and the mode in 110, for a
+    // ServiceCSS() loop there (Dynomotion's C Programs/SpindleUsingJogs/CSS/CSSJog.c).
+    // false: G96 is refused with an error
+    bool spindle_css = false;
+};
+
+// G96 for the board (KmBackend::spindle), in machine units (inches here)
+struct KmSpindleCss {
+    double surface_speed = 0;     // at the tool, units/s, the spindle override included
+    double max_rpm = 1e9;         // G96 D, within the [SPINDLE_0] limit for the direction
+    double x_offset = 0;          // machine X of radius 0 (LinuxCNC's G5x + G92 + tool X offsets)
 };
 
 // homing through the board (HOME_PROGRAM): LinuxCNC's per-joint homing parameters, in
@@ -114,7 +130,8 @@ struct KmState {
     unsigned home_ok_mask;        // joints homed by it (bit = LinuxCNC joint)
     unsigned home_fail_mask;      // joints it did not home (switch not found, aborted, program failed)
     int spindle_state;            // board: the spindle as last given to it: 1 CW, -1 CCW, 0 off, 2 not yet
-    double spindle_rpm;           // ... and the RPM its S action got
+    double spindle_rpm;           // ... what its S action got: the RPM, in CSS mode the surface speed
+    bool spindle_css;             // board: in CSS mode (persist 110 = 2, G96)
     int spindle_done;             // counts spindle() calls carried out (or superseded)
     double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
@@ -148,9 +165,11 @@ public:
     void home(const KmHomeRequest &req);         // runs HOME_PROGRAM; the result comes through state()
     bool has_spindle() const;                    // SPINDLE_* actions configured
     // LinuxCNC's spindle 0: state 1 CW, -1 CCW, 0 off; rpm = |speed| after the override and
-    // the limits; css = G96 constant surface speed was asked for (not supported yet: an
-    // error). Runs S and then M3/M4 when it turns on, S on a speed change, M5 when it stops.
-    void spindle(int state, double rpm, bool css);
+    // the limits. Runs S and then M3/M4 when it turns on, S on a speed change, M5 when it
+    // stops. css: G96 constant surface speed (SPINDLE_CSS; refused without it): the board
+    // gets it through persist 110-114 first, and S gets the surface speed in units/s, as
+    // KMotionCNC passes it; without css (G97) persist 110 goes back to RPM mode.
+    void spindle(int state, double rpm, const KmSpindleCss *css = nullptr);
     void machine_on(bool on);                    // enable/disable the axes
     void jog(int axis, double vel);              // continuous jog, units/s; 0 stops
     void jog_to(int axis, double target, double vel);

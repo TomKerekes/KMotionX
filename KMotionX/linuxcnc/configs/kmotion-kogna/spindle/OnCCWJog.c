@@ -18,6 +18,7 @@ int main()
 		// if spindle was CW now we want CCW 
 		// spin down
 		
+		persist.UserData[STATEVAR] = 0;  // off while it spins down: ServiceCSS() (G96) would jog it back up
 		ClearBit(SPINDLECW_BIT);
 		ClearBit(SPINDLECCW_BIT);
 		Jog(SPINDLEAXIS,0);

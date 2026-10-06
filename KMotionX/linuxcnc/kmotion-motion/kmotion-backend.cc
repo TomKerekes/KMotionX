@@ -78,7 +78,8 @@ struct Cmd {
     KmHomeRequest home;
     int sp_state = 0;             // SPINDLE: 1 CW, -1 CCW, 0 off
     double sp_rpm = 0;
-    bool sp_css = false;
+    bool sp_css = false;          // ... G96, with these
+    KmSpindleCss css;
 };
 
 struct KmBackend::Impl {
@@ -115,7 +116,8 @@ struct KmBackend::Impl {
     unsigned home_ok_mask = 0, home_fail_mask = 0;
     std::atomic<int> sp_state{2};      // board: the spindle as last told (1 CW, -1 CCW, 0 off; 2 not known yet:
                                        // a spindle left turning by an earlier session must still get its M5)
-    std::atomic<double> sp_rpm{-1};    // ... the RPM its S action got (-1: none yet)
+    std::atomic<double> sp_rpm{-1};    // ... what its S action got (-1: none yet): the RPM, or in CSS mode the surface speed
+    std::atomic<int> sp_css_mode{0};   // board: persist 110 as last written, 1 RPM, 2 CSS (0: not yet)
     std::atomic<int> spindle_done{0};  // spindle commands carried out or superseded
     std::atomic<double> sp_measured{0};    // the spindle axis's filtered speed, RPM (poller)
     double sp_prev = 0;                    // poller: the last Dest/Position read, and whether there is one
@@ -766,6 +768,7 @@ static void publish(KmBackend::Impl *d)
     s.home_fail_mask = d->home_fail_mask;
     s.spindle_state = d->sp_state;
     s.spindle_rpm = d->sp_rpm;
+    s.spindle_css = d->sp_css_mode == 2;
     s.spindle_done = d->spindle_done;
     s.spindle_rpm_measured = d->sp_measured;
     s.active_id = s.depth > 0 ? d->id_of(d->done_upto + 1) : 0;
@@ -833,6 +836,26 @@ static int run_program(KmBackend::Impl *d, const char *path, int thread)
         if (strcmp(reply, "0") == 0) return 0;
         if (now_s() - t0 > 30) { d->message("the init program did not finish within 30 s"); return 1; }
     }
+}
+
+// a program that is to keep running (START_PROGRAM): compiled (a .out is loaded as it is) into
+// its thread, which stops whatever ran there, and executed; not waited for
+static int start_program(KmBackend::Impl *d, const char *path, int thread)
+{
+    size_t n = strlen(path);
+    if (n > 4 && !strcasecmp(path + n - 4, ".out")) {
+        if (d->km->LoadCoff(thread, path, 0)) { d->message(std::string("start program failed: loading ") + path); return 1; }
+    } else {
+        char err[512] = "";
+        if (d->km->CompileAndLoadCoff(path, thread, err, sizeof err - 1)) {
+            d->message(std::string("start program failed: ") + path + ": " + err);
+            return 1;
+        }
+    }
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "Execute%d", thread);
+    if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    return 0;
 }
 
 static void w_machine_on(KmBackend::Impl *d, bool on)
@@ -1075,6 +1098,36 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
     return 0;
 }
 
+// G96/G97 on the board, as KMotionCNC's SetCSS() hands them over: for CSS the X counts of
+// radius 0, the inches per count, the surface speed in in/s and the maximum RPM (floats in
+// persist 111-114), then the mode in 110 (2 CSS, 1 RPM), which a ServiceCSS() loop on the
+// board reads (Dynomotion's CSSJog.c: every 50 ms, RPM = surface speed / radius, capped,
+// while the spindle is on). Machine units are inches here, as everywhere in the backend.
+// changed: the mode differs from the one written before. Returns 0, or 1 (message posted)
+static int w_css(KmBackend::Impl *d, const Cmd &c, bool &changed)
+{
+    char cmd[64];
+    auto put = [&](int var, unsigned bits) {
+        snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var, bits);
+        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+        return 0;
+    };
+    auto float_bits = [](double v) { float f = (float) v; unsigned b; memcpy(&b, &f, sizeof b); return b; };
+    int mode = c.sp_css ? 2 : 1;
+    if (c.sp_css) {
+        double k = d->scale[0];                // X's counts per inch
+        if (d->cfg.channel[0] < 0 || k == 0) { d->message("G96 needs an X axis on the board"); return 1; }
+        if (put(PC_COMM_CSS_X_OFFSET, float_bits(c.css.x_offset * k)) || put(PC_COMM_CSS_X_FACTOR, float_bits(1.0 / k)) ||
+            put(PC_COMM_CSS_S, float_bits(c.css.surface_speed)) || put(PC_COMM_CSS_MAX_RPM, float_bits(c.css.max_rpm)))
+            return 1;
+    }
+    // the mode every time (something else may have changed it since), last as KMotionCNC does
+    if (put(PC_COMM_CSS_MODE, (unsigned) mode)) return 1;
+    changed = mode != d->sp_css_mode;
+    d->sp_css_mode = mode;
+    return 0;
+}
+
 static void w_spindle(KmBackend::Impl *d, const Cmd &c)
 {
     // a speed change superseded by the next queued one (the override slider sends a stream
@@ -1084,29 +1137,35 @@ static void w_spindle(KmBackend::Impl *d, const Cmd &c)
         if (c.sp_state == d->sp_state && !d->q.empty() && d->q.front().kind == Cmd::SPINDLE && d->q.front().sp_state == c.sp_state)
             return;
     }
-    if (c.sp_css && c.sp_state != 0) {
+    if (c.sp_css && c.sp_state != 0 && !d->cfg.spindle_css) {
         if (!d->aborting) {
-            d->message("G96 constant surface speed is not supported yet: the spindle was not started");
+            d->message("G96 constant surface speed needs [KMOTION] SPINDLE_CSS = 1 and a ServiceCSS() loop "
+                       "on the board: the spindle was not started");
             d->errors++;
             w_abort(d);
         }
         return;
     }
+    // what S gets: the RPM, or in CSS mode the surface speed (KMotionCNC converts G96's S to
+    // in/s for the S action; the bench's S variable is the CSS one, 113)
+    const double sval = c.sp_css ? c.css.surface_speed : c.sp_rpm;
     if (d->cfg.simulate) {
         d->sp_state = c.sp_state;
-        if (c.sp_state) d->sp_rpm = c.sp_rpm;
+        if (c.sp_state) { d->sp_rpm = sval; d->sp_css_mode = c.sp_css ? 2 : 1; }
         return;
     }
     const KmAction *A = d->cfg.spindle;
     int r = 0;
-    if (c.sp_state != 0) {
+    bool mode_changed = false;
+    if (c.sp_state != 0 && d->cfg.spindle_css) r = w_css(d, c, mode_changed);
+    if (r == 0 && c.sp_state != 0) {
         // S before M3/M4, as a block "M3 S600" runs in KMotionCNC: the S program saves the
         // speed, the M3 program spins up to it. While it turns, a new speed is S alone
-        if (d->sp_state == 0 || c.sp_state != d->sp_state || c.sp_rpm != d->sp_rpm)
-            r = w_action(d, A[KM_SPINDLE_S], 10, c.sp_rpm, [&] { d->sp_rpm = c.sp_rpm; });
+        if (d->sp_state == 0 || c.sp_state != d->sp_state || sval != d->sp_rpm || mode_changed)
+            r = w_action(d, A[KM_SPINDLE_S], 10, sval, [&] { d->sp_rpm = sval; });
         if (r == 0 && c.sp_state != d->sp_state) {
             bool cw = c.sp_state > 0;
-            r = w_action(d, A[cw ? KM_SPINDLE_M3 : KM_SPINDLE_M4], cw ? 3 : 4, c.sp_rpm, [&] { d->sp_state = c.sp_state; });
+            r = w_action(d, A[cw ? KM_SPINDLE_M3 : KM_SPINDLE_M4], cw ? 3 : 4, sval, [&] { d->sp_state = c.sp_state; });
         }
     } else if (d->sp_state != 0) {
         r = w_action(d, A[KM_SPINDLE_M5], 5, c.sp_rpm, [&] { d->sp_state = 0; });
@@ -1237,13 +1296,14 @@ bool KmBackend::has_spindle() const
     return false;
 }
 
-void KmBackend::spindle(int state, double rpm, bool css)
+void KmBackend::spindle(int state, double rpm, const KmSpindleCss *css)
 {
     Cmd c{};
     c.kind = Cmd::SPINDLE;
     c.sp_state = state;
     c.sp_rpm = rpm;
-    c.sp_css = css;
+    c.sp_css = css != nullptr;
+    if (css) c.css = *css;
     d->post(c);
 }
 
@@ -1358,6 +1418,15 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         }
         double p[9] = {x, y, z, a, b, c, u, v, 0};
         memcpy(d->pos, p, sizeof p);
+        // programs that keep running (forever loops), once the axes and the coordinate system are set
+        for (const auto &sp : cfg.start_programs) {
+            if (start_program(d, sp.second.c_str(), sp.first)) {
+                std::string m;
+                { std::lock_guard<std::mutex> lock(d->smx); m = d->messages; }
+                fprintf(stderr, "kmotion-motion: %s\n", m.c_str());
+                return false;
+            }
+        }
         d->connected = true;
     }
     cm->ClearAbort();
