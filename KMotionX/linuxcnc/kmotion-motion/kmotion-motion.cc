@@ -70,6 +70,7 @@ static FILE *logfile = NULL;
 static const char *logfile_name = NULL;
 static double period_s = 0.005;
 static KmBackend *km = NULL;                // KMotion's planner; NULL: the stand-in model below
+static int at_speed_source = KM_AT_SPEED_NONE;   // [KMOTION] SPINDLE_AT_SPEED (board mode)
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
 
@@ -190,12 +191,21 @@ struct Model {
     double last_move_time;  // when task last handed a move over (flush timing)
     int last_type;          // motion type and tag of the last move handed over
     struct state_tag_t last_tag;
+    // KMotion planner: moves held until the spindle is at speed (motmod's TP waits at a move
+    // that carries the at-speed barrier): the barrier move and everything after it, in order
+    struct Held { emcmot_command_t cmd; bool barrier; };
+    std::deque<Held> held;
+    int atspeed_reads;      // status reads in a row that found the spindle at speed, the board idle
+    unsigned atspeed_seen;  // the status read looked at last
 };
 static Model m;
 
 static void model_init()
 {
     m.queue.clear();
+    m.held.clear();
+    m.atspeed_reads = 0;
+    m.atspeed_seen = 0;
     m.active = m.paused = m.stepping = m.probing = false;
     m.last_id = 0;
     m.errors_seen = 0;
@@ -364,6 +374,8 @@ static void spindle_net_scale(spindle_status_t &ss)
     ss.net_scale = (emcmotStatus->enables_new & SS_ENABLED) ? ss.scale : 1.0;
 }
 
+static void release_held();
+
 static void model_step(double dt)
 {
     m.current_vel = 0;
@@ -371,6 +383,7 @@ static void model_step(double dt)
     if (km) {
         km->state(m.ks);                 // the worker thread keeps it current
         if (m.ks.message[0]) report_error("%s", m.ks.message);
+        release_held();
         if (m.stepping && emcmotStatus->id != m.step_id && m.ks.active_id) {
             km->pause(true);                  // the next line has started: the step is done
             m.stepping = false;
@@ -463,6 +476,7 @@ struct Pins {
     // the spindle's speed measured on the board ([KMOTION] SPINDLE_SPEED_*), for a GUI's
     // feedback display or spindle.0.speed-in
     hal_real_t kspindle_rpm, kspindle_rpm_abs, kspindle_rps;
+    hal_bool_t kspindle_at_speed;    // spindle 0 at speed, as motion uses it (for a GUI's LED)
 };
 static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires that
 
@@ -510,6 +524,7 @@ static int create_pins()
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rpm, 0, "kmotion.spindle-rpm"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rpm_abs, 0, "kmotion.spindle-rpm-abs"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rps, 0, "kmotion.spindle-rps"));
+    PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->kspindle_at_speed, 0, "kmotion.spindle-at-speed"));
     return 0;
 }
 
@@ -600,13 +615,21 @@ static void update_motion_state()
 // everything derived from the model, once per cycle
 static void update_status()
 {
-    bool coord_busy = km ? (m.ks.running || m.ks.homing || m.spindle_posted != m.ks.spindle_done)
+    bool coord_busy = km ? (m.ks.running || m.ks.homing || m.spindle_posted != m.ks.spindle_done || !m.held.empty())
                          : (m.active || !m.queue.empty());
     bool inpos = !coord_busy && !any_jog_running();
     SET_MOTION_INPOS_FLAG(inpos ? 1 : 0);
     emcmotStatus->carte_pos_cmd = array_to_pose(m.pos);
     emcmotStatus->carte_pos_fb = emcmotStatus->carte_pos_cmd;
-    int depth = km ? m.ks.depth : (int) m.queue.size();
+    int depth = km ? m.ks.depth + (int) m.held.size() : (int) m.queue.size();
+    for (int s = 0; s < EMCMOT_MAX_SPINDLES; s++) {
+        // spindle.N.at-speed (true when nothing drives it) and, for spindle 0, what the board
+        // says (SPINDLE_AT_SPEED) in a status read made after its last spindle command
+        bool at = hal_get_bool(pins->spindle[s].at_speed);
+        if (s == 0 && km && at_speed_source != KM_AT_SPEED_NONE)
+            at = at && m.ks.spindle_at_speed && m.ks.spindle_at_speed_done == m.spindle_posted;
+        emcmotStatus->spindle_status[s].at_speed = at;
+    }
     emcmotStatus->depth = depth;
     emcmotStatus->activeDepth = km ? (m.ks.active_id ? 1 : 0) : (m.active ? 1 : 0);
     emcmotStatus->tcqlen = (unsigned) depth;
@@ -709,6 +732,7 @@ static void update_pins()
     hal_set_real(pins->kspindle_rpm, measured);
     hal_set_real(pins->kspindle_rpm_abs, fabs(measured));
     hal_set_real(pins->kspindle_rps, measured / 60.0);
+    hal_set_bool(pins->kspindle_at_speed, emcmotStatus->spindle_status[0].at_speed);
 }
 
 // ---- commands --------------------------------------------------------------------------
@@ -760,6 +784,87 @@ static void start_jog(int index, bool to_target, double target, double vel)
     j.vel = vel;
 }
 
+// a move, or the path mode that goes with the moves, to KMotion's planner; false: refused
+static bool to_planner(const emcmot_command_t &cmd)
+{
+    double end[NAXES];
+    pose_to_array(cmd.pos, end);
+    switch (cmd.command) {
+    case EMCMOT_SET_LINE:
+        return km->line(end, cmd.vel, cmd.acc, cmd.motion_type == EMC_MOTION_TYPE_TRAVERSE, cmd.id) == 0;
+    case EMCMOT_PROBE:
+    case EMCMOT_RIGID_TAP:
+        return km->line(end, cmd.vel, cmd.acc, false, cmd.id) == 0;
+    case EMCMOT_SET_CIRCLE: {
+        double center[3] = {cmd.center.x, cmd.center.y, cmd.center.z}, normal[3] = {cmd.normal.x, cmd.normal.y, cmd.normal.z};
+        return km->arc(end, center, normal, cmd.turn, cmd.vel, cmd.acc, cmd.id) == 0;
+    }
+    case EMCMOT_SET_TERM_COND:
+        km->set_path_mode(cmd.termCond, cmd.tolerance);     // G61/G61.1/G64 P to the planner
+        return true;
+    default:
+        return true;
+    }
+}
+
+// motmod's at-speed barrier: after a spindle command that asked for it, the next feed move
+// does not start before every spindle is at speed; with G96 a rapid sets it again (the speed
+// follows X)
+static bool atspeed_barrier(int motion_type)
+{
+    bool feed = motion_type == EMC_MOTION_TYPE_FEED || motion_type == EMC_MOTION_TYPE_ARC ||
+                motion_type == EMC_MOTION_TYPE_PROBING;
+    bool barrier = false;
+    if (emcmotStatus->atspeed_next_feed && feed) { barrier = true; emcmotStatus->atspeed_next_feed = 0; }
+    if (!feed && emcmotStatus->spindle_status[0].css_factor) emcmotStatus->atspeed_next_feed = 1;
+    return barrier;
+}
+
+static bool spindle_pins_at_speed()
+{
+    for (int s = 0; s < num_spindles && s < EMCMOT_MAX_SPINDLES; s++)
+        if (!hal_get_bool(pins->spindle[s].at_speed)) return false;
+    return true;
+}
+
+// a barrier move, and everything after it, is held here until the spindle is at speed;
+// true = held. Without SPINDLE_AT_SPEED only the spindle.N.at-speed pins can hold it
+static bool hold(const emcmot_command_t &cmd, bool barrier)
+{
+    if (!barrier && m.held.empty()) return false;
+    if (barrier && m.held.empty() && !(at_speed_source != KM_AT_SPEED_NONE && km->is_board()) && spindle_pins_at_speed())
+        return false;
+    m.held.push_back({cmd, barrier});
+    if (barrier) log_print("line %d waits for the spindle to be at speed\n", cmd.id);
+    return true;
+}
+
+// held moves go on once the spindle is at speed: the spindle.N.at-speed pins, and with
+// SPINDLE_AT_SPEED (board mode) three status reads in a row that find it at speed with the
+// board idle and every spindle command done before the read - a read from before the spin-up,
+// or before CSSJog's next 50 ms update after a rapid, must not let the move go
+static void release_held()
+{
+    if (m.held.empty()) return;
+    bool go = spindle_pins_at_speed();
+    if (at_speed_source != KM_AT_SPEED_NONE && km->is_board()) {
+        bool idle = !m.ks.running && m.ks.depth == 0 && m.ks.spindle_done == m.spindle_posted &&
+                    m.ks.spindle_at_speed_done == m.spindle_posted;
+        if (!idle || !go) m.atspeed_reads = 0;
+        else if (m.ks.status_count != m.atspeed_seen) m.atspeed_reads = m.ks.spindle_at_speed ? m.atspeed_reads + 1 : 0;
+        m.atspeed_seen = m.ks.status_count;
+        go = m.atspeed_reads >= 3;
+    }
+    if (!go) return;
+    log_print("spindle at speed: line %d goes on\n", m.held.front().cmd.id);
+    do {
+        if (!to_planner(m.held.front().cmd)) report_error("the planner refused the move of line %d", m.held.front().cmd.id);
+        m.held.pop_front();
+    } while (!m.held.empty() && !m.held.front().barrier);
+    m.atspeed_reads = 0;
+    m.last_move_time = now_s();
+}
+
 static void handle_command()
 {
     emcmotStatus->commandStatus = EMCMOT_COMMAND_OK;
@@ -769,6 +874,7 @@ static void handle_command()
         if (km) km->abort();
         SET_MOTION_ERROR_FLAG(0);
         m.queue.clear();
+        m.held.clear();
         m.active = false;
         m.paused = false;
         m.stepping = false;
@@ -797,6 +903,7 @@ static void handle_command()
             spindle_to_board();
         }
         m.queue.clear();
+        m.held.clear();
         m.active = false;
         m.paused = false;
         stop_jogs(-1);
@@ -961,9 +1068,7 @@ static void handle_command()
                   c->id, c->motion_type, c->vel, c->ini_maxvel, c->acc, c->turn);
         if (!GET_MOTION_COORD_FLAG()) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("SET_LINE outside coordinated mode"); break; }
         if (km) {
-            double end[NAXES];
-            pose_to_array(c->pos, end);
-            if (km->line(end, c->vel, c->acc, c->motion_type == EMC_MOTION_TYPE_TRAVERSE, c->id))
+            if (!hold(*c, atspeed_barrier(c->motion_type)) && !to_planner(*c))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
             m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
             break;
@@ -982,9 +1087,7 @@ static void handle_command()
                   c->id, c->motion_type, c->vel, c->ini_maxvel, c->acc, c->turn);
         if (!GET_MOTION_COORD_FLAG()) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("SET_CIRCLE outside coordinated mode"); break; }
         if (km) {
-            double end[NAXES], center[3] = {c->center.x, c->center.y, c->center.z}, normal[3] = {c->normal.x, c->normal.y, c->normal.z};
-            pose_to_array(c->pos, end);
-            if (km->arc(end, center, normal, c->turn, c->vel, c->acc, c->id))
+            if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_ARC)) && !to_planner(*c))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
             m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
             break;
@@ -1005,9 +1108,8 @@ static void handle_command()
         log_print("PROBE to x=%.6g, y=%.6g, z=%.6g, vel=%.6g type=%d (runs as a plain move here, never trips)\n",
                   c->pos.tran.x, c->pos.tran.y, c->pos.tran.z, c->vel, c->probe_type);
         if (km) {
-            double end[NAXES];
-            pose_to_array(c->pos, end);
-            if (km->line(end, c->vel, c->acc, false, c->id)) emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
+            if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_PROBING)) && !to_planner(*c))
+                emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
             m.last_move_time = now_s(); m.last_type = EMC_MOTION_TYPE_PROBING; m.last_tag = c->tag;
             emcmotStatus->probing = 0;
             emcmotStatus->probeTripped = 0;
@@ -1026,9 +1128,8 @@ static void handle_command()
     case EMCMOT_RIGID_TAP: {
         log_print("RIGID_TAP to z=%.6g vel=%.6g (runs as a plain move here)\n", c->pos.tran.z, c->vel);
         if (km) {
-            double end[NAXES];
-            pose_to_array(c->pos, end);
-            if (km->line(end, c->vel, c->acc, false, c->id)) emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
+            if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_FEED)) && !to_planner(*c))
+                emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
             m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
             break;
         }
@@ -1108,7 +1209,7 @@ static void handle_command()
         break;
     case EMCMOT_SET_TERM_COND:
         log_print("SET_TERM_COND termCond=%d, tolerance=%.6g\n", c->termCond, c->tolerance);
-        if (km) km->set_path_mode(c->termCond, c->tolerance);     // G61/G61.1/G64 P to the planner
+        if (km && !hold(*c, false)) to_planner(*c);   // G61/G61.1/G64 P, in order with the moves
         break;
     case EMCMOT_SET_NUM_JOINTS:
         log_print("SET_NUM_JOINTS %d\n", c->joint);
@@ -1188,9 +1289,9 @@ static void handle_command()
             ss.direction = c->vel > 0 ? 1 : (c->vel < 0 ? -1 : 0);
             ss.brake = 0;
             ss.state = 1;
-            ss.at_speed = 1;
             if (c->spindle == 0) spindle_to_board();
         }
+        emcmotStatus->atspeed_next_feed = c->wait_for_spindle_at_speed;
         break;
     case EMCMOT_SPINDLE_OFF:
         log_print("SPINDLE_OFF spindle=%d\n", c->spindle);
@@ -1199,6 +1300,7 @@ static void handle_command()
             ss.speed = 0; ss.direction = 0; ss.state = 0;
             if (c->spindle == 0) spindle_to_board();
         }
+        emcmotStatus->atspeed_next_feed = c->wait_for_spindle_at_speed;   // a stop is a barrier too
         break;
     case EMCMOT_SPINDLE_INCREASE:
         log_print("SPINDLE_INCREASE spindle=%d\n", c->spindle);
@@ -1431,6 +1533,32 @@ static bool read_kmotion_config(KmConfig &cfg)
         fprintf(stderr, "kmotion-motion: [KMOTION] SPINDLE_SPEED_AXIS needs SPINDLE_COUNTS_PER_REV\n");
         return false;
     }
+    // SPINDLE_AT_SPEED = NONE | BIT <bit> [<level>] | AXIS [<channel>]
+    if (const char *v = ini.get(K, "SPINDLE_AT_SPEED")) {
+        std::istringstream in(v);
+        std::string kind;
+        in >> kind;
+        bool ok = true;
+        if (kind.empty() || !strcasecmp(kind.c_str(), "NONE")) {
+            cfg.spindle_at_speed = KM_AT_SPEED_NONE;
+        } else if (!strcasecmp(kind.c_str(), "BIT")) {
+            cfg.spindle_at_speed = KM_AT_SPEED_BIT;
+            ok = (bool) (in >> cfg.spindle_at_speed_bit) && km_status_has_bit(cfg.spindle_at_speed_bit);
+            int level;
+            if (ok && (in >> level)) { ok = level == 0 || level == 1; cfg.spindle_at_speed_level = level; }
+        } else if (!strcasecmp(kind.c_str(), "AXIS")) {
+            cfg.spindle_at_speed = KM_AT_SPEED_AXIS;
+            if (!(in >> cfg.spindle_at_speed_axis)) cfg.spindle_at_speed_axis = cfg.spindle_speed_axis;
+            ok = cfg.spindle_at_speed_axis >= 0 && cfg.spindle_at_speed_axis < 16 && cfg.spindle_counts_per_rev > 0;
+        } else {
+            ok = false;
+        }
+        if (!ok) {
+            fprintf(stderr, "kmotion-motion: [KMOTION] SPINDLE_AT_SPEED = %s: NONE, BIT <bit> [<level 0/1>] (a bit the "
+                    "board's status carries) or AXIS [<channel>] (default: SPINDLE_SPEED_AXIS; needs SPINDLE_COUNTS_PER_REV)\n", v);
+            return false;
+        }
+    }
     static const char *spindle_keys[KM_SPINDLE_ACTIONS] = {"SPINDLE_M3", "SPINDLE_M4", "SPINDLE_M5", "SPINDLE_S"};
     for (int i = 0; i < KM_SPINDLE_ACTIONS; i++) {
         const char *v = ini.get(K, spindle_keys[i]);
@@ -1522,6 +1650,7 @@ int main(int argc, char *argv[])
     KmConfig cfg;
     cfg.queue_limit = QUEUE_LIMIT;
     if (mode == "kmotion" && !read_kmotion_config(cfg)) { hal_exit(comp_id); return 1; }
+    at_speed_source = cfg.spindle_at_speed;
     if (mode == "kmotion") {
         km = new KmBackend;
         if (!km->init(cfg, m.pos)) {

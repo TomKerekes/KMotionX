@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <condition_variable>
@@ -118,6 +119,13 @@ struct KmBackend::Impl {
                                        // a spindle left turning by an earlier session must still get its M5)
     std::atomic<double> sp_rpm{-1};    // ... what its S action got (-1: none yet): the RPM, or in CSS mode the surface speed
     std::atomic<int> sp_css_mode{0};   // board: persist 110 as last written, 1 RPM, 2 CSS (0: not yet)
+    std::atomic<bool> sp_at_speed{true};   // poller: the spindle at speed (SPINDLE_AT_SPEED) ...
+    std::atomic<int> sp_at_speed_done{0};  // ... in a status read made once this many spindle commands were done
+    double at_prev_dest = 0, at_prev_stamp = 0;   // poller, AXIS: the spindle channel's last Dest and its time
+    bool at_have_prev = false;
+    // G96 as last written to the board (w_css), for the AXIS target: the X counts of radius 0,
+    // X's counts per inch, the surface speed in in/s and the maximum RPM
+    std::atomic<double> css_xoff{0}, css_k{0}, css_surface{0}, css_max_rpm{0};
     std::atomic<int> spindle_done{0};  // spindle commands carried out or superseded
     std::atomic<double> sp_measured{0};    // the spindle axis's filtered speed, RPM (poller)
     double sp_prev = 0;                    // poller: the last Dest/Position read, and whether there is one
@@ -638,6 +646,45 @@ static bool realtime_sequence(double T, int &seq)
     return true;
 }
 
+// an I/O bit's state as MAIN_STATUS carries it, KMotion's numbering (KMotion.exe's Digital I/O
+// pages read them the same way): 1 or 0, or -1 for a bit the status does not carry
+static int status_bit(const MAIN_STATUS &st, int b)
+{
+    auto bit = [](int word, int n) { return (word >> n) & 1; };
+    if (b >= 0 && b < 64) return bit(st.BitsState[b / 32], b % 32);              // board bits 0-47, virtual 48-63
+    if (b >= 64 && b < 96) return bit(st.SnapBitsState0, b - 64);                 // SnapAmp 0
+    if (b >= 96 && b < 128) return bit(st.SnapBitsState1, b - 96);                // SnapAmp 1
+    if (b >= 128 && b < 144) return bit(st.KanalogBitsStateInputs, b - 128);      // Kanalog inputs
+    if (b >= 144 && b < 168) return bit(st.KanalogBitsStateOutputs, b - 144);     // Kanalog outputs
+    if (b >= 168 && b < 184) return bit(st.VirtualBits, b - 168 + 16);            // the second 16 virtual bits
+    if (b >= 200 && b < 290) return bit(st.BitsState200[(b - 200) / 32], (b - 200) % 32);   // Kogna 200-289
+    if (b >= 1024 && b < 1056) return bit(st.VirtualBitsEx0, b - 1024);           // the status carries 1024-1055
+    return -1;
+}
+
+// what the spindle was told, in RPM (-1: nothing yet): its S, or in G96 what the board's
+// ServiceCSS() makes of X's position (the radius from the X counts of radius 0, capped)
+static double spindle_target_rpm(KmBackend::Impl *d, const MAIN_STATUS &status)
+{
+    int state = d->sp_state;
+    if (state == 2) return -1;
+    if (state == 0) return 0;
+    if (d->sp_css_mode != 2) return d->sp_rpm;
+    int xch = d->cfg.channel[0];
+    double k = d->css_k, max_rpm = d->css_max_rpm;
+    if (xch < 0 || xch >= N_CHANNELS_KOGNA || k <= 0) return -1;
+    double radius = fabs((status.Dest[xch] - d->css_xoff) / k);
+    double rpm = radius > 0 ? d->css_surface * 60.0 / (2 * M_PI * radius) : max_rpm;
+    return rpm < max_rpm ? rpm : max_rpm;
+}
+
+bool km_status_has_bit(int bit)
+{
+    MAIN_STATUS z;
+    memset(&z, 0, sizeof z);
+    return status_bit(z, bit) >= 0;
+}
+
 static void w_poll_board(KmBackend::Impl *d)
 {
     CCoordMotion *cm = d->cm;
@@ -645,6 +692,7 @@ static void w_poll_board(KmBackend::Impl *d)
     memset(&status, 0, sizeof status);
     unsigned jog_written[8];                 // jogs this status read comes after
     for (int i = 0; i < 8; i++) jog_written[i] = d->jog_written[i];
+    const int spindle_done = d->spindle_done;    // ... and spindle commands
     if (d->km->WaitToken(false, 100, "kmotion-motion") != KMOTION_LOCKED) {
         d->connected = false;
         return;
@@ -679,6 +727,32 @@ static void w_poll_board(KmBackend::Impl *d)
         }
     }
     acts_to_cad(d, acts, d->pos);
+    // the spindle at speed (SPINDLE_AT_SPEED): its bit at the level, or its axis done (a jog at
+    // speed has no trajectory left; a disabled axis is not done)
+    if (d->cfg.spindle_at_speed == KM_AT_SPEED_BIT) {
+        d->sp_at_speed = status_bit(status, d->cfg.spindle_at_speed_bit) == d->cfg.spindle_at_speed_level;
+    } else if (d->cfg.spindle_at_speed == KM_AT_SPEED_AXIS) {
+        // a jogged spindle at its commanded speed, as Dynomotion's OnCWJogWait.c waits for it
+        // (on the channel's velocity): its Dest's speed since the last read, on the board's own
+        // clock, within 1% (at least 1 RPM) of the target; nothing told yet: no wait
+        int ch = d->cfg.spindle_at_speed_axis;
+        double cpr = d->cfg.spindle_counts_per_rev;
+        bool at = false;
+        if (ch >= 0 && ch < N_CHANNELS_KOGNA && cpr > 0) {
+            double p = status.Dest[ch], dt = status.TimeStamp - d->at_prev_stamp;
+            if (d->at_have_prev && dt > 0.001 && dt < 1.0) {
+                double rpm = spindle_target_rpm(d, status);
+                double v = fabs(p - d->at_prev_dest) / dt, target = fabs(rpm) * cpr / 60.0;
+                double tol = std::max(0.01 * target, cpr / 60.0);
+                at = rpm < 0 || fabs(v - target) <= tol;
+            }
+            d->at_prev_dest = p;
+            d->at_prev_stamp = status.TimeStamp;
+            d->at_have_prev = true;
+        }
+        d->sp_at_speed = at;
+    }
+    d->sp_at_speed_done = spindle_done;
     // jogs: an axis with no trajectory (or disabled) has finished every jog written before this read
     for (int i = 0; i < 8; i++) {
         int ch = d->cfg.channel[i];
@@ -1120,6 +1194,10 @@ static int w_css(KmBackend::Impl *d, const Cmd &c, bool &changed)
         if (put(PC_COMM_CSS_X_OFFSET, float_bits(c.css.x_offset * k)) || put(PC_COMM_CSS_X_FACTOR, float_bits(1.0 / k)) ||
             put(PC_COMM_CSS_S, float_bits(c.css.surface_speed)) || put(PC_COMM_CSS_MAX_RPM, float_bits(c.css.max_rpm)))
             return 1;
+        d->css_xoff = c.css.x_offset * k;
+        d->css_k = k;
+        d->css_surface = c.css.surface_speed;
+        d->css_max_rpm = c.css.max_rpm;
     }
     // the mode every time (something else may have changed it since), last as KMotionCNC does
     if (put(PC_COMM_CSS_MODE, (unsigned) mode)) return 1;
@@ -1576,6 +1654,14 @@ void KmBackend::state(KmState &out)
     out = d->st;
     out.jog_busy = 0;
     for (int i = 0; i < 8; i++) if (d->jog_finished[i] != d->jog_issued[i]) out.jog_busy |= 1u << i;
+    out.status_count = d->status_count;
+    if (d->cfg.simulate || d->cfg.spindle_at_speed == KM_AT_SPEED_NONE) {
+        out.spindle_at_speed = true;              // nothing to wait for
+        out.spindle_at_speed_done = d->spindle_done;
+    } else {
+        out.spindle_at_speed = d->sp_at_speed;
+        out.spindle_at_speed_done = d->sp_at_speed_done;
+    }
     out.message[0] = 0;
     if (!d->messages.empty()) {
         snprintf(out.message, sizeof out.message, "%s", d->messages.c_str());

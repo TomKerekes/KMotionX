@@ -47,6 +47,8 @@ struct KmAction {
     char file[512] = "";
 };
 enum { KM_SPINDLE_M3, KM_SPINDLE_M4, KM_SPINDLE_M5, KM_SPINDLE_S, KM_SPINDLE_ACTIONS };
+// where the board tells that the spindle is at speed (SPINDLE_AT_SPEED)
+enum { KM_AT_SPEED_NONE, KM_AT_SPEED_BIT, KM_AT_SPEED_AXIS };
 
 struct KmConfig {
     bool simulate = true;         // true: plan and time without a board, replay the plan
@@ -87,7 +89,19 @@ struct KmConfig {
     // ServiceCSS() loop there (Dynomotion's C Programs/SpindleUsingJogs/CSS/CSSJog.c).
     // false: G96 is refused with an error
     bool spindle_css = false;
+    // the spindle at speed, read on the board: an input bit at a level (e.g. the spindle
+    // drive's at-speed output), or a jogged spindle axis at its commanded speed: its Dest's
+    // speed between two status reads, on the board's own clock, within 1% (at least 1 RPM) of
+    // what the spindle was told - S, or in G96 what ServiceCSS() makes of X (a jog's Done stays
+    // false while it holds its speed, so it can't tell). NONE: the board doesn't tell
+    int spindle_at_speed = KM_AT_SPEED_NONE;
+    int spindle_at_speed_bit = -1;            // BIT: the I/O bit and the level meaning at speed
+    int spindle_at_speed_level = 1;
+    int spindle_at_speed_axis = -1;           // AXIS: the board channel (spindle_counts_per_rev converts)
 };
+
+// the board's status carries this I/O bit (SPINDLE_AT_SPEED = BIT)
+bool km_status_has_bit(int bit);
 
 // G96 for the board (KmBackend::spindle), in machine units (inches here)
 struct KmSpindleCss {
@@ -132,6 +146,9 @@ struct KmState {
     int spindle_state;            // board: the spindle as last given to it: 1 CW, -1 CCW, 0 off, 2 not yet
     double spindle_rpm;           // ... what its S action got: the RPM, in CSS mode the surface speed
     bool spindle_css;             // board: in CSS mode (persist 110 = 2, G96)
+    bool spindle_at_speed;        // at speed as of the last status read (always, without SPINDLE_AT_SPEED)
+    int spindle_at_speed_done;    // ... a read made once this many spindle commands were done (cf. spindle_done)
+    unsigned status_count;        // board: status reads so far
     int spindle_done;             // counts spindle() calls carried out (or superseded)
     double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet

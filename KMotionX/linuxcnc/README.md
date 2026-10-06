@@ -103,6 +103,21 @@ through the same shared memory block.
     happens, where the commanded speed drops to 0 at once. On the bench, `SpindleAxis.c` also
     feeds channel 3's step/dir output back into encoder 4 as quadrature, so `POSITION` works too
     (`KM_SPINDLE_FROM=POSITION` in the harness).
+  - **Spindle at speed** (`[KMOTION] SPINDLE_AT_SPEED`): what the board says, either an input
+    bit at a level (`BIT <bit> [<level>]`, e.g. the spindle drive's at-speed output) or a jogged
+    spindle axis at its commanded speed (`AXIS [<channel>]`): the channel's Dest speed between
+    two status reads, on the board's own clock (`TimeStamp`), within 1% (at least 1 RPM) of S -
+    in G96 of what `ServiceCSS()` makes of X - with `SPINDLE_COUNTS_PER_REV`, as Dynomotion's
+    `OnCWJogWait.c` waits on the channel's velocity. (A jog's Done can't tell: the firmware ends
+    a jog in an open-ended constant-velocity segment, so Done stays false until it stops.)
+    `KM_BOARD=1 ./build/backend-test spindle` checks it after each ramp, `atbit` the bit (a
+    virtual bit it sets and clears). Motion uses it as motmod uses `spindle.N.at-speed`
+    (which still counts too): after an M3, M4 or M5 that asks for it, and in G96 after each
+    rapid, the next feed move and everything after it wait until the spindle is at speed. A
+    reading only counts from a status read made after the spindle command was done, and three
+    in a row with the board idle let the moves go, so a read from before the spin-up (or before
+    `ServiceCSS()`'s next update) cannot. `kmotion.spindle-at-speed` shows it (the kmotion-kogna
+    config lights gmoccapy's at-speed LED with it); the bench uses `AXIS 3`.
   - Planner settings come from the ini: `[KMOTION]` (mode, init program, 3rd order, cubic
     knots, actuator limits, segment log, break angle, tolerances, lookahead, board
     channels), the axis limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK`
@@ -223,8 +238,7 @@ program zeroes the positions and the test moves the axes.
 
 1. Homing on a real machine (the switch bits in Home.c); in-position from the board's
    `AxisDone` for moves as well as jogs; jogging while paused.
-2. Spindle: at-speed from the measured speed (gmoccapy has `gmoccapy.spindle_at_speed_led`);
-   spindle-synchronized motion (G33/G76) would need the board's threading.
+2. Spindle: spindle-synchronized motion (G33/G76) would need the board's threading.
 3. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
    module is bypassed and only gets joint positions to display.
 4. mm configs (LinuxCNC machine units vs KMotion's inches).

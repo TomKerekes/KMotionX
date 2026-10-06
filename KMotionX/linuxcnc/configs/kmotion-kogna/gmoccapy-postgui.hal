@@ -3,3 +3,5 @@
 # so a spin-down shows as it happens. Its "Spindle [rpm]" label stays the commanded speed.
 # With DISPLAY = axis there are no gmoccapy pins: comment POSTGUI_HALFILE out.
 net spindle-rpm-measured kmotion.spindle-rpm-abs => gmoccapy.spindle_feedback_bar
+# gmoccapy's at-speed light: the spindle at speed as motion uses it ([KMOTION] SPINDLE_AT_SPEED)
+net spindle-at-speed kmotion.spindle-at-speed => gmoccapy.spindle_at_speed_led

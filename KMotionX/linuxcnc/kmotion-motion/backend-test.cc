@@ -15,11 +15,14 @@
 //                         (configs/kmotion-kogna/spindle; KM_BOARD=1): channel 3 turns at
 //                         RPM x 1000/60 counts/s, CW positive, CCW negative; then G96 through
 //                         Dynomotion's ServiceCSS() loop (started in thread 4) as X moves, its
-//                         D cap, and G97. Without a board: G96 refused without SPINDLE_CSS
+//                         D cap, and G97; at speed (SPINDLE_AT_SPEED = AXIS 3) only once each
+//                         ramp is over. Without a board: G96 refused without SPINDLE_CSS
 //   backend-test jog      (KM_BOARD=1 only) jogs X as the protocol side does: a continuous jog
 //                         runs until it is stopped and the board has slowed to a stop, an
 //                         increment until the board is at the target (at the jog speed), a
 //                         stop ends an increment early, and an increment of 0 ends at once
+//   backend-test atbit    (KM_BOARD=1 only) SPINDLE_AT_SPEED = BIT 1030 1: the at-speed state
+//                         follows virtual bit 1030 as the test sets and clears it
 //   backend-test letters  the first moves of LinuxCNC's axis.ngc on the kmotion-kogna settings
 //                         (KM_KOGNA=1 selects those settings in simulate mode; KM_CORNER_TOL,
 //                         KM_BREAK_ANGLE override the planner's corner settings)
@@ -384,6 +387,18 @@ static void scenario_spindle(KmBackend &km)
             if (t > 30) { printf("  no result within 30 s\n"); return t; }
         }
     };
+    // until the board says the spindle is at speed (channel 3 done) in a read made after the
+    // last spindle command was done: the seconds that took, -1 if not within the limit
+    auto wait_at_speed = [&](double limit) {
+        auto t0 = std::chrono::steady_clock::now();
+        for (;;) {
+            km.state(st);
+            double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            if (st.spindle_at_speed && st.spindle_at_speed_done == st.spindle_done) return t;
+            if (t > limit) return -1.0;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    };
     struct Step { int state; double rpm, counts_s; int bits; const char *what; };
     const Step steps[] = {
         {1, 600, 10000, 1, "M3 S600: CW at 10000 counts/s, bit 1024"},
@@ -393,7 +408,11 @@ static void scenario_spindle(KmBackend &km)
     };
     for (const Step &x : steps) {
         double took = command(x.state, x.rpm, nullptr);
-        std::this_thread::sleep_for(std::chrono::milliseconds(2500));     // the ramp, at 10000 counts/s^2
+        double at = wait_at_speed(5);
+        printf("  at speed %.2f s after the command\n", at);
+        check(x.state == 0 ? (at >= 0 && at < 0.3) : (at > 0.5 && at < 2.0),
+              x.state == 0 ? "  at speed at once (OffJog.c waits for the stop)" : "  at speed once the ramp is over (~1 s at 10000 counts/s^2)");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
         double v = NAN;
         int bits = -1;
         measure(v, bits);
@@ -445,6 +464,8 @@ static void scenario_spindle(KmBackend &km)
         css.max_rpm = x.max_rpm;
         double took = 0;
         if (x.send) took = command(x.state, x.rpm > 0 ? x.rpm : 600, x.css ? &css : nullptr);
+        double at = wait_at_speed(5);
+        check(at >= 0, "  at speed again");
         std::this_thread::sleep_for(std::chrono::milliseconds(2500));
         double v = NAN;
         int bits = -1;
@@ -539,6 +560,26 @@ static void scenario_jog(KmBackend &km)
     check(t >= 0 && fabs(st.pos[0] - x0) < count, "back at the start");
 }
 
+static void scenario_atbit(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  atbit: board mode only (KM_BOARD=1)\n"); return; }
+    CKMotionDLL board(0);
+    KmState st;
+    auto settle = [&](bool want) {          // until a read shows the bit as wanted (2 s at most)
+        for (int i = 0; i < 200; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            km.state(st);
+            if (st.spindle_at_speed == want && st.spindle_at_speed_done == st.spindle_done) return true;
+        }
+        printf("  still at_speed %d (read after %d of %d spindle commands), %u status reads\n",
+               st.spindle_at_speed, st.spindle_at_speed_done, st.spindle_done, st.status_count);
+        return false;
+    };
+    check(board.WriteLine("ClearBit1030") == 0 && settle(false), "bit 1030 clear: not at speed");
+    check(board.WriteLine("SetBit1030") == 0 && settle(true), "bit 1030 set: at speed");
+    check(board.WriteLine("ClearBit1030") == 0 && settle(false), "clear again: not at speed");
+}
+
 static void scenario_abort(KmBackend &km)
 {
     bool board = km.is_board();
@@ -630,6 +671,8 @@ int main(int argc, char **argv)
             cfg.init_programs.push_back(kogna + "/spindle/SpindleAxis.c");
             cfg.start_programs.emplace_back(4, kogna + "/spindle/TestIncludingCSS.c");
             cfg.spindle_css = true;
+            cfg.spindle_at_speed = KM_AT_SPEED_AXIS;
+            cfg.spindle_at_speed_axis = 3;
             cfg.spindle_speed_axis = 3;
             cfg.spindle_counts_per_rev = 1000;
             cfg.spindle_speed_from_dest = !(getenv("KM_SPINDLE_FROM") && !strcasecmp(getenv("KM_SPINDLE_FROM"), "POSITION"));
@@ -642,6 +685,11 @@ int main(int argc, char **argv)
                 cfg.spindle[i].p[1] = i == KM_SPINDLE_S ? 113 : 1;
                 snprintf(cfg.spindle[i].file, sizeof cfg.spindle[i].file, "%s/spindle/%s", kogna.c_str(), file[i]);
             }
+        }
+        if (strcmp(scenario, "atbit") == 0) {
+            cfg.spindle_at_speed = KM_AT_SPEED_BIT;
+            cfg.spindle_at_speed_bit = 1030;
+            cfg.spindle_at_speed_level = 1;
         }
         cfg.status_period = getenv("KM_STATUS_MS") ? atof(getenv("KM_STATUS_MS")) / 1000.0 : 0.02;    // 5 ms polling stalls the Kogna link
         for (int i = 0; i < 3; i++) { cfg.axis[i].counts_per_unit = 2540; cfg.axis[i].max_vel = 9.84; cfg.axis[i].max_accel = 98.4; cfg.axis[i].max_jerk = 984; }
@@ -661,6 +709,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "gated") == 0) scenario_gated(*km);
     else if (strcmp(scenario, "spindle") == 0) scenario_spindle(*km);
     else if (strcmp(scenario, "jog") == 0) scenario_jog(*km);
+    else if (strcmp(scenario, "atbit") == 0) scenario_atbit(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();
