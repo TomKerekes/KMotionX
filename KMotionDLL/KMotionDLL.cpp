@@ -412,7 +412,10 @@ int CKMotionDLL::Pipe(const char *s, int n, char *r, int *m)
 	const char * serr_msg;
 
 
-	static int EntryCount=0;
+	// a thread already inside Pipe() (re-entry): per thread, since each instance has its own
+	// PipeMutex here, not one named mutex for the whole system as on Windows; a counter shared
+	// by two instances turned one's call into KMOTION_IN_USE while the other's was under way
+	static thread_local int EntryCount=0;
 
 	if (ServerMessDisplayed) 
 		return 1;
