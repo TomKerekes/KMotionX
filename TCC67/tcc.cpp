@@ -412,7 +412,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
                                    int has_init, int v, int scope);
 int gv(int rc);
 void gv2(int rc1, int rc2);
-void move_reg(int r, int s);
+void move_reg(int r, int s, int t);
 void save_regs(int n);
 void save_reg(int r);
 void vpop(void);
@@ -4282,14 +4282,16 @@ void save_regs(int n)
 }
 
 /* move register 's' to 'r', and flush previous value of r to memory
-   if needed */
-void move_reg(int r, int s)
+   if needed.  't' is the type of the value so that a double (register
+   pair on the C67) moves both registers, not just the low word */
+void move_reg(int r, int s, int t)
 {
     SValue sv;
 
     if (r != s) {
         save_reg(r);
-        sv.type.t = VT_INT;
+        sv.type.t = t;
+        sv.type.ref = NULL;
         sv.r = s;
         sv.c.ul = 0;
         load(r, &sv);
@@ -6236,6 +6238,10 @@ static void post_type(CType *type, AttributeDef *ad)
                     break;
                 }
             }
+			else {
+				if (l == FUNC_OLD && tok != ')')
+					error("invalid function parameter list");
+			}
         }
         /* if no parameters, then old type prototype */
         if (l == 0)
@@ -7134,8 +7140,12 @@ static void expr_eq(void)
             *vtop = sv;
             gen_cast(&type);
             r1 = gv(rc);
-            move_reg(r2, r1);
+            move_reg(r2, r1, type.t);
             vtop->r = r2;
+#if (DO_C67)  // uses register pairs for doubles
+            if ((type.t & VT_BTYPE) == VT_DOUBLE)
+                vtop->r2 = r2+1;
+#endif
             gsym(tt);
         }
     }
@@ -7741,13 +7751,13 @@ static void init_putz(CType *t, Section *sec, unsigned long c, int size)
         /* nothing to do because globals are already set to zero */
     } else {
 		gfunc_start(&gf, FUNC_CDECL);
-        vpushi(size);
-        gfunc_param(&gf);
-        vpushi(0);
-        gfunc_param(&gf);
-        vseti(VT_LOCAL, c);
-        gfunc_param(&gf);
-        vpush_global_sym(&func_old_type, TOK_memset);
+		vseti(VT_LOCAL, c);
+		gfunc_param(&gf);
+		vpushi(0);
+		gfunc_param(&gf);
+		vpushi(size);
+		gfunc_param(&gf);
+		vpush_global_sym(&func_old_type, TOK_memset);
         gfunc_call(&gf);
     }
 }
@@ -8265,6 +8275,9 @@ static void func_decl_list(Sym *func_sym)
                     error("storage class specified for '%s'", get_tok_str(v, NULL));
                 /* array must be transformed to pointer according to ANSI C */
                 type.t &= ~VT_ARRAY;
+				/* old style passes floats as doubles */
+				if (type.t == VT_FLOAT) 
+					type.t = VT_DOUBLE;
                 /* we can add the type (NOTE: it could be local to the function) */
                 s->type = type;
                 /* accept other parameters */
