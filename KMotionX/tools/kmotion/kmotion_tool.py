@@ -27,6 +27,7 @@ class StatusPoller(QThread):
     lost = Signal(str)
     console = Signal(list)
     errors = Signal(list)
+    title = Signal(str)                  # the window title, when it changes
 
     def __init__(self, km, period=0.1):
         super().__init__()
@@ -34,6 +35,10 @@ class StatusPoller(QThread):
         self.period = period
         self._stop = False
         self._pause = False
+        self._loc = None                 # the board location the title was made from
+        self._locs = []                  # the server's board list (a Kogna's serial number)
+        self._locs_t = 0.0
+        self._title = ""
 
     def pause(self, on):
         """hold off polling while another thread owns the board for a long operation"""
@@ -59,6 +64,7 @@ class StatusPoller(QThread):
                 if failures == 3:
                     self.lost.emit(str(e))
                 time.sleep(0.5)
+            self._update_title()
             lines = self.km.console_lines()
             if lines:
                 self.console.emit(lines)
@@ -68,6 +74,27 @@ class StatusPoller(QThread):
             dt = self.period - (time.time() - t0)
             if dt > 0:
                 time.sleep(dt)
+
+
+    def _update_title(self):
+        """KMotion.exe's title: "KMotion - Connected - <board>" or "KMotion - Disconnected",
+        from the server's own view of the connection (asked every poll; it never reaches the
+        board). The board list, for a Kogna's serial number, is read again when the board
+        changes, and every 2 s while a Kogna's number is missing from it"""
+        loc = self.km.usb_location()
+        if -15 <= loc <= 0:
+            title = "KMotion - Disconnected"
+        else:
+            now = time.time()
+            kogna = (loc & 0xFFFFFFFF) >= 0x00FFFFFF
+            if loc != self._loc or (kogna and " - SN" not in self._title and now - self._locs_t > 2):
+                self._locs = self.km.locations()
+                self._locs_t = now
+            title = "KMotion - Connected - " + kmx.board_string(loc, self._locs)
+        self._loc = loc
+        if title != self._title:
+            self._title = title
+            self.title.emit(title)
 
 
 class MainWindow(QMainWindow):
@@ -122,6 +149,7 @@ class MainWindow(QMainWindow):
         self.poller.lost.connect(self.on_lost)
         self.poller.console.connect(self.on_console)
         self.poller.errors.connect(self.on_errors)
+        self.poller.title.connect(self.setWindowTitle)
         self.poller.start()
         self.age_timer = QTimer(self)
         self.age_timer.timeout.connect(self.on_age)

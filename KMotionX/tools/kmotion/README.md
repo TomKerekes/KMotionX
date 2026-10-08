@@ -27,6 +27,11 @@ same board; the board token serializes the commands.
 - `kmotion_tool.py`: the window, the status poller, the console dock. The board's `printf`
   output goes to the one client that last asked for it, so capturing it here takes it away
   from kmotion-motion: the checkbox in the console dock does that only on request.
+  The title is KMotion.exe's: "KMotion - Connected - Kogna 192.168.113.100 - SN34" (a
+  KFLOP shows its USB location ID, "KFLOP 0x...") or "KMotion - Disconnected", from the
+  server's own view of the connection (`USBLocation()`, asked every poll without reaching the
+  board); a Kogna's serial number comes from the server's board list (`ListLocations()`: each
+  Kogna's IP followed by 0xFF000000 | serial).
 - `icons/`: KMotion.exe's icon at the six sizes it was drawn at (16-256). The small ones are
   their own art, not a downscale, so the taskbar shows a readable "DM". The window's class is
   `kmotion-tool`, so a launcher with `StartupWMClass=kmotion-tool` is tied to it.

@@ -125,6 +125,25 @@ class KMotionError(Exception):
     pass
 
 
+def board_string(board, locations=()):
+    """KMotion.exe's name for a board location (CMainFrame::BoardString, its title bar): a
+    KFLOP's USB location ID in hex, a Kogna's IP address and its serial number when the
+    server's board list has it (ListLocations gives each Kogna's IP followed by
+    0xFF000000 | serial), else the number itself"""
+    if -15 <= board <= 0:
+        return str(board)
+    u = board & 0xFFFFFFFF
+    if u < 0x00FFFFFF:
+        return f"KFLOP 0x{u:X}"
+    sn = ""
+    locs = [x & 0xFFFFFFFF for x in locations]
+    for i in range(len(locs) - 1):
+        if locs[i] == u and (locs[i + 1] & 0xFF000000) == 0xFF000000:
+            sn = f" - SN{locs[i + 1] & 0xFFF}"
+            break
+    return f"Kogna {u >> 24 & 0xFF}.{u >> 16 & 0xFF}.{u >> 8 & 0xFF}.{u & 0xFF}{sn}"
+
+
 def firmware_dir(board_type):
     """the DSP_KOGNA / DSP_KFLOP directory: this source tree's if the tool runs from it, else the
     installed one under ~/.kmotionx"""
@@ -256,6 +275,7 @@ def lib():
         l.kmx_flash_new_version.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
         l.kmx_out_name.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
         l.kmx_list_locations.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+        l.kmx_usb_location.argtypes = [ctypes.c_void_p]
         global KMOTION_LOCKED, KMOTION_IN_USE, KMOTION_READY, KMOTION_NOT_CONNECTED, KMOTION_TIMEOUT
         KMOTION_LOCKED, KMOTION_IN_USE, KMOTION_READY, KMOTION_NOT_CONNECTED, KMOTION_TIMEOUT = (l.kmx_const(i) for i in range(5))
         size = l.kmx_status_size()
@@ -310,6 +330,12 @@ class KMotion:
         if rc:
             raise KMotionError(f"GetStatus failed ({rc})")
         return st
+
+    def usb_location(self):
+        """the board this connection is on, as the server knows it: a KFLOP's USB location ID or
+        a Kogna's IP address (a.b.c.d from the high byte down); -1 while the server has no
+        connection to it. Asks only the server, never the board"""
+        return self._l.kmx_usb_location(self._h)
 
     def locations(self):
         arr = (ctypes.c_int * 64)()

@@ -185,6 +185,11 @@ int kmx_flash_new_version(void *h, const char *path, int timeout_s)
     return rc;
 }
 
+// the board this connection is on, as the server knows it (KMotion.exe's title): a KFLOP's
+// USB location ID or a Kogna's IP address (a.b.c.d from the high byte down); -1 while the
+// server has no connection to it. A local query: nothing goes to the board
+int kmx_usb_location(void *h) { return ((CKMotionDLL *) h)->USBLocation(); }
+
 // which boards the server sees
 int kmx_list_locations(void *h, int *list, int max)
 {
