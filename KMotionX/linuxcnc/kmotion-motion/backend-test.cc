@@ -14,7 +14,7 @@
 //   backend-test spindle  LinuxCNC's spindle through the bench's Spindle Using Jogs programs
 //                         (configs/kmotion-kogna/spindle; KM_BOARD=1): channel 3 turns at
 //                         RPM x 1000/60 counts/s, CW positive, CCW negative; then G96 through
-//                         Dynomotion's ServiceCSS() loop (started in thread 4) as X moves, its
+//                         Dynomotion's ServiceCSS() in BenchLoop.c (thread 1) as X moves, its
 //                         D cap, and G97; at speed (SPINDLE_AT_SPEED = AXIS 3) only once each
 //                         ramp is over. Without a board: G96 refused without SPINDLE_CSS
 //   backend-test jog      (KM_BOARD=1 only) jogs X as the protocol side does: a continuous jog
@@ -27,6 +27,11 @@
 //                         bit, and the user M code M100 (configs/kmotion-kogna/mcodes/M100.c in
 //                         thread 5, P and Q in persist 10 and 11), which sets virtual bit 1027
 //                         when P is not 0
+//   backend-test probe    (KM_BOARD=1 only) G38.x through the planner, with ServiceProbe()
+//                         (probe/ProbeService.c) in BenchLoop.c's forever loop in thread 1
+//                         watching virtual bit 1031 (contact = 1), which the test sets and
+//                         clears during the moves: a trip toward, a trip away, the probe
+//                         already in the state sought, and a move without contact
 //   backend-test letters  the first moves of LinuxCNC's axis.ngc on the kmotion-kogna settings
 //                         (KM_KOGNA=1 selects those settings in simulate mode; KM_CORNER_TOL,
 //                         KM_BREAK_ANGLE override the planner's corner settings)
@@ -622,6 +627,98 @@ static void scenario_io(KmBackend &km)
     check(mcode(0, -1) == 0 && inputs(0), "M100 P0: done, bit 1027 clear");
 }
 
+static void scenario_probe(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  probe: board mode only (KM_BOARD=1)\n"); return; }
+    CKMotionDLL board(0);
+    KmState st;
+    auto contact = [&](bool on) { board.WriteLine(on ? "SetBit1031" : "ClearBit1031"); };   // not 1032: Tom's simulator
+    // a probe move along X to x at vel in/s; the contact changes after `after` seconds (if >= 0);
+    // the outcome, -1 if none within 15 s
+    auto probe = [&](double x, bool away, double after, bool set_to, double vel) {
+        km.state(st);
+        int s0 = st.probe_serial;
+        double end[9] = {x, st.pos[1], st.pos[2], 0, 0, 0, 0, 0, 0};
+        auto t0 = std::chrono::steady_clock::now();
+        km.probe(end, vel, 10.0, 1, away);
+        bool changed = false;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            if (after >= 0 && !changed && t >= after) { contact(set_to); changed = true; }
+            km.state(st);
+            if (st.message[0]) printf("  message: %s\n", st.message);
+            if (st.probe_serial != s0) {
+                printf("  outcome %d after %.2f s: probed X%.5f, now X%.5f%s\n", st.probe_outcome, t, st.probe_pos[0], st.pos[0],
+                       st.running ? " (still running)" : "");
+                return st.probe_outcome;
+            }
+            if (t > 15) { printf("  no result within 15 s\n"); return -1; }
+        }
+    };
+    auto settle = [&] {                     // the board at rest after the result
+        for (int i = 0; i < 300; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            km.state(st);
+            if (!st.running) return;
+        }
+    };
+    contact(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    km.state(st);
+    const double x0 = st.pos[0];
+    printf("  X starts at %.5f\n", x0);
+
+    // G38.2 toward X+1, contact after 0.6 s: tripped part way, stopped short of the end
+    int o = probe(x0 + 1, false, 0.6, true, 0.5);
+    settle();
+    double trip = st.probe_pos[0];
+    check(o == KM_PROBE_TRIPPED, "G38.2: tripped when the probe made contact");
+    check(trip > x0 + 0.05 && trip < x0 + 0.6, "  probed position part way along (0.5 in/s)");
+    check(st.pos[0] >= trip - 1e-4 && st.pos[0] < trip + 0.05 && !st.running, "  stopped just past the trip and at rest");
+
+    // G38.4 back toward X0 while in contact, contact lost after 0.4 s: tripped
+    o = probe(x0, true, 0.4, false, 0.5);
+    settle();
+    check(o == KM_PROBE_TRIPPED && st.probe_pos[0] < trip && st.probe_pos[0] > x0, "G38.4: tripped when the contact was lost");
+
+    // G38.2 while already in contact: nothing moves
+    contact(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    km.state(st);
+    double before = st.pos[0];
+    o = probe(before + 0.5, false, -1, false, 0.5);
+    km.state(st);
+    check(o == KM_PROBE_ALREADY && fabs(st.pos[0] - before) < 1e-4, "G38.2 with the probe already tripped: refused, no move");
+    contact(false);
+
+    // G38.2 without contact: runs to its end
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    km.state(st);
+    double target = st.pos[0] + 0.2;
+    o = probe(target, false, -1, false, 0.5);
+    settle();
+    check(o == KM_PROBE_NO_CONTACT && fabs(st.pos[0] - target) < 1e-3, "G38.2 without contact: ran to its end");
+
+    // G38.2 longer than the planner's lookahead (1 in at 10 in/min, 6 s), contact after 0.8 s:
+    // the trip comes while the move is still being downloaded, the planner pacing its download
+    // on the held board (LinuxCNC hung there until the poller learned to see the trip)
+    km.state(st);
+    double start = st.pos[0];
+    o = probe(start + 1, false, 0.8, true, 1.0 / 6);
+    settle();
+    check(o == KM_PROBE_TRIPPED && st.probe_pos[0] > start + 0.05 && st.probe_pos[0] < start + 0.3 && !st.running,
+          "G38.2 longer than the lookahead: tripped part way, at rest");
+    contact(false);
+
+    // back to the start
+    double back[9] = {x0, st.pos[1], st.pos[2], 0, 0, 0, 0, 0, 0};
+    km.line(back, 2.0, 50.0, false, 2);
+    Follower f(km);
+    f.run(20);
+    check(fabs(f.st.pos[0] - x0) < 1e-3, "X back at the start");
+}
+
 static void scenario_abort(KmBackend &km)
 {
     bool board = km.is_board();
@@ -711,7 +808,7 @@ int main(int argc, char **argv)
         snprintf(cfg.home_program, sizeof cfg.home_program, "%s", (kogna + "/Home.c").c_str());
         if (strcmp(scenario, "spindle") == 0) {           // as kmotion-kogna.ini sets it up
             cfg.init_programs.push_back(kogna + "/spindle/SpindleAxis.c");
-            cfg.start_programs.emplace_back(4, kogna + "/spindle/TestIncludingCSS.c");
+            cfg.start_programs.emplace_back(1, kogna + "/BenchLoop.c");   // ServiceCSS() in thread 1
             cfg.spindle_css = true;
             cfg.spindle_at_speed = KM_AT_SPEED_AXIS;
             cfg.spindle_at_speed_axis = 3;
@@ -727,6 +824,11 @@ int main(int argc, char **argv)
                 cfg.spindle[i].p[1] = i == KM_SPINDLE_S ? 113 : 1;
                 snprintf(cfg.spindle[i].file, sizeof cfg.spindle[i].file, "%s/spindle/%s", kogna.c_str(), file[i]);
             }
+        }
+        if (strcmp(scenario, "probe") == 0) {         // as kmotion-kogna.ini sets probing up
+            cfg.start_programs.emplace_back(1, kogna + "/BenchLoop.c");   // ServiceProbe() in thread 1
+            cfg.probe_bit = 1031;                     // not the ini's 1032, which Tom's probe simulator may drive
+            cfg.probe_level = 1;
         }
         if (strcmp(scenario, "io") == 0) {            // as kmotion-kogna.ini sets M100 up
             cfg.input_bits = {1026, 1027};
@@ -761,6 +863,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "jog") == 0) scenario_jog(*km);
     else if (strcmp(scenario, "atbit") == 0) scenario_atbit(*km);
     else if (strcmp(scenario, "io") == 0) scenario_io(*km);
+    else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();

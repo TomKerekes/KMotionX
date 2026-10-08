@@ -209,6 +209,7 @@ struct Model {
     std::deque<Held> held;
     int atspeed_reads;      // status reads in a row that found the spindle at speed, the board idle
     unsigned atspeed_seen;  // the status read looked at last
+    int probe_seen;         // board probing: the backend's probe_serial when the probe move was sent
 };
 static Model m;
 
@@ -624,10 +625,59 @@ static void update_motion_state()
     else emcmotStatus->motion_state = EMCMOT_MOTION_FREE;
 }
 
+// the board's answer to a probe move, as motmod's process_probe_inputs gives it: probe_type
+// bit 0 = no error (G38.3/.5), bit 1 = until contact is lost (G38.4/.5)
+static void probe_result()
+{
+    m.probe_seen = m.ks.probe_serial;
+    bool suppress = emcmotStatus->probe_type & 1, whenclears = emcmotStatus->probe_type & 2;
+    emcmotStatus->probing = 0;
+    emcmotStatus->probedPos = array_to_pose(m.pos);
+    switch (m.ks.probe_outcome) {
+    case KM_PROBE_TRIPPED:
+        emcmotStatus->probedPos = array_to_pose(m.ks.probe_pos);
+        emcmotStatus->probeTripped = 1;
+        log_print("probe tripped at X%.5f Y%.5f Z%.5f\n", m.ks.probe_pos[0], m.ks.probe_pos[1], m.ks.probe_pos[2]);
+        break;
+    case KM_PROBE_NO_CONTACT:
+        emcmotStatus->probeTripped = 0;
+        log_print("probe move finished without %s\n", whenclears ? "losing contact" : "contact");
+        if (!suppress) {
+            report_error(whenclears ? "G38.4 move finished without breaking contact." : "G38.2 move finished without making contact.");
+            SET_MOTION_ERROR_FLAG(1);
+        }
+        break;
+    case KM_PROBE_ALREADY:
+        log_print("the probe already was %s\n", whenclears ? "clear" : "tripped");
+        if (suppress) {
+            emcmotStatus->probeTripped = 1;     // motmod trips at once, where it stands
+        } else {
+            emcmotStatus->probeTripped = 0;
+            report_error(whenclears ? "Probe is already clear when starting G38.4 or G38.5 move"
+                                    : "Probe is already tripped when starting G38.2 or G38.3 move");
+            SET_MOTION_ERROR_FLAG(1);
+        }
+        break;
+    case KM_PROBE_FAILED:
+        emcmotStatus->probeTripped = 0;
+        report_error("the probe move failed on the board");
+        SET_MOTION_ERROR_FLAG(1);
+        break;
+    default:                                    // aborted
+        emcmotStatus->probeTripped = 0;
+        break;
+    }
+}
+
 // everything derived from the model, once per cycle
 static void update_status()
 {
-    bool coord_busy = km ? (m.ks.running || m.ks.homing || m.spindle_posted != m.ks.spindle_done || !m.held.empty())
+    if (km && km->has_probe()) {
+        emcmotStatus->probeVal = m.ks.probe_contact;
+        if (emcmotStatus->probing && m.ks.probe_serial != m.probe_seen) probe_result();
+    }
+    bool coord_busy = km ? (m.ks.running || m.ks.homing || m.spindle_posted != m.ks.spindle_done || !m.held.empty() ||
+                            (km->has_probe() && emcmotStatus->probing))
                          : (m.active || !m.queue.empty());
     bool inpos = !coord_busy && !any_jog_running();
     SET_MOTION_INPOS_FLAG(inpos ? 1 : 0);
@@ -805,6 +855,11 @@ static bool to_planner(const emcmot_command_t &cmd)
     case EMCMOT_SET_LINE:
         return km->line(end, cmd.vel, cmd.acc, cmd.motion_type == EMC_MOTION_TYPE_TRAVERSE, cmd.id) == 0;
     case EMCMOT_PROBE:
+        if (km->has_probe()) {
+            km->probe(end, cmd.vel, cmd.acc, cmd.id, (cmd.probe_type & 2) != 0);
+            return true;
+        }
+        return km->line(end, cmd.vel, cmd.acc, false, cmd.id) == 0;
     case EMCMOT_RIGID_TAP:
         return km->line(end, cmd.vel, cmd.acc, false, cmd.id) == 0;
     case EMCMOT_SET_CIRCLE: {
@@ -1117,14 +1172,24 @@ static void handle_command()
         emcmotStatus->probeTripped = 0;
         break;
     case EMCMOT_PROBE: {
-        log_print("PROBE to x=%.6g, y=%.6g, z=%.6g, vel=%.6g type=%d (runs as a plain move here, never trips)\n",
-                  c->pos.tran.x, c->pos.tran.y, c->pos.tran.z, c->vel, c->probe_type);
+        log_print("PROBE to x=%.6g, y=%.6g, z=%.6g, vel=%.6g type=%d%s\n", c->pos.tran.x, c->pos.tran.y, c->pos.tran.z,
+                  c->vel, c->probe_type, km && km->has_probe() ? "" : " (runs as a plain move here, never trips)");
         if (km) {
+            bool board = km->has_probe();
+            if (board) {
+                // the board watches the probe ([KMOTION] PROBE_BIT): probing until it answers
+                emcmotStatus->probing = 1;
+                emcmotStatus->probe_type = c->probe_type;
+                emcmotStatus->probeTripped = 0;
+                m.probe_seen = m.ks.probe_serial;
+            }
             if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_PROBING)) && !to_planner(*c))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
             m.last_move_time = now_s(); m.last_type = EMC_MOTION_TYPE_PROBING; m.last_tag = c->tag;
-            emcmotStatus->probing = 0;
-            emcmotStatus->probeTripped = 0;
+            if (!board) {
+                emcmotStatus->probing = 0;
+                emcmotStatus->probeTripped = 0;
+            }
             break;
         }
         Segment s;
@@ -1615,6 +1680,14 @@ static bool read_kmotion_config(KmConfig &cfg)
     for (int i = 0; i < KM_SPINDLE_ACTIONS; i++) {
         const char *v = ini.get(K, spindle_keys[i]);
         if (v && v[0] && !parse_spindle_action(ini_path, spindle_keys[i], v, cfg.spindle[i])) return false;
+    }
+    // G38.x on the board: the probe bit and its contact level (the watcher, ServiceProbe(), runs
+    // in the board's forever loop, e.g. a START_PROGRAM)
+    cfg.probe_bit = (int) ini.num(K, "PROBE_BIT", -1);
+    cfg.probe_level = (int) ini.num(K, "PROBE_ACTIVE", 1);
+    if (cfg.probe_bit >= 0 && (!km_status_has_bit(cfg.probe_bit) || (cfg.probe_level != 0 && cfg.probe_level != 1))) {
+        fprintf(stderr, "kmotion-motion: [KMOTION] PROBE_BIT must be a bit the board's status carries, PROBE_ACTIVE 0 or 1\n");
+        return false;
     }
     for (const auto &sp : cfg.start_programs) {
         bool clash = sp.first == cfg.home_thread && cfg.home_program[0];

@@ -49,6 +49,12 @@ struct KmAction {
 enum { KM_SPINDLE_M3, KM_SPINDLE_M4, KM_SPINDLE_M5, KM_SPINDLE_S, KM_SPINDLE_ACTIONS };
 // where the board tells that the spindle is at speed (SPINDLE_AT_SPEED)
 enum { KM_AT_SPEED_NONE, KM_AT_SPEED_BIT, KM_AT_SPEED_AXIS };
+// how a probe move (G38.2-G38.5) ended
+enum { KM_PROBE_NO_CONTACT,   // ran to its end without the probe tripping
+       KM_PROBE_TRIPPED,      // stopped by the probe (KmState.probe_pos: where)
+       KM_PROBE_ALREADY,      // the probe already was in the state sought: no move
+       KM_PROBE_FAILED,       // the program or the board failed (message posted)
+       KM_PROBE_ABORTED };
 
 struct KmConfig {
     bool simulate = true;         // true: plan and time without a board, replay the plan
@@ -103,6 +109,12 @@ struct KmConfig {
     // LinuxCNC's user M codes M100-M199 (index n - 100): KMotionCNC's M-code actions; P and Q
     // go to the action's persist variable and the next one, as floats
     KmAction mcode[100];
+    // G38.2-G38.5: the probe watcher ServiceProbe() (configs/kmotion-kogna/probe/ProbeService.c)
+    // runs in the board's forever loop; armed for each probe move, which the planner runs like
+    // any move (so any kinematics apply), it records the axes' Dests on the trip and stops the
+    // coordinated motion. probe_bit -1 = probe moves run as plain moves that never trip
+    int probe_bit = -1;                       // the probe's input bit (one the status carries) ...
+    int probe_level = 1;                      // ... and the level that means contact
 };
 
 // the board's status carries this I/O bit (SPINDLE_AT_SPEED = BIT)
@@ -155,6 +167,10 @@ struct KmState {
     int spindle_at_speed_done;    // ... a read made once this many spindle commands were done (cf. spindle_done)
     unsigned status_count;        // board: status reads so far
     unsigned long long input_states;  // board: bit i = KmConfig.input_bits[i] in the last status read
+    bool probe_contact;           // board: the probe bit at its contact level, in the last status read
+    int probe_serial;             // counts finished probe moves; the outcome and position are the last one's
+    int probe_outcome;            // KM_PROBE_*
+    double probe_pos[9];          // KM_PROBE_TRIPPED: where the axes were when it tripped
     int spindle_done;             // counts spindle() calls carried out (or superseded)
     double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
@@ -198,6 +214,10 @@ public:
     // work; the ticket is finished once the action is over (thread-safe, unlike state())
     int mcode(int n, double p, double q);
     bool mcode_finished(int ticket, int &result);   // result: 0 done, 1 failed (message posted), 2 aborted
+    bool has_probe() const;                      // board mode with PROBE_BIT
+    // a probe move to end (G38.2/.3: until contact, when_clears G38.4/.5: until contact is
+    // lost); the result comes through state() (probe_serial, probe_outcome, probe_pos)
+    void probe(const double end[9], double vel, double acc, int id, bool when_clears);
     void machine_on(bool on);                    // enable/disable the axes
     void jog(int axis, double vel);              // continuous jog, units/s; 0 stops
     void jog_to(int axis, double target, double vel);

@@ -71,7 +71,10 @@ through the same shared memory block.
     start-up always runs M5.
     `INIT_PROGRAM` may be given more than once (run in order); program paths are absolute or
     relative to the ini. `START_PROGRAM = <thread> <file>` (any number) starts a program after
-    the init programs and leaves it running: forever loops on the board.
+    the init programs and leaves it running: forever loops on the board. Every running thread
+    slows down thread 0, so the continuous work belongs in one loop in thread 1 (free again
+    once the init programs are done), each part `#include`d with a service call that does its
+    work only when enabled, as Dynomotion's examples do: the bench's `BenchLoop.c`.
   - **G96 constant surface speed** (`[KMOTION] SPINDLE_CSS = 1`; without it G96 is refused with
     an error) as KMotionCNC does it, on the board: LinuxCNC hands motion a CSS factor, X's
     offset and the D maximum with every spindle on (motmod would recompute the RPM from X each
@@ -85,8 +88,9 @@ through the same shared memory block.
     follows X as motmod's does. No D: KMotionCNC's 10^9 RPM, within the `[SPINDLE_0]` limit.
   - The kmotion-kogna bench uses Dynomotion's Spindle Using Jogs programs, the CSS set
     (`configs/kmotion-kogna/spindle/`, `MySpindleDefs.h` set for channel 3, which
-    `SpindleAxis.c` sets up), with `TestIncludingCSS.c` (the `ServiceCSS()` loop) started in
-    thread 4. One fix in the copies: `OnCWJog.c` and `OnCCWJog.c` clear the spindle state
+    `SpindleAxis.c` sets up), with `ServiceCSS()` (`CSSJog.c`) called from `BenchLoop.c`, the
+    bench's forever loop in thread 1. One fix in the copies: `OnCWJog.c` and `OnCCWJog.c`
+    clear the spindle state
     (`STATEVAR`) before a reversal's spin-down, and `OffJog.c` before its stop; otherwise, in
     G96, `ServiceCSS()` jogs the spindle back up while they wait for it to stop, and an M3 to M4
     reversal never finishes. `KM_BOARD=1 ./build/backend-test spindle` checks 600/1200 RPM CW,
@@ -136,6 +140,27 @@ through the same shared memory block.
     work, and answers when it is over; an error stops the program. The kmotion-kogna bench has
     `mcodes/M100` and `mcodes/M100.c` (thread 5, P and Q in persist 10 and 11: virtual bit 1027
     on when P is not 0). `KM_BOARD=1 ./build/backend-test io` checks the bits and M100.
+  - **Probing, G38.2-G38.5** (`[KMOTION] PROBE_BIT`, `PROBE_ACTIVE`): the planner runs the
+    probe move like any move, so any kinematics apply (3Link included), while the probe
+    watcher, `ServiceProbe()` (`configs/kmotion-kogna/probe/ProbeService.c`, after Dynomotion's
+    `NotifyProbeMach3.c`), called from the board's forever loop (the bench's `BenchLoop.c`),
+    watches the probe bit. kmotion-motion arms it for each probe move (persist 69; the layout
+    is in ProbeService.c). When the probe makes contact (G38.2/.3) or loses it (G38.4/.5) it
+    records every coordinate-system axis's Dest, calls `StopCoordinatedMotion()` and disarms;
+    the backend finishes the stop as an abort's (at rest, the rest of the buffer abandoned,
+    the planner where the board stands) and turns the recorded actuator positions into the
+    probed position through the kinematics.
+    kmotion-motion then answers as motmod does: `probeTripped`, `probedPos` (#5061-), the errors
+    for G38.2/.4 ("finished without making contact", "already tripped"; G38.3/.5 none), and
+    `probeVal` from the bit. A move that ends without a trip disarms the watcher; one that
+    the watcher does not answer within 2 s (no loop running it) is an error. Not done:
+    motmod's "Probe tripped during non-probe move". `KM_BOARD=1 ./build/backend-test probe`
+    runs BenchLoop.c and sets and clears virtual bit 1031 (contact = 1) during real moves,
+    one longer than the planner's lookahead: a trip while a move is still being downloaded
+    freezes the planner's download pacing (it waits for the held board), so the status
+    poller watches for the trip until the move is all downloaded and aborts the planner's
+    wait. (The watcher uses if/else where `?:` would do: TCC67 before dda21c8 got a `?:`
+    whose result is a double wrong.)
   - Planner settings come from the ini: `[KMOTION]` (mode, init program, 3rd order, cubic
     knots, actuator limits, segment log, break angle, tolerances, lookahead, board
     channels), the axis limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK`

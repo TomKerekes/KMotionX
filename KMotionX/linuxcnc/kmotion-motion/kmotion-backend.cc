@@ -71,7 +71,7 @@ struct Seg {
 };
 
 struct Cmd {
-    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME, SPINDLE, MCODE } kind = LINE;
+    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME, SPINDLE, MCODE, PROBE } kind = LINE;
     double end[9] = {}, center[3] = {}, normal[3] = {};
     double vel = 0, acc = 0, seconds = 0, feed_scale = 0, rapid_scale = 0, tolerance = 0;
     bool rapid = false, on = false;
@@ -83,6 +83,7 @@ struct Cmd {
     KmSpindleCss css;
     int mc = 0, ticket = 0;       // MCODE: the M code, its ticket, P and Q
     double p = 0, q = 0;
+    bool away = false;            // PROBE: stop when the probe loses contact (G38.4/.5)
 };
 
 struct KmBackend::Impl {
@@ -130,6 +131,12 @@ struct KmBackend::Impl {
     std::atomic<double> css_xoff{0}, css_k{0}, css_surface{0}, css_max_rpm{0};
     std::atomic<unsigned long long> input_states{0};   // poller: KmConfig.input_bits as last read
     std::atomic<int> mcode_posted{0}, mcode_done{0}, mcode_result{0};   // user M codes: tickets
+    std::atomic<bool> probe_contact{false};    // poller: the probe bit at its contact level
+    // G38: the probe move is being planned and downloaded (the poller watches for a trip
+    // meanwhile), whether it seeks loss of contact, and the trip seen then, the planner told
+    // to abort (w_probe)
+    std::mutex probe_mx;
+    std::atomic<bool> probe_watch{false}, probe_away{false}, probe_trip{false};
     std::atomic<int> spindle_done{0};  // spindle commands carried out or superseded
     std::atomic<double> sp_measured{0};    // the spindle axis's filtered speed, RPM (poller)
     double sp_prev = 0;                    // poller: the last Dest/Position read, and whether there is one
@@ -354,8 +361,9 @@ static void set_cm_position(KmBackend::Impl *d, const double pos[9])
 
 static void w_abort(KmBackend::Impl *d);
 
-// the planner refused a move or a flush. Our own abort makes it return failures too
-// (that is how the worker gets out of a blocking download): those are not errors.
+// the planner refused a move or a flush. Our own abort (a probe trip's as well) makes it
+// return failures too (that is how the worker gets out of a blocking download): those are
+// not errors.
 // Anything else is one: the planner is left mid-path, so the run is stopped like an
 // abort and LinuxCNC gets the message and its motion error flag (what motmod does
 // when tpAddLine fails)
@@ -367,7 +375,7 @@ static void fail(KmBackend::Impl *d, const char *what, int id = 0)
         m = g_message;
         g_message.clear();
     }
-    if (d->aborting) return;
+    if (d->aborting || d->probe_trip) return;
     if (m.empty()) m = std::string(what) + " failed in KMotion's planner";
     if (id > 0) m += " (line " + std::to_string(id) + ")";
     d->message(m);
@@ -689,6 +697,9 @@ bool km_status_has_bit(int bit)
     return status_bit(z, bit) >= 0;
 }
 
+// the probe watcher's persist variables (configs/kmotion-kogna/probe/ProbeService.c)
+enum { P_ARM = 69, P_STATUS = 70, P_BIT = 71, P_LEVEL = 72, P_AWAY = 73, P_POS = 74 };
+
 static void w_poll_board(KmBackend::Impl *d)
 {
     CCoordMotion *cm = d->cm;
@@ -761,6 +772,20 @@ static void w_poll_board(KmBackend::Impl *d)
     for (size_t i = 0; i < d->cfg.input_bits.size() && i < 64; i++)
         if (status_bit(status, d->cfg.input_bits[i]) == 1) in |= 1ull << i;
     d->input_states = in;
+    if (d->cfg.probe_bit >= 0) d->probe_contact = status_bit(status, d->cfg.probe_bit) == d->cfg.probe_level;
+    // a probe trip while the worker still plans or downloads the probe move: the watcher's
+    // feed hold freezes the board's execution, and the planner's download pacing would wait
+    // for it forever. Its abort flag gets the worker out; w_probe then finishes the stop.
+    // Asked when the board is held or the probe is in the state sought (a trip before the
+    // buffer started holds nothing)
+    if (d->probe_watch && (status.StopImmediateState != 0 || d->probe_contact != d->probe_away)) {
+        char cmd[32], reply[MAX_LINE + 1];
+        snprintf(cmd, sizeof cmd, "GetPersistDec %d", P_STATUS);
+        if (board_query(d, cmd, reply) == 0 && atoi(reply) == 2) {
+            std::lock_guard<std::mutex> lk(d->probe_mx);
+            if (d->probe_watch) { d->probe_trip = true; cm->SetAbort(); }
+        }
+    }
     // jogs: an axis with no trajectory (or disabled) has finished every jog written before this read
     for (int i = 0; i < 8; i++) {
         int ch = d->cfg.channel[i];
@@ -1274,6 +1299,95 @@ static void w_spindle(KmBackend::Impl *d, const Cmd &c)
     }
 }
 
+// G38.2-G38.5 (PROBE_BIT): the probe watcher, ServiceProbe() in the board's forever loop
+// (configs/kmotion-kogna/probe/ProbeService.c has the persist layout), is armed with the probe
+// bit, its contact level and the direction, and says whether the probe already is in the state
+// sought (then nothing moves) or that it is watching. The move then goes to the planner like any
+// line, flushed at once, so any kinematics apply. When the probe trips, the watcher records
+// every coordinate-system axis's Dest, stops the coordinated motion (a feed hold) and disarms;
+// here the stop is finished as an abort's is (at rest, the rest of the buffer abandoned, the
+// planner where the board stands), and the recorded actuator positions become the probed
+// position through the kinematics. A move that ends without a trip disarms the watcher.
+// A trip can come while the move is still being planned and downloaded (a move longer than
+// the planner's lookahead): the poller sees it and gets the worker out of the planner
+static void w_probe(KmBackend::Impl *d, const Cmd &c)
+{
+    char cmd[64], reply[MAX_LINE + 1];
+    double pos[9];
+    memcpy(pos, d->pos, sizeof pos);
+    auto finish = [&](int outcome) {
+        d->probe_trip = false;
+        std::lock_guard<std::mutex> lock(d->smx);
+        d->st.probe_outcome = outcome;
+        memcpy(d->st.probe_pos, pos, sizeof pos);
+        d->st.probe_serial++;
+    };
+    auto status = [&]() {
+        snprintf(cmd, sizeof cmd, "GetPersistDec %d", P_STATUS);
+        return board_query(d, cmd, reply) ? -9 : atoi(reply);
+    };
+    auto disarm = [&] { set_persist(d, P_ARM, 0); };
+    // tripped: where the axes were (doubles, low word first), then the stop finished
+    auto tripped = [&] {
+        double acts[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (int i = 0; i < 8; i++) {
+            unsigned w[2] = {0, 0};
+            for (int k = 0; k < 2; k++) {
+                snprintf(cmd, sizeof cmd, "GetPersistHex %d", P_POS + 2 * i + k);
+                if (board_query(d, cmd, reply) == 0) w[k] = (unsigned) strtoul(reply, NULL, 16);
+            }
+            unsigned long long bits = ((unsigned long long) w[1] << 32) | w[0];
+            memcpy(&acts[i], &bits, sizeof acts[i]);
+        }
+        w_abort(d);
+        acts_to_cad(d, acts, pos);
+        finish(KM_PROBE_TRIPPED);
+    };
+    if (set_persist(d, P_STATUS, -1) || set_persist(d, P_BIT, d->cfg.probe_bit) || set_persist(d, P_LEVEL, d->cfg.probe_level) ||
+        set_persist(d, P_AWAY, c.away ? 1 : 0) || set_persist(d, P_ARM, 1)) { finish(KM_PROBE_FAILED); return; }
+    int s = -1;
+    for (double t0 = now_s(); (s = status()) == -1 && now_s() - t0 < 2;)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (s == 1) { finish(KM_PROBE_ALREADY); return; }
+    if (s != 0) {
+        d->message("the probe watcher did not answer: ServiceProbe() must run in the board's forever loop "
+                   "(configs/kmotion-kogna/probe/ProbeService.c, BenchLoop.c)");
+        disarm();
+        finish(KM_PROBE_FAILED);
+        return;
+    }
+    d->probe_trip = false;
+    d->probe_away = c.away;
+    d->probe_watch = true;
+    w_line(d, c);
+    if (!d->probe_trip) w_flush(d);
+    {
+        std::lock_guard<std::mutex> lk(d->probe_mx);
+        d->probe_watch = false;
+    }
+    for (;;) {
+        if (d->probe_trip) { tripped(); return; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (d->aborting || d->stop) { disarm(); finish(KM_PROBE_ABORTED); return; }   // the queued ABORT stops the board
+        if (status() == 2) { tripped(); return; }
+        bool running;
+        {
+            std::lock_guard<std::mutex> lk(d->wmx);
+            running = d->run_active || d->unflushed;
+        }
+        if (!running) {
+            // the move ran to its end: stop watching (a trip the watcher is recording right now
+            // still counts)
+            disarm();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            if (status() == 2) { tripped(); return; }
+            memcpy(pos, d->pos, sizeof pos);
+            finish(KM_PROBE_NO_CONTACT);
+            return;
+        }
+    }
+}
+
 static void worker_main(KmBackend::Impl *d)
 {
     d->last_tick = d->last_poll = now_s();
@@ -1309,6 +1423,7 @@ static void worker_main(KmBackend::Impl *d)
             case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
             case Cmd::HOME: if (!d->cfg.simulate) w_home(d, c.home); break;
             case Cmd::SPINDLE: w_spindle(d, c); d->spindle_done++; break;
+            case Cmd::PROBE: w_probe(d, c); break;
             case Cmd::MCODE: {
                 // a user M code: its action with P and Q (in simulate mode nothing to do)
                 int r = 0;
@@ -1440,6 +1555,20 @@ bool KmBackend::mcode_finished(int ticket, int &result)
     if (d->mcode_done < ticket) return false;
     result = d->mcode_result;
     return true;
+}
+
+bool KmBackend::has_probe() const { return !d->cfg.simulate && d->cfg.probe_bit >= 0; }
+
+void KmBackend::probe(const double end[9], double vel, double acc, int id, bool when_clears)
+{
+    Cmd c{};
+    c.kind = Cmd::PROBE;
+    memcpy(c.end, end, sizeof c.end);
+    c.vel = vel;
+    c.acc = acc;
+    c.id = id;
+    c.away = when_clears;
+    d->post(c);
 }
 
 bool KmBackend::has_home_program() const { return !d->cfg.simulate && d->cfg.home_program[0] != 0; }
@@ -1714,6 +1843,7 @@ void KmBackend::state(KmState &out)
     for (int i = 0; i < 8; i++) if (d->jog_finished[i] != d->jog_issued[i]) out.jog_busy |= 1u << i;
     out.status_count = d->status_count;
     out.input_states = d->input_states;
+    out.probe_contact = d->probe_contact;
     if (d->cfg.simulate || d->cfg.spindle_at_speed == KM_AT_SPEED_NONE) {
         out.spindle_at_speed = true;              // nothing to wait for
         out.spindle_at_speed_done = d->spindle_done;
