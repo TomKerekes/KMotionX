@@ -39,7 +39,11 @@ same board; the board token serializes the commands.
   runs (QSettings); the editor with C highlighting; Compile (tcc67 for the connected board,
   the compiler's text below the editor, the cursor on the first error line), Download (Kill
   the thread, then LoadCoff), Run (Execute), All (the three in a row), Halt (Kill). The thread
-  buttons turn green while their thread runs (ThreadActive). What KMotion.exe has beyond this:
+  buttons turn green while their thread runs (ThreadActive). Open... searches by name as you
+  type, in a folder and its subfolders (part of the name, either case, or a wildcard such as
+  `*jog*.c`), as Windows' Open dialog does and Qt's does not; it starts in the thread's file's
+  folder, the last folder searched or KMotionX's C Programs, and "Standard dialog..." gives the
+  usual one. What KMotion.exe has beyond this:
   the TI compiler option, Find in Files, Go to Definition, reload on external modification.
 
 - `config_screen.py`: the Config & Flash screen. One channel's settings as KMotion.exe's
