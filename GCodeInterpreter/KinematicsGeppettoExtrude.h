@@ -30,7 +30,7 @@ public:
 	virtual ~CKinematicsGeppettoExtrude();
 	virtual int TransformCADtoActuators(double x, double y, double z, double a, double b, double c, double *Acts, bool NoGeo = false);
 	virtual int TransformActuatorstoCAD(double *Acts, double *x, double *y, double *z, double *a, double *b, double *c, bool NoGeo = false);
-	virtual int ReadGeoTable(const TCHAR *name);
+	virtual int ReadGeoTable(const KMTCHAR *name);
 	int GeoCorrect(double x, double y, double z, double a, double b, double c,
 		double *rx, double *ry, double *rz, double *ra, double *rb, double *rc);
 

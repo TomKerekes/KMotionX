@@ -4,6 +4,7 @@
 
 #if !defined(AFX_KINEMATICS_H__F0E3BA96_734F_4D32_85DD_8B2FA813C991__INCLUDED_)
 #define AFX_KINEMATICS_H__F0E3BA96_734F_4D32_85DD_8B2FA813C991__INCLUDED_
+#include "KMotionTChar.h"
 
 #ifndef _KMOTIONX
 #define GCODEINTERPRETER_DLL
@@ -45,8 +46,8 @@ class GCODEINTERPRETER_API CKinematics
 {
 public:
 	int Solve(double *A, int N);
-	int GetParameter(const TCHAR *, double * v);
-	void removeChar(TCHAR * s, int c);
+	int GetParameter(const KMTCHAR *, double * v);
+	void removeChar(KMTCHAR * s, int c);
 	int MaxAccelInDirection(double dx, double dy, double dz, double da, double db, double dc, double du, double dv, double *accel);
 	int MaxRateInDirection(double dx, double dy, double dz, double da, double db, double dc, double du, double dv, double *rate);
 	int MaxRateInDirection(double dx, double dy, double dz, double da, double db, double dc, double *rate);
@@ -80,8 +81,8 @@ public:
 
 	int IntersectionTwoCircles(CPT2D c0, double r0, CPT2D c1, double r1, CPT2D *q);
 
-	virtual int ReadGeoTable(const TCHAR *name);
-	int ReadLinearTable(int i, const TCHAR* name, bool* valid);
+	virtual int ReadGeoTable(const KMTCHAR *name);
+	int ReadLinearTable(int i, const KMTCHAR* name, bool* valid);
 	virtual int GeoCorrect(double x, double y, double z, double *cx, double *cy, double *cz);
 	virtual int LinearCorrect(double x, double* cx, int ia);
 	virtual int GetSoftLimits(double *xm, double *xp, double *ym, double *yp, double *zm, double *zp,
@@ -139,7 +140,7 @@ public:
 	double LinearSpacings[NGCODE_AXES];
 	double LinearOffset[NGCODE_AXES];  // Machine coordinates of table point i=0
 
-	const TCHAR *MainPath;
+	const KMTCHAR *MainPath;
 };
 
 #endif // !defined(AFX_KINEMATICS_H__F0E3BA96_734F_4D32_85DD_8B2FA813C991__INCLUDED_)

@@ -201,7 +201,7 @@ public:
 	int DoKMotionBufCmd(const char *s,int sequence_number=-1);
 	MOTION_PARAMS *GetMotionParams();
 
-	int MeasurePointAppendToFile(const TCHAR *name);
+	int MeasurePointAppendToFile(const KMTCHAR *name);
 	int StraightTraverse(double x, double y, double z, double a, double b, double c, bool NoCallback=false, int sequence_number=-1, int ID=0);
 	int StraightTraverse(double x, double y, double z, double a, double b, double c, double u, double v, bool NoCallback=false, int sequence_number=-1, int ID=0);
 	
@@ -287,7 +287,7 @@ public:
 	int TP3AttachBufCmdNow(const char *s, int sequence_number);   // legacy attach
 	int TP3AttachPendingCmds(int upTo);
 
-	int CheckLimit(int axis, double Act, double SoftLimitPos, double SoftLimitNeg, TCHAR Name, CString &errmsg);
+	int CheckLimit(int axis, double Act, double SoftLimitPos, double SoftLimitNeg, KMTCHAR Name, CString &errmsg);
 	int CheckSoftLimits(double x, double y, double z, double a, double b, double c, double u, double v, CString &errmsg);
 	int CheckSoftLimitsArc(int plane, double XC, double YC, double Z0, double Z1,
 						   double a, double b, double c, double u, double v, BOOL DirIsCCW, 
@@ -306,7 +306,7 @@ public:
 	bool m_realtime_Sequence_number_valid;  // latest sequence number where KFLOP is currently executing is valid
 
 
-	TCHAR MainPath[MAX_PATH],MainPathRoot[MAX_PATH];
+	KMTCHAR MainPath[MAX_PATH],MainPathRoot[MAX_PATH];
 
 	int m_board_type;
 

@@ -11,7 +11,7 @@
 /*
 
 int Interpret(int board,
-              TCHAR *fname,
+              KMTCHAR *fname,
               int start, int end,
               int restart,
               G_COMPLETE_CALLBACK CompleteFn,
@@ -46,7 +46,7 @@ int board
 
 	specifies KMotion board to send commands to
 
-TCHAR *fname
+KMTCHAR *fname
 
 	GCode FileName
 
@@ -74,11 +74,11 @@ int end,
 
 #define THETA_SIGMA 1e-13
 
-typedef void G_COMPLETE_CALLBACK(int status, int lineno, int sequence_number, const TCHAR *err);
-typedef void G_STATUS_CALLBACK(int line_no, const TCHAR *msg);
-typedef int G_USER_CALLBACK(const TCHAR *msg);
+typedef void G_COMPLETE_CALLBACK(int status, int lineno, int sequence_number, const KMTCHAR *err);
+typedef void G_STATUS_CALLBACK(int line_no, const KMTCHAR *msg);
+typedef int G_USER_CALLBACK(const KMTCHAR *msg);
 typedef int G_M_USER_CALLBACK(int mCode);
-typedef int G_SCREENSCRIPT_CALLBACK(const TCHAR *FileName);
+typedef int G_SCREENSCRIPT_CALLBACK(const KMTCHAR *FileName);
 
 #ifdef _KMOTIONX
 #define C_PROGRAMS_DIR                  "/C Programs/"
@@ -120,7 +120,7 @@ typedef struct
 {
 	int Action;
 	double dParams[MAX_MCODE_DOUBLE_PARAMS];
-	TCHAR String[256];
+	KMTCHAR String[256];
 } MCODE_ACTION; 
 
 
@@ -177,7 +177,7 @@ public:
 	void StampAxisOffsetUnits();	// G92 tuple (5211-5218) written: it is in the interpreter's current units
 	void ResyncAxisOffsetUnits();	// active G92 from the stamped tuple, converted to current units if stale
 
-	int DoReverseSearch(const TCHAR * InFile, int CurrentLine); // search backward to try to set Interpreter State
+	int DoReverseSearch(const KMTCHAR * InFile, int CurrentLine); // search backward to try to set Interpreter State
 
 
 	CGCodeInterpreter(CCoordMotion *CM);
@@ -185,7 +185,7 @@ public:
 
 	int Interpret(
 				  int board_type,
-		          const TCHAR *fname,
+		          const KMTCHAR *fname,
 			      int start, int end,
 				  int restart,
                   G_STATUS_CALLBACK *StatusFn,
@@ -193,14 +193,14 @@ public:
 
 
 	MCODE_ACTION McodeActions[MAX_MCODE_ACTIONS];
-	int ExecutePC(const TCHAR *Name, bool NoWait = false);
+	int ExecutePC(const KMTCHAR *Name, bool NoWait = false);
 	
 	MOTION_PARAMS *GetMotionParams();  // returns a pointer to the GCode Parameters
 
-	TCHAR ToolFile[MAX_PATH];
-	TCHAR SetupFile[MAX_PATH];
-	TCHAR GeoFile[MAX_PATH];
-	TCHAR VarsFile[MAX_PATH];
+	KMTCHAR ToolFile[MAX_PATH];
+	KMTCHAR SetupFile[MAX_PATH];
+	KMTCHAR GeoFile[MAX_PATH];
+	KMTCHAR VarsFile[MAX_PATH];
 
 	CCoordMotion *CoordMotion;
 	bool m_Halt;
@@ -219,9 +219,9 @@ public:
 	DWORD m_InterpretThreadID;
 	DWORD m_InvokeThreadID;
 #endif
-	void SetToolFile(TCHAR *f);
-	void SetSetupFile(TCHAR *f);
-	void SetVarsFile(TCHAR *f);
+	void SetToolFile(KMTCHAR *f);
+	void SetSetupFile(KMTCHAR *f);
+	void SetVarsFile(KMTCHAR *f);
 
 	int SetCSS(int mode);  // set CSS mode
 
@@ -258,7 +258,7 @@ public:
 
 private:
 
-	TCHAR *m_fname;
+	KMTCHAR *m_fname;
 	int m_restart;
 	G_COMPLETE_CALLBACK *m_CompleteFn;
     G_STATUS_CALLBACK *m_StatusFn;

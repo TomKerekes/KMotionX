@@ -7,6 +7,7 @@
 
 #if !defined (KMOTIONDLL_H)
 #define KMOTIONDLL_H
+#include "KMotionTChar.h"
 
 
 
@@ -89,8 +90,8 @@ enum // KMotionLocked Return Codes
 	KMOTION_NOT_CONNECTED=2, // if error or not able to connect
 };
 
-typedef int CONSOLE_HANDLER(const TCHAR* buf);
-typedef void ERRMSG_HANDLER(const TCHAR* ErrMsg);
+typedef int CONSOLE_HANDLER(const KMTCHAR* buf);
+typedef void ERRMSG_HANDLER(const KMTCHAR* ErrMsg);
 
 
 
@@ -129,25 +130,25 @@ public:
 	// Note: ALL User Thread Numbers start with 1
 	
 	
-	int LoadCoff(int Thread, const TCHAR *Name, int PackToFlash=0); //PackToFlash 0=normal,1=NewVersion,2=bootload
+	int LoadCoff(int Thread, const KMTCHAR *Name, int PackToFlash=0); //PackToFlash 0=normal,1=NewVersion,2=bootload
 #ifdef _UNICODE
 	int LoadCoff(int Thread, const char* Name, int PackToFlash); //PackToFlash 0=normal,1=NewVersion,2=bootload
 #endif
-	int CompileAndLoadCoff(const TCHAR *Name, int Thread);
-	int CompileAndLoadCoff(const TCHAR* Name, int Thread, TCHAR* Err, int MaxErrLen);
-	int Compile(const TCHAR* Name, const TCHAR* OutFile, const int board_type, int Thread, TCHAR *Err, int MaxErrLen);
+	int CompileAndLoadCoff(const KMTCHAR *Name, int Thread);
+	int CompileAndLoadCoff(const KMTCHAR* Name, int Thread, KMTCHAR* Err, int MaxErrLen);
+	int Compile(const KMTCHAR* Name, const KMTCHAR* OutFile, const int board_type, int Thread, KMTCHAR *Err, int MaxErrLen);
 #ifndef _KMOTIONX
 	int RemoveBOMandIncludedFiles(const CString& FilePath, const CList<CString, CString&>& IncludePaths);
 #endif
-	int CompileTI(const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread,TCHAR *Err, int MaxErrLen);
-	int LinkTI(const TCHAR * Linker, const TCHAR * Name, const TCHAR * OutFile, const int BoardType, int Thread,TCHAR *Err, int MaxErrLen, int MaxSize);
-	int ValidateC(const TCHAR *Name, TCHAR *Err, int MaxErrLen, int BoardType);
-	CStringA W2UTF8(const TCHAR* pszText, int nLength);
+	int CompileTI(const KMTCHAR * Name, const KMTCHAR * OutFile, const int BoardType, int Thread,KMTCHAR *Err, int MaxErrLen);
+	int LinkTI(const KMTCHAR * Linker, const KMTCHAR * Name, const KMTCHAR * OutFile, const int BoardType, int Thread,KMTCHAR *Err, int MaxErrLen, int MaxSize);
+	int ValidateC(const KMTCHAR *Name, KMTCHAR *Err, int MaxErrLen, int BoardType);
+	CStringA W2UTF8(const KMTCHAR* pszText, int nLength);
 	CString UTF82W(const char* pszText, int nLength);
-	int CheckCoffSize(const TCHAR *Name, int *size_text, int *size_bss, int *size_data, int *size_total);  // return size of sections and total (including padding)
-	int CheckElfSize(const TCHAR* InFile, int* size_text, int* size_bss, int* size_data, int* size_total);
+	int CheckCoffSize(const KMTCHAR *Name, int *size_text, int *size_bss, int *size_data, int *size_total);  // return size of sections and total (including padding)
+	int CheckElfSize(const KMTCHAR* InFile, int* size_text, int* size_bss, int* size_data, int* size_total);
 	unsigned int GetLoadAddress(int thread, int BoardType);
-	void ConvertToOut(int thread, const TCHAR *InFile, TCHAR *OutFile, int MaxLength);
+	void ConvertToOut(int thread, const KMTCHAR *InFile, KMTCHAR *OutFile, int MaxLength);
 	void RemoveComments(CString &s);
 	int ConvertCRToCRLF(const CString filePath);
 	int RemoveUTF8BOM(const CString filePath);  // remove UTF8 BOM from file
@@ -156,17 +157,17 @@ public:
 	int SetConsoleCallback(CONSOLE_HANDLER *ch);
 	int SetErrMsgCallback(ERRMSG_HANDLER* eh);
 	int CheckKMotionVersion(int *type=NULL, bool GetBoardTypeOnly=false, bool Wait=true);
-	int ExtractCoffVersionString(const TCHAR *InFile, char *Version);
-	int ExtractElfVersionString(const TCHAR *InFile, char *Version);
-	int ElfLoad(const TCHAR *InFile, unsigned int *EntryPoint, int PackToFlash);
+	int ExtractCoffVersionString(const KMTCHAR *InFile, char *Version);
+	int ExtractElfVersionString(const KMTCHAR *InFile, char *Version);
+	int ElfLoad(const KMTCHAR *InFile, unsigned int *EntryPoint, int PackToFlash);
 
-	void DoErrMsg(const TCHAR* s);
+	void DoErrMsg(const KMTCHAR* s);
 
 	int GetStatus(MAIN_STATUS& status, bool lock);
 #ifdef _UNICODE
 	int FlashKognaCOM(const char* Com);
 #endif
-	int FlashKognaCOM(const TCHAR* Com);
+	int FlashKognaCOM(const KMTCHAR* Com);
 	CString Translate(CString s);
 
 	bool ErrMessageDisplayed;
