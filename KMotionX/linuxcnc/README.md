@@ -193,6 +193,48 @@ through the same shared memory block.
     display, a python `linuxcnc.command` script) in simulate mode and on the bare Kogna with
     the bench's step/dir channels in place of the servos: homing, world and joint jogs in both
     modes, inch and mm MDI moves, the demo program.
+  - **The board's commands to the PC** (board mode, `[KMOTION] PC_COMM = 1`, the default;
+    `kmotion-pccomm.cc`): KMotionCNC's PC_COMM mechanism, by which a C program on the board
+    drives the application - it writes a command code into persist 100, arguments into
+    101-107 and strings into the gather buffer (`DSP_KFLOP/PC-DSP.h`, the helpers in
+    `C Programs/KflopToKMotionCNCFunctions.c`: `MDI()`, `MsgBox()`, `GetDROs()`,
+    `SetToolLength()`, `DoPCFloat(PC_COMM_SET_FRO, ...)` ...); the status upload carries
+    persist 100-107, and the result goes back into persist 100 (0 done, negative failed).
+    Nearly every command is a task-level operation in LinuxCNC, so the dispatcher talks to
+    task the way a GUI does, through its NML channels (`emcCommand`/`emcStatus`, process
+    `xemc`, what the `linuxcnc` Python module uses). Supported: `ESTOP`, `HALT`, `RESTART`
+    (an abort; the next run starts at line 1 anyway), `EXECUTE` (resume if paused, else run the
+    loaded file from the start - KMotionCNC continues a halted job, LinuxCNC does not),
+    `SINGLE_STEP`, `HALT_NEXT_LINE` (a pause, the nearest thing), `SET_FRO/RRO/SSO` and their
+    `_INC` forms (`EMC_TRAJ_SET_*SCALE`, clamped to `[DISPLAY] MAX_FEED_OVERRIDE` etc.; the
+    GUI's slider follows and the board's FRO gets it through the usual path), `SET_X`..`SET_V`
+    (AXIS's touch-off, `G10 L20 P0`), `MDI` (needs task idle, as KMotionCNC's; the mode goes
+    back to what it was afterwards), `MCODE` (`M<n>`), `USER_BUTTON` (`[KMOTION]
+    USER_BUTTON_<n> = <MDI line>`), `MSG` (through motion's error ring to the GUI's
+    notification; no GUI can press a button: an `MB_OK` box is answered IDOK, any other
+    IDCANCEL with the command failing, so a program that branches on the answer can tell),
+    `GET_DROS`, `GET_MACHINE_COORDS`, `GET_MISC_SETTINGS` (units; T, and the tool in the
+    spindle as H and D while G43 / G41-42 are active - LinuxCNC has no separate numbers),
+    `GET_TOOL_SLOT_ID`, `GETAXISRES`, `GET_TP_PARAM`, `GET/SET_TOOLTABLE_LENGTH/DIAMETER/
+    OFFSETX/OFFSETY` (reads from LinuxCNC's tool data, sets through `G10 L1`, which also
+    rewrites the tool file), `GET_TOOLTABLE_INDEX` (tool number = index here), `G43`, `G49`,
+    `SET_VARS` (`#n=` assignments through MDI), `GET_VARS` (NML exposes no interpreter
+    parameters: read from `[RS274NGC] PARAMETER_FILE`, which task rewrites after every MDI
+    line and program, so only the numbers in that file - add a `600 0` line to make #600
+    persistent and readable), `UPDATE_FIXTURE` (re-selects the active G5x), `GET_GCODE_LINE`,
+    `GET_DATE_TIME`. Not supported (result -1, logged once): KMotionCNC's own dialog - jog
+    keys, controls, the dialog face, screen scripts, the edit cell, `INPUT`, geo correction,
+    per-axis jog overrides, `SET_TP_PARAM`, `G43.4`, tool comments. Values follow
+    KMotionCNC's conventions: the interpreter's current units for positions and offsets
+    (LinuxCNC's status is in machine units; converted), counts per inch for `GETAXISRES`.
+    The handshake: a status read can be on the wire while the result is written and still
+    show the command, so the next command is taken only from a read two counts later; a
+    command already present in the first read is refused with -2 (left over by an earlier
+    session), as KMotionCNC does; one command runs at a time. Every command and result goes
+    to the `-l` log. Test, with the Kogna and LinuxCNC on kmotion-kogna: `pccomm/pccomm-test.py`
+    starts `pccomm/PCCommTest.c` on the board (MDI `M101`) and checks the override and the
+    touch-off from LinuxCNC's side; the program's own ok/FAIL lines are on the board's
+    console (kmotion-motion's stderr).
   - Planner settings come from the ini: `[KMOTION]` (mode, init program, 3rd order, cubic
     knots, actuator limits, segment log, break angle, tolerances, lookahead, board
     channels), the axis limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK`

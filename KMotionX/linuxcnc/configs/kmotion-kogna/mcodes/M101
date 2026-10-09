@@ -1,0 +1,5 @@
+#!/bin/sh
+# LinuxCNC runs this for M101 as "M101 <P> <Q>" (a word not given: -1) and waits for it;
+# kmotion-mcode has kmotion-motion carry out [KMOTION] MCODE_101 (kmotion-kogna.ini) on the
+# board. Another user M code: copy this file as M1xx and change the number
+exec "$(dirname "$0")/../../../kmotion-motion/kmotion-mcode" 101 "$@"

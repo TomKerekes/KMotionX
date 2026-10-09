@@ -188,6 +188,10 @@ struct KmBackend::Impl {
     bool run_active = false;        // a run is downloaded/executing on the board
     double last_poll = 0;
     bool connected = false;
+    int board_type = 0;             // BOARD_TYPE_KFLOP / BOARD_TYPE_KOGNA (the gather line length differs)
+    std::mutex pcmx;                // persist 100-107 from the last status read, and its count
+    int pc_comm[8] = {};
+    unsigned pc_count = 0;
 
     int id_of(int seq) const
     {
@@ -741,6 +745,11 @@ static void w_poll_board(KmBackend::Impl *d)
     d->connected = true;
     d->stop_state = status.StopImmediateState;
     d->status_count++;
+    {
+        std::lock_guard<std::mutex> lk(d->pcmx);
+        memcpy(d->pc_comm, status.PC_comm, sizeof d->pc_comm);
+        d->pc_count = d->status_count;
+    }
     // positions: the commanded destinations (open-loop machines report no other position)
     double acts[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     double before[9];
@@ -1768,6 +1777,7 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
             return false;
         }
         fprintf(stderr, "kmotion-motion: connected to a %s\n", type == BOARD_TYPE_KOGNA ? "Kogna" : "KFLOP");
+        d->board_type = type;
         d->km->SetConsoleCallback(console_handler);     // registers with the server: board mode only
         for (const std::string &prog : cfg.init_programs) {
             if (run_program(d, prog.c_str(), cfg.init_thread)) {
@@ -1966,4 +1976,123 @@ void KmBackend::state(KmState &out)
         snprintf(out.message, sizeof out.message, "%s", d->messages.c_str());
         d->messages.clear();
     }
+    {
+        std::lock_guard<std::mutex> lk(d->pcmx);
+        memcpy(out.pc_comm, d->pc_comm, sizeof out.pc_comm);
+        out.pc_comm_count = d->pc_count;
+    }
+}
+
+const KmAxisParams &KmBackend::axis_params(int axis) const
+{
+    return d->cfg.axis[axis < 0 ? 0 : axis > 7 ? 7 : axis];
+}
+
+// ---- the board's commands to the PC: the primitives ----------------------------------------
+// what KMotionCNC's SetKFLOPCommandResult, GetVar, SendOneDouble, GetStringFromGather and
+// SetStringToGather do on the link; a KFLOP takes 8 hex words per line, a Kogna 256
+unsigned KmBackend::pc_result(int result)
+{
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "SetPersistDec %d %d", PC_COMM_PERSIST, result);
+    if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
+    return d->status_count;
+}
+
+static const int N_PERSIST = 200;    // the board's persist.UserData[] (KMotionDef.h's N_USER_DATA_VARS)
+
+bool KmBackend::persist_get(int index, int &value)
+{
+    if (index < 0 || index >= N_PERSIST) return false;
+    char cmd[64], reply[MAX_LINE + 1];
+    snprintf(cmd, sizeof cmd, "GetPersistHex %d", index);
+    if (board_query(d, cmd, reply)) return false;
+    unsigned u;
+    if (sscanf(reply, "%x", &u) != 1) return false;
+    value = (int) u;
+    return true;
+}
+
+bool KmBackend::persist_set(int index, int value)
+{
+    if (index < 0 || index >= N_PERSIST) return false;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", index, (unsigned) value);
+    return d->km->WriteLine(cmd) == 0;
+}
+
+bool KmBackend::persist_get_double(int index, double &value)
+{
+    int w[2];
+    if (!persist_get(2 * index, w[0]) || !persist_get(2 * index + 1, w[1])) return false;
+    memcpy(&value, w, sizeof value);
+    return true;
+}
+
+bool KmBackend::persist_set_double(int index, double value)
+{
+    int w[2];
+    memcpy(w, &value, sizeof w);
+    return persist_set(2 * index, w[0]) && persist_set(2 * index + 1, w[1]);
+}
+
+bool KmBackend::gather_read_string(int word_offset, int max_words, std::string &out)
+{
+    out.clear();
+    if (word_offset < 0 || max_words <= 0) return false;
+    const int L = d->board_type == BOARD_TYPE_KFLOP ? 8 : 256;
+    char cmd[64], line[MAX_LINE + 1];
+    snprintf(cmd, sizeof cmd, "GetGatherHex %d %d", word_offset, max_words);
+    if (d->km->WaitToken(false, 5000, "kmotion-pccomm") != KMOTION_LOCKED) return false;
+    bool ok = d->km->WriteLine(cmd) == 0;
+    const char *p = line;
+    bool done = false;
+    for (int i = 0; ok && i < max_words; i++) {
+        if (i % L == 0) {
+            if (d->km->ReadLineTimeOut(line, 5000)) { ok = false; break; }
+            p = line;
+        }
+        char *end;
+        unsigned w = (unsigned) strtoul(p, &end, 16);
+        if (end == p) { ok = false; break; }
+        p = end;
+        if (!done)
+            for (int k = 0; k < 4; k++) {
+                char c = (char) (w >> (8 * k));
+                if (!c) { done = true; break; }
+                out += c;
+            }
+        // the board sends every word asked for: keep reading past the terminator
+    }
+    d->km->ReleaseToken();
+    return ok;
+}
+
+bool KmBackend::gather_write_string(int word_offset, const std::string &s)
+{
+    if (word_offset < 0) return false;
+    const int L = d->board_type == BOARD_TYPE_KFLOP ? 8 : 256;
+    int nwords = (int) (s.size() + 1 + 3) / 4;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "SetGatherHex %d %d", word_offset, nwords);
+    if (d->km->WaitToken(false, 5000, "kmotion-pccomm") != KMOTION_LOCKED) return false;
+    bool ok = d->km->WriteLine(cmd) == 0;
+    std::string line;
+    for (int i = 0; ok && i < nwords; i++) {
+        unsigned w = 0;
+        for (int k = 0; k < 4; k++) {
+            size_t idx = (size_t) i * 4 + k;
+            if (idx < s.size()) w |= (unsigned) (unsigned char) s[idx] << (8 * k);
+        }
+        char hex[16];
+        snprintf(hex, sizeof hex, "%X", w);
+        if (i % L) line += " ";
+        line += hex;
+        if (i % L == L - 1 || i == nwords - 1) {
+            ok = d->km->WriteLine(line.c_str()) == 0;
+            line.clear();
+        }
+    }
+    d->km->ReleaseToken();
+    return ok;
 }

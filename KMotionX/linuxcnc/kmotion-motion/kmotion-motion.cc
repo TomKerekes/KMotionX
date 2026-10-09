@@ -55,6 +55,7 @@
 #include <motion_types.h>
 
 #include "kmotion-backend.h"
+#include "kmotion-pccomm.h"
 
 // ---- the shared memory block, with the names mot_priv.h's macros expect ----------
 struct emcmot_struct_t *emcmotStruct = NULL;
@@ -417,6 +418,7 @@ static void model_step(double dt)
     if (km) {
         km->state(m.ks);                 // the worker thread keeps it current
         if (m.ks.message[0]) report_error("%s", m.ks.message);
+        for (std::string pm; pccomm_message(pm);) report_error("%s", pm.c_str());
         release_held();
         if (m.stepping && emcmotStatus->id != m.step_id && m.ks.active_id) {
             km->pause(true);                  // the next line has started: the step is done
@@ -1838,6 +1840,28 @@ static bool read_kmotion_config(KmConfig &cfg)
     return true;
 }
 
+// the board's commands to the PC (kmotion-pccomm.cc): what they need from the ini
+static bool read_pccomm_config(KmPcCommConfig &pc)
+{
+    const char *ini_path = getenv("INI_FILE_NAME");
+    Ini ini;
+    if (!ini_path || !ini.load(ini_path)) return false;
+    pc.enabled = ini.num("KMOTION", "PC_COMM", 1) != 0;
+    if (const char *v = ini.get("EMC", "NML_FILE")) pc.nml_file = ini_relative(ini_path, v);
+    if (const char *v = ini.get("RS274NGC", "PARAMETER_FILE")) pc.var_file = ini_relative(ini_path, v);
+    if (const char *v = ini.get("TRAJ", "LINEAR_UNITS")) pc.machine_mm = !strncasecmp(v, "mm", 2) || !strncasecmp(v, "metric", 6);
+    pc.max_feed_override = ini.num("DISPLAY", "MAX_FEED_OVERRIDE", pc.max_feed_override);
+    pc.max_spindle_override = ini.num("DISPLAY", "MAX_SPINDLE_OVERRIDE", pc.max_spindle_override);
+    pc.min_spindle_override = ini.num("DISPLAY", "MIN_SPINDLE_OVERRIDE", pc.min_spindle_override);
+    for (int n = 0; n < 100; n++) {
+        char key[32];
+        snprintf(key, sizeof key, "USER_BUTTON_%d", n);
+        const char *v = ini.get("KMOTION", key);
+        if (v && v[0]) pc.user_button[n] = v;
+    }
+    return true;
+}
+
 // ---- main ----------------------------------------------------------------------------------
 // the pins that depend on the ini: kmotion.out.<bit>, kmotion.in.<bit>, motion.digital-out-NN
 static int create_io_pins()
@@ -2022,6 +2046,16 @@ int main(int argc, char *argv[])
     std::thread mcode_thread;
     for (bool any : mcode_configured)
         if (any) { mcode_thread = std::thread(mcode_server); break; }
+    // the board's commands to the PC (persist 100-107), board mode only
+    bool pccomm_running = false;
+    if (km && km->is_board()) {
+        KmPcCommConfig pc;
+        if (read_pccomm_config(pc) && pc.enabled) {
+            pccomm_start(km, pc, log_print);
+            pccomm_running = true;
+            log_print("board commands to the PC (PC_COMM) on\n");
+        }
+    }
 
     double last = now_s();
     double next = last + period_s;
@@ -2054,6 +2088,7 @@ int main(int argc, char *argv[])
     log_print("kmotion-motion stopping\n");
     mcode_stop = true;
     if (mcode_thread.joinable()) mcode_thread.join();
+    if (pccomm_running) pccomm_stop();
     if (km) {
         // a run in progress ends here: stop the board, give the backend a moment to finish
         // the stop, then take it down - its threads must not outlive the process's

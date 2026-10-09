@@ -10,14 +10,16 @@ INC = -I$(LINUXCNC_DIR)/src -I$(LINUXCNC_DIR)/include -I$(LINUXCNC_DIR)/src/emc 
       -I$(LINUXCNC_DIR)/src/emc/motion -I$(LINUXCNC_DIR)/src/rtapi
 DEFS = -DULAPI
 LDFLAGS += -L$(LINUXCNC_DIR)/lib -Wl,-rpath,$(LINUXCNC_DIR)/lib
-LIBS = -llinuxcnchal -lnml -lm -lpthread
+# liblinuxcnc.a (the NML message classes), libtooldata and libposemath are for kmotion-pccomm,
+# which talks to task as the linuxcnc Python module does
+LIBS = -llinuxcnchal $(LINUXCNC_DIR)/lib/liblinuxcnc.a -lnml -ltooldata -llinuxcncini -lposemath -lm -lpthread
 
 # motion's error ring buffer helpers come from LinuxCNC's tree; its libraries don't export them
 LCNC_C_SRCS = $(LINUXCNC_DIR)/src/emc/motion/emcmotutil.c \
               $(LINUXCNC_DIR)/src/emc/motion/dbuf.c \
               $(LINUXCNC_DIR)/src/emc/motion/stashf.c
 
-OBJS = build/kmotion-motion.o build/kmotion-backend.o $(patsubst %.c,build/%.o,$(notdir $(LCNC_C_SRCS)))
+OBJS = build/kmotion-motion.o build/kmotion-backend.o build/kmotion-pccomm.o $(patsubst %.c,build/%.o,$(notdir $(LCNC_C_SRCS)))
 
 # the KMotion side: KMotionX's headers and libraries (this file lives inside the KMotionX tree)
 KMOTIONX_DIR ?= $(abspath $(CURDIR)/../../..)
@@ -31,8 +33,12 @@ all: kmotion-motion kmotion-mcode
 kmotion-motion: $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS) $(LIBS) $(KM_LIBS)
 
-build/kmotion-motion.o: kmotion-motion.cc kmotion-backend.h | build
+build/kmotion-motion.o: kmotion-motion.cc kmotion-backend.h kmotion-pccomm.h | build
 	$(CXX) $(OPT) $(DEFS) $(INC) -Wall -Wextra -c -o $@ $<
+
+# the board's commands to the PC: LinuxCNC's NML on one side, PC-DSP.h's codes on the other
+build/kmotion-pccomm.o: kmotion-pccomm.cc kmotion-pccomm.h kmotion-backend.h | build
+	$(CXX) $(OPT) -std=c++20 $(DEFS) $(INC) -I$(KMOTIONX_DIR)/DSP_KFLOP -Wall -Wextra -Wno-unused-parameter -c -o $@ $<
 
 build/kmotion-backend.o: kmotion-backend.cc kmotion-backend.h | build
 	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) $(KM_INC) -Wall -Wno-unknown-pragmas -Wno-overloaded-virtual -c -o $@ $<

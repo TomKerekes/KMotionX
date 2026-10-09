@@ -191,6 +191,10 @@ struct KmState {
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
     double current_vel;
     double distance_to_go;
+    // board: persist 100-107 as the last status read carried them (PC_COMM, the board's
+    // commands to the PC; kmotion-pccomm.cc), and the status_count of that read
+    int pc_comm[8];
+    unsigned pc_comm_count;
     char message[512];            // non-empty: a message for the operator (cleared by the call)
 };
 
@@ -245,6 +249,21 @@ public:
     // the latest state (the worker keeps it current)
     void state(KmState &out);
     const char *mode_name() const;
+    const KmAxisParams &axis_params(int axis) const;   // the config's, 0-7
+
+    // board mode, for the board's commands to the PC (kmotion-pccomm.cc): the primitives
+    // KMotionCNC's ServiceKFLOPCommands uses, each a short exchange on the board link (the
+    // DLL's token keeps them in order with the poller). All return false on a link failure.
+    // pc_result writes the command's result into persist 100 and returns the status count
+    // at that point: a status read may have been on the wire while it was written and still
+    // show the command, so the dispatcher trusts reads two counts later
+    unsigned pc_result(int result);
+    bool persist_get(int index, int &value);
+    bool persist_set(int index, int value);
+    bool persist_get_double(int index, double &value);   // persists 2*index and 2*index+1
+    bool persist_set_double(int index, double value);
+    bool gather_read_string(int word_offset, int max_words, std::string &out);
+    bool gather_write_string(int word_offset, const std::string &s);
 
     struct Impl;                  // the KMotion-side state, defined in kmotion-backend.cc
 
