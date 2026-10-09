@@ -32,9 +32,12 @@ same board; the board token serializes the commands.
   server's own view of the connection (`USBLocation()`, asked every poll without reaching the
   board); a Kogna's serial number comes from the server's board list (`ListLocations()`: each
   Kogna's IP followed by 0xFF000000 | serial).
-- `icons/`: KMotion.exe's icon at the six sizes it was drawn at (16-256). The small ones are
-  their own art, not a downscale, so the taskbar shows a readable "DM". The window's class is
+- `icons/`: KMotion.exe's icon at six sizes (16-256). The 16 is its own art, a bold "DM", so
+  the taskbar shows something readable; 32 and 48 are downscales of the 256 (KMotion.exe's own
+  32 and 48 lose the red feedback arrow, and 48 is what the Xfce desktop draws). The window's class is
   `kmotion-tool`, so a launcher with `StartupWMClass=kmotion-tool` is tied to it.
+  `../../desktop/install-desktop-icons.sh` installs such a launcher, with the icon, on the
+  desktop and in the application menu.
 
 - `axis_screen.py`: the Axis screen, 16 rows on a Kogna, 8 on a KFLOP: destination and
   position formatted as KMotion.exe does, Enable (`EnableAxis`/`DisableAxis`, parameters

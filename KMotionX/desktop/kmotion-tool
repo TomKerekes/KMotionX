@@ -1,0 +1,29 @@
+#!/bin/bash
+# kmotion-tool: starts the KMotion tool (tools/kmotion/kmotion_tool.py) from a desktop
+# launcher. Without a terminal its output would vanish, so it goes to
+# ~/.cache/kmotionx/kmotion-tool.log, and a failure to start shows the end of that log in a
+# window.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+tool="$here/../tools/kmotion/kmotion_tool.py"
+log="${XDG_CACHE_HOME:-$HOME/.cache}/kmotionx/kmotion-tool.log"
+mkdir -p "$(dirname "$log")"
+
+python3 "$tool" "$@" >"$log" 2>&1
+rc=$?
+[ $rc -eq 0 ] && exit 0
+
+msg="KMotion did not start (exit code $rc). The end of $log:
+
+$(tail -n 12 "$log")
+
+The tool needs python3 with PySide6 (sudo apt install python3-pyside6.qtwidgets
+python3-pyside6.qtgui) and bin/libkmx_c.so (make -C KMotionX/tools/kmotion/shim);
+see KMotionX/tools/kmotion/README.md."
+if command -v zenity >/dev/null; then
+    zenity --error --width=600 --title="KMotion" --text="$msg" 2>/dev/null
+elif command -v xmessage >/dev/null; then
+    xmessage -center -title "KMotion" "$msg"
+elif command -v notify-send >/dev/null; then
+    notify-send -u critical "KMotion did not start" "see $log"
+fi
+exit $rc

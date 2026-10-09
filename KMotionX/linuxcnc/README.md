@@ -183,6 +183,9 @@ files of its tree (the motion error ring buffer helpers) are compiled in.
     linuxcnc -v -d ~/KMotionX/KMotionX/linuxcnc/configs/kmotion-sim/kmotion-sim.ini
     python3 ~/KMotionX/KMotionX/linuxcnc/configs/kmotion-sim/drive.py   # in another terminal
 
+A desktop icon that starts LinuxCNC with the kmotion-kogna or the kmotion-sim config:
+`../desktop/install-desktop-icons.sh` (see `../desktop/README.md`).
+
 `-v -d` keeps LinuxCNC's output on the console instead of its error dialog. The command
 stream goes to `/tmp/kmotion-motion.log` (the `-l` option in the HAL file).
 

@@ -89,6 +89,13 @@ cd bin
 ./executeGCode
 ```
 
+###### 4. Desktop icons (Linux)
+One script puts launchers for the KMotion tool and for LinuxCNC on the desktop and in the application menu, no root needed:
+```
+KMotionX/desktop/install-desktop-icons.sh
+```
+See [KMotionX/desktop/README.md](KMotionX/desktop/README.md).
+
 ## Extra
 
 [It still doesn't work. Troubleshoot](KMotionX/doc/Troubleshooting.md)
