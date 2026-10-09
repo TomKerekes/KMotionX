@@ -65,6 +65,10 @@ struct emcmot_internal_t *emcmotInternal = NULL;
 struct emcmot_error_t *emcmotError = NULL;
 emcmot_joint_t joints[EMCMOT_MAX_JOINTS];
 static int num_joints = EMCMOT_MAX_JOINTS;
+// a KINEMATICS on the KMotion side ([KMOTION] KINEMATICS): the joints are the actuators (the
+// board channels, in their own units), not the axes; LinuxCNC gets kinematics type BOTH and
+// tells joint jogs from world jogs
+static bool joint_kins = false;
 static int num_spindles = EMCMOT_MAX_SPINDLES;
 
 static struct emcmot_command_t *c = NULL;   // the command slot, as in motion-logger
@@ -175,6 +179,7 @@ struct Jog {
     bool active;            // stand-in model: moving m.pos
     bool held;              // board mode: a continuous jog, running on the board until it is stopped
     bool to_target;
+    bool joint;             // simulate, joint_kins: a joint jog moves the actuator, the position follows
     double target;
     double vel;             // signed for continuous jogs
 };
@@ -189,6 +194,9 @@ struct Model {
     double current_vel;
     Jog jog[NAXES];
     double jog_min[NAXES], jog_max[NAXES];
+    double axis_acc[NAXES];     // the axes' acceleration limits (SET_AXIS_ACC_LIMIT): world jogs
+    double act[NAXES];          // joint_kins: the joints (the actuators) as last known
+    bool world_jog;             // board, joint_kins: a world jog runs as a planner move, until its release
     double joint_home[EMCMOT_MAX_JOINTS];
     struct HomingParams { double home, offset, final_vel, search_vel, latch_vel; int flags, sequence; };
     HomingParams hp[EMCMOT_MAX_JOINTS];       // from SET_JOINT_HOMING_PARAMS
@@ -229,11 +237,14 @@ static void model_init()
         m.jog[i] = Jog();
         m.jog_min[i] = -1e9;
         m.jog_max[i] = 1e9;
+        m.axis_acc[i] = 0;
+        m.act[i] = 0;
     }
     for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) { m.joint_home[j] = 0; m.hp[j] = Model::HomingParams(); }
     m.home_seen = 0;
     m.spindle_posted = 0;
     m.home_pending = 0;
+    m.world_jog = false;
     memset(&m.ks, 0, sizeof m.ks);
     m.last_move_time = 0;
     m.last_type = 0;
@@ -254,6 +265,15 @@ static bool any_jog_active()
     return false;
 }
 
+// a world jog on the board runs as a planner move: its release, and a mode change, stop it
+// like an abort
+static void end_world_jog()
+{
+    if (!m.world_jog) return;
+    m.world_jog = false;
+    if (km) km->abort();
+}
+
 static void stop_jogs(int which)       // -1: all
 {
     for (int i = 0; i < NAXES; i++) {
@@ -264,6 +284,7 @@ static void stop_jogs(int which)       // -1: all
         m.jog[i].active = false;
         m.jog[i].held = false;
     }
+    if (which < 0 || GET_MOTION_TELEOP_FLAG()) end_world_jog();
 }
 
 static void start_segment(Segment &s)
@@ -451,11 +472,31 @@ static void model_step(double dt)
             segment_pos(s, s.progress / s.length, m.pos);
         }
     }
-    // jogs (free mode: joints, teleop: axes - identical here, identity kinematics)
+    // jogs (free mode: joints, teleop: axes - identical without a KINEMATICS)
     for (int i = 0; i < NAXES; i++) {
         Jog &j = m.jog[i];
         if (!j.active) continue;
         double step = fabs(j.vel) * dt;
+        if (j.joint && i < 8) {
+            // a joint jog with kinematics: the actuator moves within the joint's limits, the
+            // position follows through the kinematics
+            double acts[8];
+            if (!km->cad_to_joints(m.pos, acts)) { j.active = false; continue; }
+            if (j.to_target) {
+                double d = j.target - acts[i];
+                if (fabs(d) <= step) { acts[i] = j.target; j.active = false; }
+                else acts[i] += d > 0 ? step : -step;
+            } else {
+                acts[i] += j.vel > 0 ? step : -step;
+            }
+            if (acts[i] > joints[i].max_pos_limit) { acts[i] = joints[i].max_pos_limit; j.active = false; }
+            if (acts[i] < joints[i].min_pos_limit) { acts[i] = joints[i].min_pos_limit; j.active = false; }
+            double p[NAXES];
+            if (km->joints_to_cad(acts, p)) memcpy(m.pos, p, sizeof m.pos);
+            else j.active = false;
+            if (fabs(j.vel) > m.current_vel) m.current_vel = fabs(j.vel);
+            continue;
+        }
         if (j.to_target) {
             double d = j.target - m.pos[i];
             if (fabs(d) <= step) { m.pos[i] = j.target; j.active = false; }
@@ -573,7 +614,7 @@ static int init_comm_buffers()
     emcmotErrorInit(emcmotError);
     emcmotConfig->numJoints = num_joints;
     emcmotConfig->numSpindles = num_spindles;
-    emcmotConfig->kinType = KINEMATICS_IDENTITY;
+    emcmotConfig->kinType = joint_kins ? KINEMATICS_BOTH : KINEMATICS_IDENTITY;
     emcmotConfig->trajCycleTime = period_s;
     emcmotConfig->servoCycleTime = period_s;
     emcmotConfig->interpolationRate = 1;
@@ -672,6 +713,10 @@ static void probe_result()
 // everything derived from the model, once per cycle
 static void update_status()
 {
+    if (joint_kins) {                           // the joints: the board's actuators, or where the position puts them
+        if (km->is_board()) memcpy(m.act, m.ks.act_pos, sizeof(double) * 8);
+        else km->cad_to_joints(m.pos, m.act);
+    }
     if (km && km->has_probe()) {
         emcmotStatus->probeVal = m.ks.probe_contact;
         if (emcmotStatus->probing && m.ks.probe_serial != m.probe_seen) probe_result();
@@ -729,9 +774,10 @@ static void update_status()
     for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) {
         emcmot_joint_t *joint = &joints[j];
         emcmot_joint_status_t *js = &emcmotStatus->joint_status[j];
-        if (j < NAXES) {                       // identity kinematics: joint j = axis j
-            joint->pos_cmd = m.pos[j];
-            joint->pos_fb = m.pos[j];
+        if (j < NAXES) {                       // identity kinematics: joint j = axis j; else the actuator
+            double p = joint_kins ? m.act[j] : m.pos[j];
+            joint->pos_cmd = p;
+            joint->pos_fb = p;
             joint->motor_pos_cmd = m.pos[j] + joint->motor_offset;
             joint->motor_pos_fb = joint->motor_pos_cmd;
             SET_JOINT_INPOS_FLAG(joint, jog_running(j) ? 0 : 1);
@@ -804,7 +850,8 @@ static void mark_joint_homed(int j, bool homed, bool move_to_home)
     emcmot_joint_status_t *js = &emcmotStatus->joint_status[j];
     js->homing = 0;
     js->homed = homed;
-    if (homed && move_to_home && j < NAXES) m.pos[j] = m.joint_home[j];   // homing ends at the HOME position
+    // homing ends at the HOME position; with joint_kins the joints are where the actuators are
+    if (homed && move_to_home && j < NAXES && !joint_kins) m.pos[j] = m.joint_home[j];
 }
 
 static void queue_segment(Segment &s)
@@ -827,20 +874,46 @@ static void start_jog(int index, bool to_target, double target, double vel)
 {
     if (index < 0 || index >= NAXES) return;
     if (!GET_MOTION_ENABLE_FLAG() || (km ? m.ks.running : (m.active && !m.paused))) return;
+    bool teleop = GET_MOTION_TELEOP_FLAG();
     if (km && km->is_board()) {
-        // the board jogs the actuator itself, within its own axis limits; a continuous jog is
-        // remembered so the stop (the jog button released) reaches the board
+        if (joint_kins && teleop) {
+            // a world jog with kinematics moves every actuator: a planner move toward the
+            // target (a continuous jog: the axis's limit), stopped at the jog's release
+            // (JOG_ABORT) the way an abort stops a move
+            if (index >= 8) return;
+            double t = to_target ? target : (vel > 0 ? m.jog_max[index] : m.jog_min[index]);
+            if (t > m.jog_max[index]) t = m.jog_max[index];
+            if (t < m.jog_min[index]) t = m.jog_min[index];
+            if (fabs(t) > 1e6) { report_error("world jogs need [AXIS_%c] MIN_LIMIT and MAX_LIMIT", "XYZABCUVW"[index]); return; }
+            if (fabs(t - m.pos[index]) < 1e-9) return;
+            double end[NAXES];
+            memcpy(end, m.pos, sizeof end);
+            end[index] = t;
+            double acc = m.axis_acc[index] > 0 ? m.axis_acc[index] : emcmotStatus->acc;
+            m.world_jog = true;
+            km->line(end, fabs(vel), acc, false, 0);
+            return;
+        }
+        // the board jogs the actuator (the joint) itself. A continuous jog runs to the joint's
+        // limit when it has one, as LinuxCNC's own jogs stop there, else until it is stopped;
+        // it is remembered so the stop (the jog button released) reaches the board
+        double cur = joint_kins ? m.act[index] : m.pos[index];
+        double lim = vel > 0 ? joints[index].max_pos_limit : joints[index].min_pos_limit;
+        bool bounded = !to_target && fabs(lim) < 1e6;
+        if (bounded && ((vel > 0 && cur >= lim) || (vel < 0 && cur <= lim))) return;
         if (to_target) km->jog_to(index, target, vel);
+        else if (bounded) km->jog_to(index, lim, fabs(vel));
         else km->jog(index, vel);
         Jog &bj = m.jog[index];
-        bj.held = !to_target;
-        bj.to_target = to_target;
-        bj.target = target;
+        bj.held = !to_target && !bounded;
+        bj.to_target = to_target || bounded;
+        bj.target = to_target ? target : lim;
         bj.vel = vel;
         return;
     }
     Jog &j = m.jog[index];
     j.active = true;
+    j.joint = joint_kins && !teleop;
     j.to_target = to_target;
     j.target = target;
     j.vel = vel;
@@ -1015,12 +1088,14 @@ static void handle_command()
     case EMCMOT_FREE:
         log_print("FREE\n");
         SET_MOTION_COORD_FLAG(0);
+        end_world_jog();
         SET_MOTION_TELEOP_FLAG(0);
         update_motion_state();
         break;
     case EMCMOT_COORD:
         log_print("COORD\n");
         SET_MOTION_COORD_FLAG(1);
+        end_world_jog();
         SET_MOTION_TELEOP_FLAG(0);
         SET_MOTION_ERROR_FLAG(0);
         stop_jogs(-1);
@@ -1028,6 +1103,7 @@ static void handle_command()
         break;
     case EMCMOT_TELEOP:
         log_print("TELEOP\n");
+        end_world_jog();
         SET_MOTION_TELEOP_FLAG(1);
         SET_MOTION_ERROR_FLAG(0);
         update_motion_state();
@@ -1120,7 +1196,8 @@ static void handle_command()
         int i = GET_MOTION_TELEOP_FLAG() ? c->axis : c->joint;
         log_print("JOG_INCR joint=%d axis=%d offset=%.6g vel=%.6g\n", c->joint, c->axis, c->offset, c->vel);
         if (i >= 0 && i < NAXES) {
-            double from = jog_running(i) && m.jog[i].to_target ? m.jog[i].target : m.pos[i];
+            double cur = joint_kins && !GET_MOTION_TELEOP_FLAG() ? m.act[i] : m.pos[i];
+            double from = jog_running(i) && m.jog[i].to_target ? m.jog[i].target : cur;
             start_jog(i, true, from + c->offset, c->vel);
         }
         break;
@@ -1263,6 +1340,7 @@ static void handle_command()
         break;
     case EMCMOT_SET_AXIS_ACC_LIMIT:
         log_print("SET_AXIS_ACC_LIMIT axis=%d, acc=%.6g\n", c->axis, c->acc);
+        if (c->axis >= 0 && c->axis < NAXES) m.axis_acc[c->axis] = c->acc;
         break;
     case EMCMOT_SET_JOINT_ACC_LIMIT:
         log_print("SET_JOINT_ACC_LIMIT joint=%d, acc=%.6g\n", c->joint, c->acc);
@@ -1594,6 +1672,26 @@ static bool read_kmotion_config(KmConfig &cfg)
         }
         cfg.start_programs.emplace_back(thread, ini_relative(ini_path, rest.substr(b, e - b + 1)));
     }
+    if (const char *kin = ini.get(K, "KINEMATICS")) {      // the planner's kinematics, by Data/Kinematics.txt's names
+        std::string k = kin;
+        k.erase(k.find_last_not_of(" \t\r") + 1);
+        snprintf(cfg.kinematics, sizeof cfg.kinematics, "%s", k.c_str());
+    }
+    if (const char *ep = ini.get(K, "ENABLE_PROGRAM")) {   // <thread> <file>: enables the axes at machine on
+        std::istringstream in(ep);
+        int thread = 0;
+        std::string rest;
+        in >> thread;
+        std::getline(in, rest);
+        size_t b = rest.find_first_not_of(" \t"), e = rest.find_last_not_of(" \t\r");
+        if (thread < 1 || thread > 7 || b == std::string::npos) {
+            fprintf(stderr, "kmotion-motion: [KMOTION] ENABLE_PROGRAM = %s: <thread 1-7> <file>\n", ep);
+            return false;
+        }
+        cfg.enable_thread = thread;
+        snprintf(cfg.enable_program, sizeof cfg.enable_program, "%s", ini_relative(ini_path, rest.substr(b, e - b + 1)).c_str());
+    }
+    cfg.enable_timeout = ini.num(K, "ENABLE_TIMEOUT_S", 15);
     cfg.spindle_css = ini.num(K, "SPINDLE_CSS", 0) != 0;
     const char *home = ini.get(K, "HOME_PROGRAM");
     if (home && home[0]) snprintf(cfg.home_program, sizeof cfg.home_program, "%s", ini_relative(ini_path, home).c_str());
@@ -1689,15 +1787,18 @@ static bool read_kmotion_config(KmConfig &cfg)
         fprintf(stderr, "kmotion-motion: [KMOTION] PROBE_BIT must be a bit the board's status carries, PROBE_ACTIVE 0 or 1\n");
         return false;
     }
-    for (const auto &sp : cfg.start_programs) {
+    // programs that keep running must not share a thread with programs loaded on demand
+    std::vector<std::pair<int, std::string>> forever = cfg.start_programs;
+    if (cfg.enable_program[0]) forever.emplace_back(cfg.enable_thread, cfg.enable_program);
+    for (const auto &sp : forever) {
         bool clash = sp.first == cfg.home_thread && cfg.home_program[0];
         for (const KmAction &a : cfg.spindle)
             if (a.type >= KM_ACTION_PROGRAM && (int) a.p[0] == sp.first) clash = true;
         for (const KmAction &a : cfg.mcode)
             if (a.type >= KM_ACTION_PROGRAM && (int) a.p[0] == sp.first) clash = true;
         if (clash) {
-            fprintf(stderr, "kmotion-motion: [KMOTION] START_PROGRAM %s: thread %d is also used for homing, the "
-                    "spindle or an M code, whose programs would stop it\n", sp.second.c_str(), sp.first);
+            fprintf(stderr, "kmotion-motion: [KMOTION] START_PROGRAM/ENABLE_PROGRAM %s: thread %d is also used for homing, "
+                    "the spindle or an M code, whose programs would stop it\n", sp.second.c_str(), sp.first);
             return false;
         }
     }
@@ -1726,6 +1827,12 @@ static bool read_kmotion_config(KmConfig &cfg)
         ax.max_vel = ini.num(sec, "MAX_VELOCITY", 0);
         ax.max_accel = ini.num(sec, "MAX_ACCELERATION", 0);
         ax.max_jerk = ini.num(sec, "MAX_JERK", 0);
+        // with a KINEMATICS the joint is the actuator, with its own limits and units
+        ax.act_max_vel = ini.num(jsec, "MAX_VELOCITY", 0);
+        ax.act_max_accel = ini.num(jsec, "MAX_ACCELERATION", 0);
+        ax.act_max_jerk = ini.num(jsec, "MAX_JERK", 0);
+        const char *type = ini.get(jsec, "TYPE");
+        ax.act_degrees = type && !strncasecmp(type, "ANGULAR", 7);
         if (ax.counts_per_unit <= 0) ax.counts_per_unit = ini.num(K, "DEFAULT_SCALE", 1000);
     }
     return true;
@@ -1894,6 +2001,11 @@ int main(int argc, char *argv[])
                 log_print(" %c: %g counts, vel %g, accel %g, jerk %g;", "XYZABCUV"[i], cfg.axis[i].counts_per_unit,
                           cfg.axis[i].max_vel, cfg.axis[i].max_accel, cfg.axis[i].max_jerk);
         log_print("\n");
+        if (!km->identity_kinematics()) {
+            joint_kins = true;
+            if (emcmotConfig) emcmotConfig->kinType = KINEMATICS_BOTH;
+            log_print("kinematics %s: the joints are the actuators, in their own units\n", cfg.kinematics);
+        }
     } else {
         log_print("motion: stand-in model\n");
     }

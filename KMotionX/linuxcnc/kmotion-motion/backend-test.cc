@@ -719,6 +719,35 @@ static void scenario_probe(KmBackend &km)
     check(fabs(f.st.pos[0] - x0) < 1e-3, "X back at the start");
 }
 
+// the 3 Link robot's kinematics (simulate mode): the joints are the servo angles, a square
+// runs through the planner, the state reports the joints
+static void scenario_kins3link(KmBackend &km)
+{
+    KmState st;
+    km.state(st);
+    check(!km.identity_kinematics(), "KINEMATICS = 3Link is not identity");
+    double j0[8], back[9];
+    check(km.cad_to_joints(st.pos, j0), "the start pose (the center of travel) is in reach");
+    printf("  joints at X0 Y0 Z0: Right %.2f Left %.2f Z %.2f deg\n", j0[0], j0[1], j0[2]);
+    check(km.joints_to_cad(j0, back) && fabs(back[0]) < 1e-4 && fabs(back[1]) < 1e-4 && fabs(back[2]) < 1e-4,
+          "CAD -> joints -> CAD comes back to the origin");
+    check(fabs(st.act_pos[0] - j0[0]) < 1e-6 && fabs(st.act_pos[1] - j0[1]) < 1e-6 && fabs(st.act_pos[2] - j0[2]) < 1e-6,
+          "the state reports the joints");
+    // a square 1 in wide at Z0.1 (the pen up a little), then back to the center and up
+    double p[5][9] = {{0.5, 0, 0.1, 0, 0, 0, 0, 0, 0}, {0.5, 0.5, 0.1, 0, 0, 0, 0, 0, 0}, {-0.5, 0.5, 0.1, 0, 0, 0, 0, 0, 0},
+                      {-0.5, -0.5, 0.1, 0, 0, 0, 0, 0, 0}, {0, 0, 0.5, 0, 0, 0, 0, 0, 0}};
+    Follower f(km);
+    for (int i = 0; i < 5; i++) km.line(p[i], 1.0, 30.0, i == 4, i + 1);
+    f.run(60);
+    check(f.extent.count(5) && f.at(0, 0, 0.5), "the square and the lift ran to X0 Y0 Z0.5");
+    km.state(st);
+    double j[8];
+    check(km.cad_to_joints(st.pos, j) && fabs(st.act_pos[0] - j[0]) < 1e-3 && fabs(st.act_pos[2] - j[2]) < 1e-3,
+          "the joints follow the position");
+    printf("  joints at X0 Y0 Z0.5: Right %.2f Left %.2f Z %.2f deg\n", st.act_pos[0], st.act_pos[1], st.act_pos[2]);
+    check(f.messages.empty(), "no messages");
+}
+
 static void scenario_abort(KmBackend &km)
 {
     bool board = km.is_board();
@@ -800,6 +829,14 @@ int main(int argc, char **argv)
     if (getenv("KM_JERK")) for (int i = 0; i < 3; i++) cfg.axis[i].max_jerk = atof(getenv("KM_JERK"));
     if (getenv("KM_BREAK_ANGLE")) cfg.break_angle = atof(getenv("KM_BREAK_ANGLE"));
     if (strcmp(scenario, "gated") == 0) cfg.queue_limit = 20;     // the backend must know task's limit
+    if (strcmp(scenario, "kins3link") == 0) {                      // the kmotion-3link settings, simulate mode
+        snprintf(cfg.kinematics, sizeof cfg.kinematics, "3Link");
+        for (int i = 0; i < 3; i++) {
+            KmAxisParams &a = cfg.axis[i];
+            a.counts_per_unit = 11.37778; a.max_vel = 3; a.max_accel = 30; a.max_jerk = 300;
+            a.act_max_vel = i == 0 ? 35 : 17.6; a.act_max_accel = 700; a.act_max_jerk = 7000; a.act_degrees = true;
+        }
+    }
     if (getenv("KM_BOARD")) {
         cfg.simulate = false;
         cfg.init_programs.push_back("/home/tk/KMotionXCNC/settings/c-programs/MinirouterInit.c");
@@ -864,6 +901,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "atbit") == 0) scenario_atbit(*km);
     else if (strcmp(scenario, "io") == 0) scenario_io(*km);
     else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
+    else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();

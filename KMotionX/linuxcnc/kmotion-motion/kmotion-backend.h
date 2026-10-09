@@ -22,10 +22,14 @@
 #include <vector>
 
 struct KmAxisParams {
-    double counts_per_unit = 0;   // 0: axis not in use
+    double counts_per_unit = 0;   // 0: axis not in use; with a KINEMATICS: counts per unit of actuator i
     double max_vel = 0;           // units/s
     double max_accel = 0;         // units/s^2
     double max_jerk = 0;          // units/s^3, 0 = 10 x accel
+    // with a KINEMATICS, actuator i (LinuxCNC's joint i) is not axis i: its own limits, in
+    // its units (degrees for a rotary one), 0 = the axis's
+    double act_max_vel = 0, act_max_accel = 0, act_max_jerk = 0;
+    bool act_degrees = false;     // a rotary actuator
 };
 
 // Spindle control as KMotionCNC's Tool Setup does it for M3, M4, M5 and S (Dynomotion's help
@@ -70,6 +74,16 @@ struct KmConfig {
     double lookahead = 3.0;
     KmAxisParams axis[8];
     int channel[8] = {0, 1, 2, -1, -1, -1, -1, -1};   // board channel per axis (DefineCS)
+    // the planner's kinematics: "" = linear, each axis its own actuator; else a name
+    // Data/Kinematics.txt takes (3Link, Scara, Geppetto, ...), and the actuators are
+    // LinuxCNC's joints
+    char kinematics[32] = "";
+    // a program that enables the axes at machine on, in place of EnableAxis (a serial servo
+    // setup that turns torque on, say), in its thread, waited for until every axis of the
+    // coordinate system is enabled, at most enable_timeout seconds
+    int enable_thread = 0;
+    char enable_program[512] = "";
+    double enable_timeout = 15;
     int queue_limit = 500;        // LinuxCNC moves the protocol side lets task queue: while that
                                   // many are pending, task is waiting for us, not out of moves
     // board mode
@@ -149,6 +163,7 @@ struct KmHomeRequest {
 
 struct KmState {
     double pos[9];                // x y z a b c u v w
+    double act_pos[8];            // the actuators' positions in their units (the joints'; the axes' without a KINEMATICS)
     bool enabled[8];              // board: axis enabled (always true in simulate mode)
     int depth;                    // moves handed over and not finished yet
     int active_id;                // LinuxCNC id of the move executing (0 if none)
@@ -187,6 +202,11 @@ public:
     // in board mode this connects, runs the init program and reads the position
     bool init(const KmConfig &cfg, const double pos[9]);
     bool is_board() const;
+    bool identity_kinematics() const;            // no KINEMATICS: each axis is its own actuator
+    // the kinematics: the CAD position <-> the actuators' positions in their units (LinuxCNC's
+    // joints); false: out of reach
+    bool cad_to_joints(const double pos[9], double joints[8]);
+    bool joints_to_cad(const double joints[8], double pos[9]);
     // simulate mode: the machine "moved" by other means (jog, homing) while idle
     void set_position(const double pos[9]);
     int line(const double end[9], double vel, double acc, bool rapid, int id);

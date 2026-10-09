@@ -161,6 +161,38 @@ through the same shared memory block.
     poller watches for the trip until the move is all downloaded and aborts the planner's
     wait. (The watcher uses if/else where `?:` would do: TCC67 before dda21c8 got a `?:`
     whose result is a double wrong.)
+  - **Kinematics on the KMotion side** (`[KMOTION] KINEMATICS = <name>`, the names KMotionCNC's
+    `Data/Kinematics.txt` takes: `3Link`, `Scara`, `Geppetto`, `Kinematics3Rod`, the 5-axis
+    ones): the planner turns the CAD position into the actuators' positions, as KMotionCNC
+    does, and LinuxCNC's joints are those actuators, in their own units (degrees for a rotary
+    one), not the axes. kmotion-motion gives LinuxCNC kinematics type BOTH, so its GUI tells
+    joint mode from world mode: a joint jog moves one actuator on the board (within the
+    joint's `[JOINT_n]` limits - with or without a KINEMATICS, a continuous jog now runs to the
+    limit, as motmod's do), a world jog is a planner move toward the axis's `[AXIS_*]` limit (or
+    the increment), stopped at the button's release the way an abort stops a move; the joint
+    positions shown are the actuators' (from the status, or where the position puts them in
+    simulate mode); homing is per joint as before (absolute actuators: `HOME_SEARCH_VEL = 0`,
+    homed where they stand, nothing moves). `[KMOTION] ACTUATOR_LIMITS = 1` then takes the
+    planner's limits from `[JOINT_n] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK` in the joint's
+    units (`TYPE = ANGULAR` marks a rotary one), `[JOINT_n] INPUT_SCALE` being its counts per
+    unit, while the feed rate and tolerances stay in CAD units. Without a KINEMATICS nothing
+    changes: joint i is axis i. Not done: LinuxCNC's own soft-limit checks of the joints along
+    a programmed path (the interpreter checks the `[AXIS_*]` limits, the board its own).
+  - **An enable program** (`[KMOTION] ENABLE_PROGRAM = <thread> <file>`): machine on runs it in
+    its thread in place of enabling the axes, and waits until every axis of the coordinate
+    system is enabled (`ENABLE_TIMEOUT_S`, default 15; past it an error, the program's own
+    messages are on the board's console); then the planner takes the position from the board.
+    For a setup that must come first, e.g. serial servos whose torque the program turns on
+    before enabling at their measured positions. Machine off disables the axes as before. Its
+    thread is reserved like a START_PROGRAM's.
+  - **The 3 Link robot:** `configs/kmotion-3link/` (its README says what is still to be set):
+    three Dynamixel XL430 servos on the Kogna's serial servo bus, `KINEMATICS = 3Link`, joints
+    in degrees at 11.378 counts/degree, `ENABLE_PROGRAM = 1 DxlAxisInit3.c` (Tom's servo setup
+    and watchdog), the demo `ngc/DynoMotion3Link.ngc`. `backend-test kins3link` runs a square
+    through the 3Link kinematics in simulate mode; the config ran headless (LinuxCNC's `dummy`
+    display, a python `linuxcnc.command` script) in simulate mode and on the bare Kogna with
+    the bench's step/dir channels in place of the servos: homing, world and joint jogs in both
+    modes, inch and mm MDI moves, the demo program.
   - Planner settings come from the ini: `[KMOTION]` (mode, init program, 3rd order, cubic
     knots, actuator limits, segment log, break angle, tolerances, lookahead, board
     channels), the axis limits from `[AXIS_*] MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK`

@@ -35,6 +35,18 @@
 
 #include "GCodeInterpreterX.h"
 #include "CoordMotion.h"
+#include "Kinematics3Link.h"
+#include "Kinematics3Rod.h"
+#include "KinematicsScara.h"
+#include "Kinematics2AxisRobot.h"
+#include "KinematicsGeppetto.h"
+#include "KinematicsGeppettoExtrude.h"
+#include "Kinematics5AxisTableAB.h"
+#include "Kinematics5AxisTableAC.h"
+#include "Kinematics5AxisTableBC.h"
+#include "Kinematics5AxisTableAGimbalB.h"
+#include "Kinematics5AxisGimbalAB.h"
+#include "Kinematics5AxisGimbalCB.h"
 
 static std::mutex g_msg_mutex;
 static std::string g_message;                   // operator messages from KMotion
@@ -91,6 +103,7 @@ struct KmBackend::Impl {
     CKMotionDLL *km = nullptr;
     CCoordMotion *cm = nullptr;
     double scale[8];                // counts per actuator unit
+    double act_pos[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // the actuators' positions in their units (poller; simulate: publish)
     bool used[8];
 
     // command queue, main thread -> worker
@@ -741,6 +754,7 @@ static void w_poll_board(KmBackend::Impl *d)
             d->enabled[i] = true;
         }
     }
+    for (int i = 0; i < 8; i++) d->act_pos[i] = d->scale[i] > 0 ? acts[i] / d->scale[i] : 0;
     acts_to_cad(d, acts, d->pos);
     // the spindle at speed (SPINDLE_AT_SPEED): its bit at the level, or its axis done (a jog at
     // speed has no trajectory left; a disabled axis is not done)
@@ -857,6 +871,14 @@ static void w_poll_board(KmBackend::Impl *d)
     }
 }
 
+// simulate mode: the actuators where the position puts them
+static void sim_act_pos(KmBackend::Impl *d)
+{
+    double acts[MAX_ACTUATORS];
+    if (d->cm->Kinematics->TransformCADtoActuators(d->pos[0], d->pos[1], d->pos[2], d->pos[3], d->pos[4], d->pos[5], d->pos[6], d->pos[7], acts) == 0)
+        for (int i = 0; i < 8; i++) d->act_pos[i] = d->scale[i] > 0 ? acts[i] / d->scale[i] : 0;
+}
+
 // what the main thread reads
 static void publish(KmBackend::Impl *d)
 {
@@ -864,6 +886,8 @@ static void publish(KmBackend::Impl *d)
     std::lock_guard<std::mutex> lk(d->wmx);
     KmState &s = d->st;
     memcpy(s.pos, d->pos, sizeof s.pos);
+    if (d->cfg.simulate) sim_act_pos(d);
+    memcpy(s.act_pos, d->act_pos, sizeof s.act_pos);
     for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
     s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
@@ -970,6 +994,37 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
     char cmd[64];
     MAIN_STATUS status;
     memset(&status, 0, sizeof status);
+    if (on && d->cfg.enable_program[0]) {
+        // the config's program enables the axes (a serial servo setup turns the torque on and
+        // enables at the measured position): run it, wait until every axis of the coordinate
+        // system is enabled, then take the position from the board
+        if (start_program(d, d->cfg.enable_program, d->cfg.enable_thread)) return;
+        double t0 = now_s();
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            memset(&status, 0, sizeof status);
+            if (d->km->GetStatus(status, true) == 0) {
+                bool all = true;
+                for (int i = 0; i < 8; i++) {
+                    int ch = d->cfg.channel[i];
+                    if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((status.Enables >> ch) & 1)) all = false;
+                }
+                if (all) break;
+            }
+            if (now_s() - t0 > d->cfg.enable_timeout) {
+                d->message("the enable program did not enable every axis in time ([KMOTION] ENABLE_TIMEOUT_S): "
+                           "its messages are on the board's console");
+                return;
+            }
+        }
+        double x, y, z, a, b, c, u, v;
+        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
+            double p[9] = {x, y, z, a, b, c, u, v, 0};
+            memcpy(d->pos, p, sizeof p);
+            set_cm_position(d, d->pos);
+        }
+        return;
+    }
     bool have_status = d->km->GetStatus(status, true) == 0;
     for (int i = 0; i < 8; i++) {
         int ch = d->cfg.channel[i];
@@ -987,20 +1042,16 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
 
 static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
 {
-    // an incremental or absolute jog: a move of the one actuator to the target counts, at
-    // LinuxCNC's jog speed (with none, the board's own Vel)
+    // an incremental or absolute jog of the one actuator (LinuxCNC's joint) to the target in
+    // its own units, at LinuxCNC's jog speed (with none, the board's own Vel)
     if (c.axis < 0 || c.axis >= 8) return;
     int ch = d->cfg.channel[c.axis];
     if (ch < 0) return;
-    double target[9];
-    memcpy(target, d->pos, sizeof target);
-    target[c.axis] = c.end[c.axis];
-    double acts[MAX_ACTUATORS];
-    if (d->cm->Kinematics->TransformCADtoActuators(target[0], target[1], target[2], target[3], target[4], target[5], target[6], target[7], acts)) return;
     char cmd[64];
+    double target = c.end[c.axis] * d->scale[c.axis];
     double vel = fabs(c.vel * d->scale[c.axis]);
-    if (vel > 0) snprintf(cmd, sizeof cmd, "MoveAtVel%d=%.3f %.3f", ch, acts[c.axis], vel);
-    else snprintf(cmd, sizeof cmd, "Move%d=%.3f", ch, acts[c.axis]);
+    if (vel > 0) snprintf(cmd, sizeof cmd, "MoveAtVel%d=%.3f %.3f", ch, target, vel);
+    else snprintf(cmd, sizeof cmd, "Move%d=%.3f", ch, target);
     if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
 }
 
@@ -1572,6 +1623,26 @@ void KmBackend::probe(const double end[9], double vel, double acc, int id, bool 
 }
 
 bool KmBackend::has_home_program() const { return !d->cfg.simulate && d->cfg.home_program[0] != 0; }
+bool KmBackend::identity_kinematics() const { return d->cfg.kinematics[0] == 0; }
+
+bool KmBackend::cad_to_joints(const double pos[9], double joints[8])
+{
+    double acts[MAX_ACTUATORS];
+    if (d->cm->Kinematics->TransformCADtoActuators(pos[0], pos[1], pos[2], pos[3], pos[4], pos[5], pos[6], pos[7], acts)) return false;
+    for (int i = 0; i < 8; i++) joints[i] = d->scale[i] > 0 ? acts[i] / d->scale[i] : 0;
+    return true;
+}
+
+bool KmBackend::joints_to_cad(const double joints[8], double pos[9])
+{
+    double acts[MAX_ACTUATORS];
+    for (int i = 0; i < MAX_ACTUATORS; i++) acts[i] = i < 8 ? joints[i] * d->scale[i] : 0;
+    double x, y, z, a, b, c, u, v;
+    if (d->cm->Kinematics->TransformActuatorstoCAD(acts, &x, &y, &z, &a, &b, &c, &u, &v)) return false;
+    double p[9] = {x, y, z, a, b, c, u, v, 0};
+    memcpy(pos, p, sizeof p);
+    return true;
+}
 
 void KmBackend::home(const KmHomeRequest &req)
 {
@@ -1586,6 +1657,25 @@ const char *KmBackend::mode_name() const
     return d->cfg.simulate ? "KMotion planner, simulated execution" : "KMotion planner and board";
 }
 
+// the planner's kinematics by the name Data/Kinematics.txt takes (CCoordMotion's constructor
+// reads that file, one per installation; a config names its own instead)
+static CKinematics *kinematics_by_name(const char *name)
+{
+    if (!strcmp(name, "3Link")) return new CKinematics3Link;
+    if (!strcmp(name, "Kinematics3Rod")) return new CKinematics3Rod;
+    if (!strcmp(name, "Scara")) return new CKinematicsScara;
+    if (!strcmp(name, "Kinematics2AxisRobot")) return new CKinematics2AxisRobot;
+    if (!strcmp(name, "Geppetto")) return new CKinematicsGeppetto;
+    if (!strcmp(name, "GeppettoExtruder")) return new CKinematicsGeppettoExtrude;
+    if (!strcmp(name, "Kinematics5AxisTableAB")) return new CKinematics5AxisTableAB;
+    if (!strcmp(name, "5AxisTableAC")) return new CKinematics5AxisTableAC;
+    if (!strcmp(name, "5AxisTableBC")) return new CKinematics5AxisTableBC;
+    if (!strcmp(name, "Kinematics5AxisTableAGimbalB")) return new CKinematics5AxisTableAGimbalB;
+    if (!strcmp(name, "5AxisGimbalAB")) return new CKinematics5AxisGimbalAB;
+    if (!strcmp(name, "5AxisGimbalCB")) return new CKinematics5AxisGimbalCB;
+    return nullptr;
+}
+
 bool KmBackend::init(const KmConfig &cfg, const double pos[9])
 {
     d->cfg = cfg;
@@ -1594,6 +1684,19 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
     d->km->SetErrMsgCallback(err_handler);
     d->cm = new CCoordMotion(d->km);
     CCoordMotion *cm = d->cm;
+    if (cfg.kinematics[0]) {
+        // in place of the one the constructor chose; first, as the parameters below are its
+        CKinematics *k = kinematics_by_name(cfg.kinematics);
+        if (!k) {
+            fprintf(stderr, "kmotion-motion: [KMOTION] KINEMATICS = %s: not a kinematics the planner knows\n", cfg.kinematics);
+            return false;
+        }
+        k->MainPath = cm->MainPath;
+        k->Initialize();
+        delete cm->Kinematics;
+        cm->Kinematics = k;
+        cm->m_TCP_affects_actuators = true;
+    }
     cm->m_Simulate = cfg.simulate;
     cm->m_DoTime = true;            // plan with real timing even without a board
 
@@ -1627,12 +1730,17 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         *rvel[i] = v; *racc[i] = a; *rjerk[i] = j;
         *spos[i] = 1e9; *sneg[i] = -1e9;          // LinuxCNC enforces its own limits
         d->scale[i] = c;
-        // one actuator per axis
+        // the actuator table: without a KINEMATICS, actuator i is axis i; with one it is
+        // LinuxCNC's joint i, with the joint's own limits
+        bool kin = cfg.kinematics[0] != 0;
+        double av = kin && ax.act_max_vel > 0 ? ax.act_max_vel : v;
+        double aa = kin && ax.act_max_accel > 0 ? ax.act_max_accel : a;
+        double aj = kin && ax.act_max_jerk > 0 ? ax.act_max_jerk : (kin && ax.act_max_accel > 0 ? 10.0 * aa : j);
         MP->ActScale[i] = d->used[i] ? c : 0;
-        MP->MaxActVel[i] = d->used[i] ? v : 0;
-        MP->MaxActAccel[i] = d->used[i] ? a : 0;
-        MP->MaxActJerk[i] = d->used[i] ? j : 0;
-        MP->ActDegrees[i] = (i >= 3 && i <= 5);
+        MP->MaxActVel[i] = d->used[i] ? av : 0;
+        MP->MaxActAccel[i] = d->used[i] ? aa : 0;
+        MP->MaxActJerk[i] = d->used[i] ? aj : 0;
+        MP->ActDegrees[i] = kin ? ax.act_degrees : (i >= 3 && i <= 5);
     }
     MP->ThirdOrderTP = cfg.third_order;
     MP->CubicKnots = cfg.third_order && cfg.cubic_knots;
@@ -1698,6 +1806,8 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
     {
         std::lock_guard<std::mutex> lock(d->smx);
         memcpy(d->st.pos, d->pos, sizeof d->st.pos);
+        if (cfg.simulate) sim_act_pos(d);
+        memcpy(d->st.act_pos, d->act_pos, sizeof d->st.act_pos);
         for (int i = 0; i < 8; i++) d->st.enabled[i] = true;
         d->st.connected = true;
     }

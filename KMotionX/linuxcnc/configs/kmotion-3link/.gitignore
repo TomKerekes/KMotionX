@@ -1,0 +1,6 @@
+# written by LinuxCNC at run time
+position.txt
+3link.var.bak
+# KMotionServer writes its logs into its working directory
+kmx_server_*
+gmoccapy.pref
