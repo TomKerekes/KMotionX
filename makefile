@@ -61,7 +61,7 @@ install: subdirs
 	cp -R $(BUILD_ROOT)/DSP_KFLOP/. "$(kmxhome)/DSP_KFLOP"
 	cp -R $(BUILD_ROOT)/DSP_KOGNA/. "$(kmxhome)/DSP_KOGNA"
 	cp "$(BUILD_ROOT)/KMotion/Data/emc.var" "$(kmxhome)/Data/"
-	cp "$(BUILD_ROOT)/C Programs/BlinkKFLOP.c" "$(kmxhome)/C Programs/"
+	cp -R "$(BUILD_ROOT)/C Programs/." "$(kmxhome)/C Programs/"
 	ln -sf $(addprefix $(kmxhome)/bin/,$(KMXPROGS)) $(bindir)
 
 

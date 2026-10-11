@@ -475,6 +475,7 @@ namespace kmx
 
 		char IncSrcPath1[MAX_PATH + 1];
 		char IncSrcPath2[MAX_PATH + 1];
+		char IncSrcPath3[MAX_PATH + 1];
 		char BindTo[MAX_PATH + 1];
 
 		// Get path to DSPKMotion.out or DSPKFLOP.out
@@ -484,23 +485,29 @@ namespace kmx
 
 		getPath(Name, IncSrcPath2);
 
+		// the shared C programs (KflopToKMotionCNCFunctions.c and the like), as KMotion's
+		// own compile does on Windows
+		snprintf(IncSrcPath3, sizeof(IncSrcPath3), "%s%cC Programs", getInstallPath(), PATH_SEPARATOR);
+
 		if (tcc_vers < 26)
-			snprintf(command, cmd_len, "%s -text %08X %s -nostdinc -I\"%s\" -I\"%s\" -o \"%s\" \"%s\" \"%s\" 2>&1",
+			snprintf(command, cmd_len, "%s -text %08X %s -nostdinc -I\"%s\" -I\"%s\" -I\"%s\" -o \"%s\" \"%s\" \"%s\" 2>&1",
 					 Compiler,
 					 LoadAddress,
 					 customOptions,
 					 IncSrcPath1,
 					 IncSrcPath2,
+					 IncSrcPath3,
 					 OutFile,
 					 Name,
 					 BindTo);
 		else
-			snprintf(command, cmd_len, "%s -Wl,-Ttext,%08X %s -Wl,--oformat,coff -static -nostdinc -nostdlib -I\"%s\" -I\"%s\" -o \"%s\" \"%s\" \"%s\" 2>&1",
+			snprintf(command, cmd_len, "%s -Wl,-Ttext,%08X %s -Wl,--oformat,coff -static -nostdinc -nostdlib -I\"%s\" -I\"%s\" -I\"%s\" -o \"%s\" \"%s\" \"%s\" 2>&1",
 					 Compiler,
 					 LoadAddress,
 					 customOptions,
 					 IncSrcPath1,
 					 IncSrcPath2,
+					 IncSrcPath3,
 					 OutFile,
 					 Name,
 					 BindTo);

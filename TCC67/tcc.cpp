@@ -2328,6 +2328,7 @@ static void preprocess(int is_bof)
         break;
     case TOK_INCLUDE:
         ch = file->buf_ptr[0];
+        bufa[0] = '\0';         /* the name as read (C67 branch below); buf is the computed-include form */
 
         /* XXX: incorrect if comments : use next_nomacro with a special mode */
         skip_spaces();
@@ -2454,7 +2455,7 @@ static void preprocess(int is_bof)
 			tcc_open(s1, buf1, &f);
 			if (f)
 				goto found;
-			error("include file '%s' not found", buf);
+			error("include file '%s' not found", bufa[0] ? bufa : (char *) buf);
             f = NULL;
         found:
 #ifdef INC_DEBUG
