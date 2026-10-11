@@ -9,7 +9,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize, QSettings
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QLabel, QWidget, QVBoxLayout, QPlainTextEdit,
                                QDockWidget, QCheckBox, QHBoxLayout, QPushButton)
@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
         v.addLayout(bar)
         v.addWidget(self.console)
         dock = QDockWidget("Console", self)
+        dock.setObjectName("console")                # saveState() files the dock's layout under it
         dock.setWidget(box)
         self.addDockWidget(Qt.BottomDockWidgetArea, dock)
         # status bar
@@ -154,7 +155,18 @@ class MainWindow(QMainWindow):
         self.age_timer = QTimer(self)
         self.age_timer.timeout.connect(self.on_age)
         self.age_timer.start(500)
-        self.resize(1100, 750)
+        # where the window was last time, and the dock layout (QSettings, as the screens use)
+        self.settings = QSettings("Dynomotion", "kmotion-tool")
+        geometry = self.settings.value("window/geometry")
+        if not (geometry and self.restoreGeometry(geometry)):
+            self.resize(1100, 750)
+        state = self.settings.value("window/state")
+        if state:
+            self.restoreState(state)
+
+    def save_window(self):
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("window/state", self.saveState())
 
     def on_status(self, st):
         self.last_status_t = time.time()
@@ -197,6 +209,7 @@ class MainWindow(QMainWindow):
             self.km.capture_console()
 
     def closeEvent(self, ev):
+        self.save_window()
         self.poller.stop()
         super().closeEvent(ev)
 
@@ -240,6 +253,7 @@ def main():
     w = MainWindow(km)
     w.show()
     rc = app.exec()
+    w.save_window()                      # Ctrl-C (app.quit) ends without a closeEvent
     w.poller.stop()
     km.close()
     return rc
