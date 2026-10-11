@@ -3,10 +3,11 @@
 // Dynomotion's SimulateProbeAndStock.c as used with LinuxCNC (configs/kmotion-kogna: PROBE_BIT
 // 1032, PROBE_ACTIVE 1): run in a thread of its own, it sets virtual bit 1032 while the probe
 // tip (0.125 in) is inside a 4 x 3 x 1 in block whose top is 4.5 in up (Z 4..5), from the axes'
-// Dest at 2540 counts/inch, so G38 moves trip where the stock is. Differences from the
-// original: the axis resolutions are fixed here (the original asks KMotionCNC for them through
-// DoPCInt, which LinuxCNC does not answer) and the bit means contact, 1 inside the stock,
-// where the original's 1032 is the opposite.
+// Dest, so G38 moves trip where the stock is. The axis resolutions come from the application
+// through PC_COMM_GETAXISRES as in the original (kmotion-motion answers it, see
+// linuxcnc/README.md "The board's commands to the PC"; DoPC waits until something does, and a
+// failed answer falls back to the bench's 2540 counts/inch). Difference from the original: the
+// bit means contact, 1 inside the stock, where the original's 1032 is the opposite.
 #include "KMotionDef.h"
 #define TMP 10					// which spare persist to use to transfer data
 #include "KflopToKMotionCNCFunctions.c"
@@ -22,13 +23,19 @@ int main()
 {
 	double x,y,z,xRes,yRes,zRes;
 	printf("Getting Axis Resolution\n");
-//	DoPCInt(PC_COMM_GETAXISRES, TMP);
-
-//	xRes = *(float *)&persist.UserData[TMP];
-//	yRes = *(float *)&persist.UserData[TMP+1];
-//	zRes = *(float *)&persist.UserData[TMP+2];
-
-	xRes = yRes = zRes = 2540;
+	// kmotion-motion answers PC_COMM_GETAXISRES (counts per inch of X..C as floats at TMP..);
+	// a failure (nothing listening, result < 0) falls back to the bench's 2540
+	if (DoPCInt(PC_COMM_GETAXISRES, TMP) == 0)
+	{
+		xRes = *(float *)&persist.UserData[TMP];
+		yRes = *(float *)&persist.UserData[TMP+1];
+		zRes = *(float *)&persist.UserData[TMP+2];
+	}
+	else
+	{
+		printf("GETAXISRES failed: using 2540\n");
+		xRes = yRes = zRes = 2540;
+	}
 
 	printf("Axis Resolutions Found:\n\tx: %f\n\ty: %f\n\tz: %f\n", xRes, yRes, zRes);
 
