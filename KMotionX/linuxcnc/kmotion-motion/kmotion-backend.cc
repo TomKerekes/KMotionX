@@ -1022,7 +1022,22 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
     if (on && d->cfg.enable_program[0]) {
         // the config's program enables the axes (a serial servo setup turns the torque on and
         // enables at the measured position): run it, wait until every axis of the coordinate
-        // system is enabled, then take the position from the board
+        // system is enabled, then take the position from the board. Axes left enabled by the
+        // last session (KEEP_ENABLED_ON_EXIT) need no program: it still runs on the board
+        bool all = d->km->GetStatus(status, true) == 0;
+        for (int i = 0; all && i < 8; i++) {
+            int ch = d->cfg.channel[i];
+            if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((status.Enables >> ch) & 1)) all = false;
+        }
+        if (all) {
+            double x, y, z, a, b, c, u, v;
+            if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
+                double p[9] = {x, y, z, a, b, c, u, v, 0};
+                memcpy(d->pos, p, sizeof p);
+                set_cm_position(d, d->pos);
+            }
+            return;
+        }
         if (start_program(d, d->cfg.enable_program, d->cfg.enable_thread)) return;
         double t0 = now_s();
         for (;;) {

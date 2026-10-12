@@ -21,10 +21,16 @@ motion module's place (`KMotionX/linuxcnc/README.md`).
   - world mode jogs the pen: a planner move toward the axis's `[AXIS_*]` limit, stopped when
     the button is released;
   - gmoccapy shows the joints in joint mode and the pen position in world mode.
-- At start LinuxCNC runs `autostart.py` (`[APPLICATIONS] APP`): E-stop reset, Machine on, Home
-  All, so the machine is ready as KMotionCNC leaves it after its init; comment `APP` out for
-  LinuxCNC's usual start in E-stop. At exit LinuxCNC disables the axes (task's shutdown), so
-  the servos' torque is off between sessions; the next start enables them where they stand.
+- The machine stays as KMotionCNC leaves it: `[KMOTION] KEEP_ENABLED_ON_EXIT = 1` keeps the
+  axes enabled (torque on) when LinuxCNC exits, and at the next start `autostart.py`
+  (`[APPLICATIONS] APP`) finds them enabled and does E-stop reset + Machine on - no init
+  program, no homing (`[TRAJ] NO_FORCE_HOMING = 1` lets moves run unhomed, homing is the
+  operator's or the board's business, as in KMotionCNC). With any axis disabled, LinuxCNC
+  starts in E-stop as usual and Machine on runs the enable program. Task's own shutdown sends
+  the same DISABLE as Machine off and E-stop do, so with KEEP_ENABLED_ON_EXIT a board disable
+  is held a quarter second and dropped if the quit follows; the DISABLEs of task's and the
+  GUI's start (the first 30 s) leave the board alone - an E-stop pressed that early shows in
+  LinuxCNC but keeps the torque on until the next Machine off.
 - Before every run the planner re-reads the position from the board (as KMotionCNC does), so
   axes moved behind its back - the KMotion console's MoveRel, a program on the board - do not
   make the next move start from a stale point. LinuxCNC's display follows the board anyway.

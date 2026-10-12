@@ -87,6 +87,21 @@ static std::vector<int> output_bits, input_bits;
 static hal_bool_t *out_pins = NULL, *in_pins = NULL, *dout_pins = NULL;   // in HAL shared memory
 static std::vector<int> out_sent;            // what each output bit was last set to (-1: not yet)
 static int num_dio = 4;
+// [KMOTION] KEEP_ENABLED_ON_EXIT: the axes stay enabled when LinuxCNC exits, as KMotionCNC
+// leaves them (the next start then finds them enabled and can come up without an init).
+// Task's shutdown sends the same DISABLE as Machine off and E-stop do, with nothing to tell
+// it apart but the SIGTERM that follows a moment later: the board disable is held for
+// DISABLE_GRACE_S and dropped if the quit comes first
+static bool keep_enabled_on_exit = false;
+static const double DISABLE_GRACE_S = 0.25;
+static double disable_due = 0;         // when the held disable goes to the board, 0 = none
+// task sends a DISABLE as part of its own start (its default state), and a GUI's init sends
+// another (E-stop reset) when it comes up: with KEEP_ENABLED_ON_EXIT those leave the board's
+// axes as they are, enabled from the last session or not. "Part of the start": within
+// STARTUP_WINDOW_S of ours, which covers a slow GUI; an operator's E-stop that early shows
+// in LinuxCNC but leaves the torque on until the next Machine off
+static const double STARTUP_WINDOW_S = 30;
+static double start_time = 0;
 static bool mcode_configured[100];
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
@@ -516,6 +531,7 @@ static void model_step(double dt)
 // ---- HAL pins: what motmod offers and GUIs (AXIS at least) expect to find -----------
 struct Pins {
     hal_bool_t motion_enabled, in_position, coord_mode, teleop_mode, on_soft_limit;
+    hal_bool_t all_enabled;         // kmotion.all-enabled: every coordinate-system axis enabled on the board
     hal_real_t current_vel, requested_vel, distance_to_go;
     hal_sint_t program_line, motion_type;
     struct {
@@ -547,6 +563,7 @@ static int create_pins()
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->in_position, 1, "motion.in-position"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->coord_mode, 0, "motion.coord-mode"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->teleop_mode, 0, "motion.teleop-mode"));
+    PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->all_enabled, 0, "kmotion.all-enabled"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->on_soft_limit, 0, "motion.on-soft-limit"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->current_vel, 0, "motion.current-vel"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->requested_vel, 0, "motion.requested-vel"));
@@ -812,6 +829,11 @@ static void update_pins()
     hal_set_bool(pins->in_position, GET_MOTION_INPOS_FLAG());
     hal_set_bool(pins->coord_mode, GET_MOTION_COORD_FLAG());
     hal_set_bool(pins->teleop_mode, GET_MOTION_TELEOP_FLAG());
+    {
+        bool all = km && km->is_board();
+        for (int i = 0; all && i < 8; i++) all = m.ks.enabled[i];
+        hal_set_bool(pins->all_enabled, all);
+    }
     hal_set_real(pins->current_vel, emcmotStatus->current_vel);
     hal_set_real(pins->requested_vel, emcmotStatus->requested_vel);
     hal_set_real(pins->distance_to_go, emcmotStatus->distance_to_go);
@@ -1069,6 +1091,7 @@ static void handle_command()
         break;
     case EMCMOT_ENABLE:
         log_print("ENABLE\n");
+        disable_due = 0;                 // a held disable is overtaken
         SET_MOTION_ENABLE_FLAG(1);
         SET_MOTION_ERROR_FLAG(0);
         if (km && km->is_board()) km->machine_on(true);
@@ -1078,7 +1101,12 @@ static void handle_command()
         log_print("DISABLE\n");
         SET_MOTION_ENABLE_FLAG(0);
         if (km) km->abort();
-        if (km && km->is_board()) km->machine_on(false);
+        if (km && km->is_board()) {
+            if (keep_enabled_on_exit && now_s() - start_time < STARTUP_WINDOW_S)
+                log_print("a DISABLE within the start: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
+            else if (keep_enabled_on_exit) disable_due = now_s() + DISABLE_GRACE_S;
+            else km->machine_on(false);
+        }
         if (emcmotStatus->spindle_status[0].state) {
             spindle_status_t &ss = emcmotStatus->spindle_status[0];
             ss.speed = 0; ss.direction = 0; ss.state = 0;
@@ -1811,6 +1839,7 @@ static bool read_kmotion_config(KmConfig &cfg)
     if (input_bits.size() > 64) { fprintf(stderr, "kmotion-motion: [KMOTION] INPUT_BITS: at most 64\n"); return false; }
     cfg.input_bits = input_bits;
     num_dio = (int) ini.num(K, "NUM_DIO", 4);
+    keep_enabled_on_exit = ini.num(K, "KEEP_ENABLED_ON_EXIT", 0) != 0;
     if (num_dio < 0 || num_dio > EMCMOT_MAX_DIO) {
         fprintf(stderr, "kmotion-motion: [KMOTION] NUM_DIO: 0-%d\n", EMCMOT_MAX_DIO);
         return false;
@@ -2108,6 +2137,7 @@ int main(int argc, char *argv[])
 
     double last = now_s();
     double next = last + period_s;
+    start_time = last;
     while (!quit) {
         double t = now_s();
         double dt = t - last;
@@ -2127,6 +2157,10 @@ int main(int argc, char *argv[])
         rtapi_mutex_give(&emcmotStruct->command_mutex);
         update_pins();
         update_io();
+        if (disable_due > 0 && now_s() >= disable_due) {
+            disable_due = 0;
+            if (km && km->is_board()) km->machine_on(false);
+        }
 
         next += period_s;
         double sleep_s = next - now_s();
@@ -2134,6 +2168,7 @@ int main(int argc, char *argv[])
         else next = now_s();
     }
 
+    if (disable_due > 0) { disable_due = 0; log_print("exit: the axes stay enabled (KEEP_ENABLED_ON_EXIT)\n"); }
     log_print("kmotion-motion stopping\n");
     mcode_stop = true;
     if (mcode_thread.joinable()) mcode_thread.join();
