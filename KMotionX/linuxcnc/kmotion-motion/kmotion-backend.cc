@@ -188,6 +188,8 @@ struct KmBackend::Impl {
     bool run_active = false;        // a run is downloaded/executing on the board
     double last_poll = 0;
     bool connected = false;
+    std::atomic<bool> lost{false};  // the board went away after it had answered: one message, then
+                                    // nothing goes to it and nothing more is reported until it is back
     int board_type = 0;             // BOARD_TYPE_KFLOP / BOARD_TYPE_KOGNA (the gather line length differs)
     unsigned still_homed = 0;       // HOMED_PERSIST as read at the start (every axis enabled), else 0
     std::mutex pcmx;                // persist 100-107 from the last status read, and its count
@@ -217,6 +219,7 @@ struct KmBackend::Impl {
     }
     void message(const std::string &m)
     {
+        if (lost && m.compare(0, 14, "lost the board") != 0) return;
         std::lock_guard<std::mutex> lock(smx);
         if (!messages.empty()) messages += " | ";
         messages += m;
@@ -549,6 +552,7 @@ static int board_query(KmBackend::Impl *d, const char *cmd, char *reply);
 // on its own does nothing to a moving board.
 static void board_stop(KmBackend::Impl *d)
 {
+    if (d->lost) return;                  // nothing answers: the planner's reset is all there is
     char reply[MAX_LINE + 1];
     unsigned c0 = d->status_count;
     if (d->km->WriteLine("StopImmediate0")) d->message("StopImmediate0 failed");   // abort() has queued one too: harmless twice
@@ -743,6 +747,7 @@ static void w_poll_board(KmBackend::Impl *d)
     for (int i = 0; i < 8; i++) jog_written[i] = d->jog_written[i];
     const int spindle_done = d->spindle_done;    // ... and spindle commands
     if (d->km->WaitToken(false, 100, "kmotion-motion") != KMOTION_LOCKED) {
+        if (d->connected) { d->message("lost the board: no answer"); d->lost = true; }
         d->connected = false;
         return;
     }
@@ -755,10 +760,11 @@ static void w_poll_board(KmBackend::Impl *d)
         last_ok = now;
     }
     if (r) {
-        if (d->connected) d->message("lost the board: GetStatus failed");
+        if (d->connected) { d->message("lost the board: GetStatus failed"); d->lost = true; }
         d->connected = false;
         return;
     }
+    if (d->lost) { d->lost = false; d->message("the board is back"); }
     d->connected = true;
     d->stop_state = status.StopImmediateState;
     d->status_count++;
@@ -935,6 +941,7 @@ static void publish(KmBackend::Impl *d)
     s.distance_to_go = (d->cfg.simulate && d->have_cur && d->cur.kind != 'K' && d->cur.total > 0)
                        ? d->cur.dx * (1 - d->t_in_seg / d->cur.total) : 0;
     std::lock_guard<std::mutex> lock2(g_msg_mutex);
+    if (d->lost) g_message.clear();
     if (!g_message.empty()) {
         if (!d->messages.empty()) d->messages += " | ";
         d->messages += g_message;
@@ -956,6 +963,7 @@ static void urgent_main(KmBackend::Impl *d)
             d->uq.pop_front();
         }
         double t0 = now_s();
+        if (d->lost) continue;
         if (d->km->WriteLine(cmd.c_str())) d->message(std::string("board command failed: ") + cmd);
         if (jog_axis >= 0) d->jog_written[jog_axis]++;
         if (getenv("KM_DEBUG_STOP") && cmd.compare(0, 13, "StopImmediate") == 0)
@@ -1020,6 +1028,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
     char cmd[64];
     MAIN_STATUS status;
     memset(&status, 0, sizeof status);
+    if (d->lost) return;
     if (on && d->cfg.enable_program[0]) {
         // the config's program enables the axes (a serial servo setup turns the torque on and
         // enables at the measured position): run it, wait until every axis of the coordinate

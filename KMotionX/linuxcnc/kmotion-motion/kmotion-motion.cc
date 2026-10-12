@@ -106,6 +106,10 @@ static bool always_homed = false;
 static unsigned homed_mask = 0;        // joints homed, as LinuxCNC's flags say (bit = joint)
 static unsigned still_homed = 0;       // HOMED_PERSIST's mask at the start, consumed as joints are homed from it
 static bool board_lost = false;        // the board went away: the machine is off and unhomed
+static bool axes_seen_enabled = false; // since the ENABLE, every axis was seen enabled (the enable
+                                       // program takes a moment): from then on a disabled axis -
+                                       // a fault on the board, or the KMotion console - takes the
+                                       // machine off and unhomes the joint, as motmod's amp fault
 static bool mcode_configured[100];
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
@@ -438,6 +442,25 @@ static void model_step(double dt)
     if (km) {
         km->state(m.ks);                 // the worker thread keeps it current
         if (m.ks.message[0]) report_error("%s", m.ks.message);
+        if (km->is_board() && m.ks.connected && GET_MOTION_ENABLE_FLAG() && !board_lost) {
+            bool all = true;
+            unsigned off = 0;
+            for (int i = 0; i < 8 && i < num_joints; i++) if (!m.ks.enabled[i]) { all = false; off |= 1u << i; }
+            if (all) axes_seen_enabled = true;
+            else if (axes_seen_enabled) {
+                axes_seen_enabled = false;
+                std::string which;
+                for (int i = 0; i < 8; i++) if (off & (1u << i)) which += std::string(which.empty() ? "" : ", ") + "XYZABCUV"[i];
+                report_error("axis %s disabled on the board: machine off, the joint unhomed", which.c_str());
+                SET_MOTION_ENABLE_FLAG(0);
+                m.queue.clear();
+                m.held.clear();
+                m.active = m.paused = m.stepping = false;
+                stop_jogs(-1);
+                for (int j = 0; j < num_joints && j < 8; j++) if (off & (1u << j)) mark_joint_homed(j, false);
+                update_motion_state();
+            }
+        }
         if (km->is_board() && !m.ks.connected && !board_lost && GET_MOTION_ENABLE_FLAG()) {
             // the board is gone (its link reports it at once on USB or a direct Ethernet
             // link, after a timeout through a router): the machine is off and nothing is
@@ -1120,6 +1143,7 @@ static void handle_command()
         log_print("ENABLE\n");
         enabled_once = true;
         board_lost = false;
+        axes_seen_enabled = false;
         if (always_homed) for (int j = 0; j < num_joints; j++) mark_joint_homed(j, true, false);
         SET_MOTION_ENABLE_FLAG(1);
         SET_MOTION_ERROR_FLAG(0);
