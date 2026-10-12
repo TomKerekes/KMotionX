@@ -527,6 +527,7 @@ static int handle(const int pc[8])
         return mdi(line);
     }
     case PC_COMM_G49: return mdi("G49");
+    case PC_COMM_RELOAD_GEOCORRECTION: return km->reload_geo_table() ? 0 : -1;   // [KMOTION] GEO_FILE again
     // strings for the board
     case PC_COMM_GET_GCODE_LINE: {
         if (!st || !st->task.file[0]) return -1;
@@ -543,7 +544,7 @@ static int handle(const int pc[8])
     }
     default:
         // KMotionCNC's own dialog: jog keys, controls, the dialog face, screen scripts, the
-        // edit cell, an input box, geo correction, per-axis jog overrides, TP settings,
+        // edit cell, an input box, per-axis jog overrides, TP settings,
         // G43.4, tool comments - nothing to do here
         if (unsupported_seen.insert(code).second) pclog("pccomm: command %d is not supported\n", code);
         return -1;
@@ -563,7 +564,7 @@ static const char *name(int code)
     case PC_COMM_GET_TOOL_SLOT_ID: return "GET_TOOL_SLOT_ID"; case PC_COMM_GETAXISRES: return "GETAXISRES";
     case PC_COMM_GET_TP_PARAM: return "GET_TP_PARAM"; case PC_COMM_GET_VARS: return "GET_VARS"; case PC_COMM_SET_VARS: return "SET_VARS";
     case PC_COMM_UPDATE_FIXTURE: return "UPDATE_FIXTURE"; case PC_COMM_GET_TOOLTABLE_INDEX: return "GET_TOOLTABLE_INDEX";
-    case PC_COMM_G43: return "G43"; case PC_COMM_G49: return "G49"; case PC_COMM_GET_GCODE_LINE: return "GET_GCODE_LINE";
+    case PC_COMM_G43: return "G43"; case PC_COMM_G49: return "G49"; case PC_COMM_RELOAD_GEOCORRECTION: return "RELOAD_GEOCORRECTION"; case PC_COMM_GET_GCODE_LINE: return "GET_GCODE_LINE";
     case PC_COMM_GET_DATE_TIME: return "GET_DATE_TIME";
     default:
         if (code >= PC_COMM_SET_X && code <= PC_COMM_SET_V) return "SET_DRO";

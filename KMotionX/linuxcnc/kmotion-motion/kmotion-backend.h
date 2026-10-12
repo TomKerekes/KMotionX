@@ -78,6 +78,9 @@ struct KmConfig {
     // Data/Kinematics.txt takes (3Link, Scara, Geppetto, ...), and the actuators are
     // LinuxCNC's joints
     char kinematics[32] = "";
+    // KMotionCNC's geometric correction table ([KMOTION] GEO_FILE, its Tool Setup's "Geo
+    // Correction File"): the kinematics read it at start, "" = none
+    char geo_file[512] = "";
     // a program that enables the axes at machine on, in place of EnableAxis (a serial servo
     // setup that turns torque on, say), in its thread, waited for until every axis of the
     // coordinate system is enabled, at most enable_timeout seconds
@@ -249,6 +252,7 @@ public:
     // the latest state (the worker keeps it current)
     void state(KmState &out);
     const char *mode_name() const;
+    bool reload_geo_table();                     // GEO_FILE again (KMotionCNC's "reload"); false: failed
     const KmAxisParams &axis_params(int axis) const;   // the config's, 0-7
 
     // board mode, for the board's commands to the PC (kmotion-pccomm.cc): the primitives

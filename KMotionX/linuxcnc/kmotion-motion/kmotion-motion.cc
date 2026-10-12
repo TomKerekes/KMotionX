@@ -1679,6 +1679,11 @@ static bool read_kmotion_config(KmConfig &cfg)
         k.erase(k.find_last_not_of(" \t\r") + 1);
         snprintf(cfg.kinematics, sizeof cfg.kinematics, "%s", k.c_str());
     }
+    if (const char *g = ini.get(K, "GEO_FILE")) {          // KMotionCNC's geometric correction table
+        std::string f = g;
+        f.erase(f.find_last_not_of(" \t\r") + 1);
+        if (!f.empty()) snprintf(cfg.geo_file, sizeof cfg.geo_file, "%s", ini_relative(ini_path, f).c_str());
+    }
     if (const char *ep = ini.get(K, "ENABLE_PROGRAM")) {   // <thread> <file>: enables the axes at machine on
         std::istringstream in(ep);
         int thread = 0;

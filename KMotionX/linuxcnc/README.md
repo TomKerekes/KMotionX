@@ -185,6 +185,11 @@ through the same shared memory block.
     For a setup that must come first, e.g. serial servos whose torque the program turns on
     before enabling at their measured positions. Machine off disables the axes as before. Its
     thread is reserved like a START_PROGRAM's.
+  - **Geometric correction** (`[KMOTION] GEO_FILE = <file>`, relative to the ini): KMotionCNC's
+    Geo Correction File (Tool Setup), read by the kinematics at start as KMotionCNC reads it
+    (`ReadGeoTable`: the XY table and any per-axis linear tables named after it); a file the
+    kinematics cannot read stops the start. The board's `PC_COMM_RELOAD_GEOCORRECTION` reads
+    it again.
   - **The 3 Link robot:** `configs/kmotion-3link/` (its README says what is still to be set):
     three Dynamixel XL430 servos on the Kogna's serial servo bus, `KINEMATICS = 3Link`, joints
     in degrees at 11.378 counts/degree, `ENABLE_PROGRAM = 1 DxlAxisInit3.c` (Tom's servo setup

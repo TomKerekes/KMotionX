@@ -1706,6 +1706,10 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         cm->Kinematics = k;
         cm->m_TCP_affects_actuators = true;
     }
+    if (cfg.geo_file[0] && cm->Kinematics->ReadGeoTable(cfg.geo_file)) {
+        fprintf(stderr, "kmotion-motion: [KMOTION] GEO_FILE = %s: the kinematics could not read it\n", cfg.geo_file);
+        return false;
+    }
     cm->m_Simulate = cfg.simulate;
     cm->m_DoTime = true;            // plan with real timing even without a board
 
@@ -1981,6 +1985,12 @@ void KmBackend::state(KmState &out)
         memcpy(out.pc_comm, d->pc_comm, sizeof out.pc_comm);
         out.pc_comm_count = d->pc_count;
     }
+}
+
+bool KmBackend::reload_geo_table()
+{
+    if (!d->cfg.geo_file[0]) return false;
+    return d->cm->Kinematics->ReadGeoTable(d->cfg.geo_file) == 0;
 }
 
 const KmAxisParams &KmBackend::axis_params(int axis) const
