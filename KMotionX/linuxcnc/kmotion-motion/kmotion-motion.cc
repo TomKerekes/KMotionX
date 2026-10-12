@@ -921,6 +921,46 @@ static void start_jog(int index, bool to_target, double target, double vel)
     j.vel = vel;
 }
 
+// motmod's inRange() (motion/command.c): a programmed move's end point must lie within the
+// axes' limits ([AXIS_*], SET_AXIS_POSITION_LIMITS) and put every active joint within its
+// own ([JOINT_n]), through the kinematics. motmod does this check and nothing else does: a
+// move past the limits reached the planner and the board unchecked
+static bool in_range(const emcmot_command_t &cmd, const char *move_type)
+{
+    double end[NAXES];
+    pose_to_array(cmd.pos, end);
+    bool ok = true;
+    for (int i = 0; i < NAXES; i++) {
+        if (end[i] < m.jog_min[i]) { report_error("%s move on line %d would exceed %c's negative limit", move_type, cmd.id, "XYZABCUVW"[i]); ok = false; }
+        if (end[i] > m.jog_max[i]) { report_error("%s move on line %d would exceed %c's positive limit", move_type, cmd.id, "XYZABCUVW"[i]); ok = false; }
+    }
+    double jp[8];
+    if (km && !km->identity_kinematics()) {
+        if (!km->cad_to_joints(end, jp)) { report_error("%s move on line %d is out of the kinematics' reach", move_type, cmd.id); return false; }
+    } else {
+        for (int j = 0; j < 8; j++) jp[j] = end[j];
+    }
+    for (int j = 0; j < 8 && j < EMCMOT_MAX_JOINTS; j++) {
+        if (!GET_JOINT_ACTIVE_FLAG(&joints[j])) continue;
+        if (!std::isfinite(jp[j])) { report_error("%s move on line %d gave a non-finite position for joint %d", move_type, cmd.id, j); ok = false; continue; }
+        if (jp[j] > joints[j].max_pos_limit) { report_error("%s move on line %d would exceed joint %d's positive limit max:[%g]", move_type, cmd.id, j, joints[j].max_pos_limit); ok = false; }
+        if (jp[j] < joints[j].min_pos_limit) { report_error("%s move on line %d would exceed joint %d's negative limit min:[%g]", move_type, cmd.id, j, joints[j].min_pos_limit); ok = false; }
+    }
+    return ok;
+}
+
+// a refused move: as motmod, the command fails, the motion in progress is aborted and the
+// error flag makes task abort the program
+static void refuse_move()
+{
+    emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_PARAMS;
+    if (km) km->abort();
+    m.queue.clear();
+    m.held.clear();
+    m.active = m.paused = m.stepping = false;
+    SET_MOTION_ERROR_FLAG(1);
+}
+
 // a move, or the path mode that goes with the moves, to KMotion's planner; false: refused
 static bool to_planner(const emcmot_command_t &cmd)
 {
@@ -1213,6 +1253,7 @@ static void handle_command()
                   c->pos.tran.x, c->pos.tran.y, c->pos.tran.z, c->pos.a, c->pos.b, c->pos.c, c->pos.u, c->pos.v, c->pos.w,
                   c->id, c->motion_type, c->vel, c->ini_maxvel, c->acc, c->turn);
         if (!GET_MOTION_COORD_FLAG()) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("SET_LINE outside coordinated mode"); break; }
+        if (!in_range(*c, c->motion_type == EMC_MOTION_TYPE_TRAVERSE ? "Rapid" : "Linear")) { refuse_move(); break; }
         if (km) {
             if (!hold(*c, atspeed_barrier(c->motion_type)) && !to_planner(*c))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
@@ -1232,6 +1273,7 @@ static void handle_command()
                   c->center.x, c->center.y, c->center.z, c->normal.x, c->normal.y, c->normal.z,
                   c->id, c->motion_type, c->vel, c->ini_maxvel, c->acc, c->turn);
         if (!GET_MOTION_COORD_FLAG()) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("SET_CIRCLE outside coordinated mode"); break; }
+        if (!in_range(*c, "Circular")) { refuse_move(); break; }
         if (km) {
             if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_ARC)) && !to_planner(*c))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
@@ -1253,6 +1295,7 @@ static void handle_command()
     case EMCMOT_PROBE: {
         log_print("PROBE to x=%.6g, y=%.6g, z=%.6g, vel=%.6g type=%d%s\n", c->pos.tran.x, c->pos.tran.y, c->pos.tran.z,
                   c->vel, c->probe_type, km && km->has_probe() ? "" : " (runs as a plain move here, never trips)");
+        if (!in_range(*c, "Probe")) { refuse_move(); break; }
         if (km) {
             bool board = km->has_probe();
             if (board) {
@@ -1283,6 +1326,7 @@ static void handle_command()
     }
     case EMCMOT_RIGID_TAP: {
         log_print("RIGID_TAP to z=%.6g vel=%.6g (runs as a plain move here)\n", c->pos.tran.z, c->vel);
+        if (!in_range(*c, "Rigid tap")) { refuse_move(); break; }
         if (km) {
             if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_FEED)) && !to_planner(*c))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
