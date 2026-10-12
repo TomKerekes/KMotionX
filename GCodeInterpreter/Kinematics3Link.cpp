@@ -74,18 +74,19 @@
 #define SHAFT_SEP     100.0		// Left/Right servo shaft separation in X
 #define ARM_HEIGHT_LR  38.0		// Left/Right arm height above the paper
 
-#define DIST_LEN_L    320.0		// Left distal link, elbow clevis to pen tip
+#define DIST_LEN_L    310.0		// Left distal link, clevis to clevis
 #define DIST_LEN_R    340.0		// Right distal link, clevis to clevis
-#define DIST_LEN_Z    310.0		// Z distal link, ball joint to ball joint
+#define DIST_LEN_Z    308.0		// Z distal link, ball joint to ball joint
 
-#define PAYLOAD_R_UP   10.0		// Right link payload connection above pen tip
-#define PAYLOAD_Z_UP   10.0		// Z link payload connection above pen tip
+#define PAYLOAD_R_UP   20.0		// Right link payload connection above pen tip
+#define PAYLOAD_L_UP   20.0		// Left link payload connection above pen tip
+#define PAYLOAD_Z_UP   20.0		// Z link payload connection above pen tip
 
 // Z servo shaft position (33mm from the Left shaft in X, 8mm forward of the
 // Left/Right shafts in Y, 77mm above the paper)
 #define ZSHAFT_X  (-SHAFT_SEP/2.0 + 33.0)
-#define ZSHAFT_Y    8.0
-#define ZSHAFT_Z   77.0
+#define ZSHAFT_Y   10.0
+#define ZSHAFT_Z   78.0
 
 // Elbow solution branch for each linkage as assembled (+1 or -1).
 // Defaults: Left/Right elbows outboard, Z arm up.  Flip if mirrored.
@@ -157,7 +158,7 @@ int CKinematics3Link::TransformCADtoActuators(double x, double y, double z, doub
 	// Left linkage: distal ends at the pen tip.  Use the horizontal
 	// projection of the sloping distal link as the planar link length
 
-	double dzL = ARM_HEIGHT_LR - zm;
+	double dzL = ARM_HEIGHT_LR - (zm + PAYLOAD_L_UP);
 	double rL2 = sqr(DIST_LEN_L) - sqr(dzL);
 	if (rL2 < 100.0) rL2 = 100.0;   // keep finite far out of range
 	double ThetaL = PlanarTwoLink(xm + SHAFT_SEP/2.0, ym, ARM_LEN, sqrt(rL2), ELBOW_L);
@@ -222,7 +223,7 @@ bool CKinematics3Link::PoseInReach(double x, double y, double z, bool NoGeo)
 	double ym = y*CAD3L_MM_PER_UNIT + CAD3L_ORIGIN_Y_MM;
 	double zm = z*CAD3L_MM_PER_UNIT;
 
-	double dzL = ARM_HEIGHT_LR - zm;
+	double dzL = ARM_HEIGHT_LR - (zm + PAYLOAD_L_UP);
 	double rL2 = sqr(DIST_LEN_L) - sqr(dzL);
 	double DL2 = sqr(xm + SHAFT_SEP/2.0) + sqr(ym);
 	if (rL2 < 110.0 || DL2 <= 1.0) return false;
