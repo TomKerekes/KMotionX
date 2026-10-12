@@ -1003,8 +1003,11 @@ static bool in_range(const emcmot_command_t &cmd, const char *move_type)
     pose_to_array(cmd.pos, end);
     bool ok = true;
     for (int i = 0; i < NAXES; i++) {
-        if (end[i] < m.jog_min[i]) { report_error("%s move on line %d would exceed %c's negative limit", move_type, cmd.id, "XYZABCUVW"[i]); ok = false; }
-        if (end[i] > m.jog_max[i]) { report_error("%s move on line %d would exceed %c's positive limit", move_type, cmd.id, "XYZABCUVW"[i]); ok = false; }
+        // the numbers are in machine units ([TRAJ] LINEAR_UNITS): a G21 program's millimetres
+        // arrive converted, so a mismatch between what was typed and what is reported means
+        // the interpreter was not in the units the DRO shows
+        if (end[i] < m.jog_min[i]) { report_error("%s move on line %d would exceed %c's negative limit: %g beyond %g (machine units)", move_type, cmd.id, "XYZABCUVW"[i], end[i], m.jog_min[i]); ok = false; }
+        if (end[i] > m.jog_max[i]) { report_error("%s move on line %d would exceed %c's positive limit: %g beyond %g (machine units)", move_type, cmd.id, "XYZABCUVW"[i], end[i], m.jog_max[i]); ok = false; }
     }
     double jp[8];
     if (km && !km->identity_kinematics()) {
