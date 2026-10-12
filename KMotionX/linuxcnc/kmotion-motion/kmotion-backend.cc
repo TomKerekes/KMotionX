@@ -219,7 +219,7 @@ struct KmBackend::Impl {
     }
     void message(const std::string &m)
     {
-        if (lost && m.compare(0, 14, "lost the board") != 0) return;
+        if (lost) return;                 // the protocol side reports the loss, once
         std::lock_guard<std::mutex> lock(smx);
         if (!messages.empty()) messages += " | ";
         messages += m;
@@ -747,7 +747,7 @@ static void w_poll_board(KmBackend::Impl *d)
     for (int i = 0; i < 8; i++) jog_written[i] = d->jog_written[i];
     const int spindle_done = d->spindle_done;    // ... and spindle commands
     if (d->km->WaitToken(false, 100, "kmotion-motion") != KMOTION_LOCKED) {
-        if (d->connected) { d->message("lost the board: no answer"); d->lost = true; }
+        if (d->connected) { fprintf(stderr, "kmotion-motion: lost the board: no answer\n"); d->lost = true; }
         d->connected = false;
         return;
     }
@@ -760,7 +760,7 @@ static void w_poll_board(KmBackend::Impl *d)
         last_ok = now;
     }
     if (r) {
-        if (d->connected) { d->message("lost the board: GetStatus failed"); d->lost = true; }
+        if (d->connected) { fprintf(stderr, "kmotion-motion: lost the board: GetStatus failed\n"); d->lost = true; }
         d->connected = false;
         return;
     }

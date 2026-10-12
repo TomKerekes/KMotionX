@@ -466,7 +466,7 @@ static void model_step(double dt)
             // link, after a timeout through a router): the machine is off and nothing is
             // homed any more, as task will show
             board_lost = true;
-            report_error("the board is not answering: machine off, joints unhomed");
+            report_error("the board stopped answering: machine off, joints unhomed");
             SET_MOTION_ENABLE_FLAG(0);
             m.queue.clear();
             m.held.clear();
