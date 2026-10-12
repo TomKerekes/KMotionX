@@ -188,6 +188,11 @@ struct KmBackend::Impl {
     bool run_active = false;        // a run is downloaded/executing on the board
     double last_poll = 0;
     bool connected = false;
+    unsigned ever_enabled = 0;      // poller: axes seen enabled since the board came (bit = axis). A
+                                    // board fresh from power-up reads Dest 0 on channels nothing has
+                                    // set up, which through a kinematics is some far-away point: its
+                                    // positions are taken once every axis has been enabled at least
+                                    // once; until then the last known position stands
     std::atomic<bool> lost{false};  // the board went away after it had answered: one message, then
                                     // nothing goes to it and nothing more is reported until it is back
     int board_type = 0;             // BOARD_TYPE_KFLOP / BOARD_TYPE_KOGNA (the gather line length differs)
@@ -764,7 +769,7 @@ static void w_poll_board(KmBackend::Impl *d)
         d->connected = false;
         return;
     }
-    if (d->lost) { d->lost = false; d->message("the board is back"); }
+    if (d->lost) { d->lost = false; d->ever_enabled = 0; d->message("the board is back"); }
     d->connected = true;
     d->stop_state = status.StopImmediateState;
     d->status_count++;
@@ -777,17 +782,22 @@ static void w_poll_board(KmBackend::Impl *d)
     double acts[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     double before[9];
     memcpy(before, d->pos, sizeof before);
+    bool all_ever = true;
     for (int i = 0; i < 8; i++) {
         int ch = d->cfg.channel[i];
         if (ch >= 0 && ch < N_CHANNELS_KOGNA) {
             acts[i] = status.Dest[ch];
             d->enabled[i] = (status.Enables >> ch) & 1;
+            if (d->enabled[i]) d->ever_enabled |= 1u << i;
+            if (!(d->ever_enabled & (1u << i))) all_ever = false;
         } else {
             d->enabled[i] = true;
         }
     }
-    for (int i = 0; i < 8; i++) d->act_pos[i] = d->scale[i] > 0 ? acts[i] / d->scale[i] : 0;
-    acts_to_cad(d, acts, d->pos);
+    if (all_ever) {               // else: not yet set up, the last known position stands
+        for (int i = 0; i < 8; i++) d->act_pos[i] = d->scale[i] > 0 ? acts[i] / d->scale[i] : 0;
+        acts_to_cad(d, acts, d->pos);
+    }
     // the spindle at speed (SPINDLE_AT_SPEED): its bit at the level, or its axis done (a jog at
     // speed has no trajectory left; a disabled axis is not done)
     if (d->cfg.spindle_at_speed == KM_AT_SPEED_BIT) {
@@ -1837,14 +1847,30 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
             fprintf(stderr, "kmotion-motion: DefineCS failed\n");
             return false;
         }
-        double x, y, z, a, b, c, u, v;
-        if (cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v)) {
-            fprintf(stderr, "kmotion-motion: reading the board position failed\n");
-            cm->ClearAbort();
-            return false;
+        // the position, when the axes are enabled (set up by an earlier session or the init
+        // programs); a board fresh from power-up reads 0 on channels nothing has set up
+        {
+            MAIN_STATUS st;
+            memset(&st, 0, sizeof st);
+            bool all = d->km->GetStatus(st, true) == 0;
+            for (int i = 0; all && i < 8; i++) {
+                int ch = cfg.channel[i];
+                if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((st.Enables >> ch) & 1)) all = false;
+            }
+            if (all) {
+                double x, y, z, a, b, c, u, v;
+                if (cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v)) {
+                    fprintf(stderr, "kmotion-motion: reading the board position failed\n");
+                    cm->ClearAbort();
+                    return false;
+                }
+                double p[9] = {x, y, z, a, b, c, u, v, 0};
+                memcpy(d->pos, p, sizeof p);
+                d->ever_enabled = 0xff;
+            } else {
+                fprintf(stderr, "kmotion-motion: an axis is disabled at the start: positions are taken once every axis has been enabled\n");
+            }
         }
-        double p[9] = {x, y, z, a, b, c, u, v, 0};
-        memcpy(d->pos, p, sizeof p);
         // programs that keep running (forever loops), once the axes and the coordinate system are set
         for (const auto &sp : cfg.start_programs) {
             if (start_program(d, sp.second.c_str(), sp.first)) {
