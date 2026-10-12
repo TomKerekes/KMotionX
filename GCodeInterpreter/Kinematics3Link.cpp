@@ -96,9 +96,9 @@
 
 // Servo angle offsets in degrees added to the geometric angles above,
 // for aligning actuator zero with however the servos are zeroed
-#define OFFSET_L_DEG  0.0
-#define OFFSET_R_DEG  0.0
-#define OFFSET_Z_DEG  0.0
+#define OFFSET_L_DEG  4.02
+#define OFFSET_R_DEG  -4.86
+#define OFFSET_Z_DEG  4.13
 
 //////////////////////////////////////////////////////////////////////
 // Construction/Destruction
