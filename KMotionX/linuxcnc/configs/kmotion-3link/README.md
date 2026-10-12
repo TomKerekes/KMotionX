@@ -21,6 +21,13 @@ motion module's place (`KMotionX/linuxcnc/README.md`).
   - world mode jogs the pen: a planner move toward the axis's `[AXIS_*]` limit, stopped when
     the button is released;
   - gmoccapy shows the joints in joint mode and the pen position in world mode.
+- At start LinuxCNC runs `autostart.py` (`[APPLICATIONS] APP`): E-stop reset, Machine on, Home
+  All, so the machine is ready as KMotionCNC leaves it after its init; comment `APP` out for
+  LinuxCNC's usual start in E-stop. At exit LinuxCNC disables the axes (task's shutdown), so
+  the servos' torque is off between sessions; the next start enables them where they stand.
+- Before every run the planner re-reads the position from the board (as KMotionCNC does), so
+  axes moved behind its back - the KMotion console's MoveRel, a program on the board - do not
+  make the next move start from a stale point. LinuxCNC's display follows the board anyway.
 - Homing: the servos are absolute (they remember their position, multi-turn), so every joint
   is homed where it stands (`HOME_SEARCH_VEL = 0`). Home All just declares them homed, after
   which MDI, programs and world jogs are allowed.
@@ -31,7 +38,9 @@ motion module's place (`KMotionX/linuxcnc/README.md`).
   the axes, so that is what happens; the next machine on runs the program again. If a servo
   does not answer, the program enables nothing and kmotion-motion reports it after
   `ENABLE_TIMEOUT_S`; the program's own messages are on the board's console, printed by
-  kmotion-motion on its terminal.
+  kmotion-motion on its terminal. The first run after the servos power up writes their gains
+  and takes well over 15 s (later runs 0.2 s), hence `ENABLE_TIMEOUT_S = 60`: past it the
+  machine drops back to E-stop reset.
 - `[KMOTION] ACTUATOR_LIMITS = 1`: the planner limits the servos by `[JOINT_n]`'s
   MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK (degrees), not the pen by the axis limits.
 - The file is a copy of Tom's `C Programs/SerialServo/Dynamixel/DxlAxisInit3.c` (KMotionSrcKogna);

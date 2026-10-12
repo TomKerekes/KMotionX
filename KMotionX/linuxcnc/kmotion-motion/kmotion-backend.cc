@@ -404,6 +404,22 @@ static void fail(KmBackend::Impl *d, const char *what, int id = 0)
 static int begin_move(KmBackend::Impl *d, int id)
 {
     std::lock_guard<std::mutex> lk(d->wmx);
+    // the first move of a run starts where the board stands, as KMotionCNC re-reads the
+    // position before every run: the axes may have been moved behind the planner's back
+    // (the KMotion console, a program on the board) since the last one
+    if (!d->cfg.simulate && !d->run_active && !d->unflushed) {
+        double x, y, z, a, b, c, u, v;
+        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
+            double p[9] = {x, y, z, a, b, c, u, v, 0};
+            double moved = 0;
+            for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(p[i] - d->pos[i]));
+            if (moved > 1e-6) {
+                memcpy(d->pos, p, sizeof p);
+                set_cm_position(d, d->pos);
+                memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
+            }
+        }
+    }
     int seq = ++d->serial;
     d->ids.push_back(id);
     d->unflushed = true;
