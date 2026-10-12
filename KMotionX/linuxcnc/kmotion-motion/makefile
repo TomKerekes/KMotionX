@@ -68,3 +68,7 @@ build/backend-test: backend-test.cc build/kmotion-backend.o kmotion-backend.h | 
 	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) -I. $(KM_INC) -Wno-unknown-pragmas -Wno-overloaded-virtual -o $@ backend-test.cc build/kmotion-backend.o $(KM_LIBS) -lpthread
 
 .PHONY: test
+
+# the 3 Link robot's servo zero offsets from one measured pose (see the source)
+kins3link-offsets: kins3link-offsets.cc
+	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) $(KM_INC) -Wno-unknown-pragmas -Wno-overloaded-virtual -o $@ $< $(KM_LIBS) -lpthread

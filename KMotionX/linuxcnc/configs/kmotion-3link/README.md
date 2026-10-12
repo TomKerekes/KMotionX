@@ -48,7 +48,13 @@ motion module's place (`KMotionX/linuxcnc/README.md`).
    the kinematics' `OFFSET_*_DEG` are 0, so that pose has to be the arm at its geometric 0
    (Right/Left along +X, Z toward the paper). To calibrate: at any pose read the counts and
    estimate the arm angle; OFFSET = counts / 11.378 - angle (comment at the top of
-   `Kinematics3Link.cpp`).
+   `Kinematics3Link.cpp`). Better, all three at once from one measured pose, since the Z
+   angle at the paper changes by 13-15 degrees per inch of Y and a Left/Right zero error
+   looks like a Z one: `kmotion-motion/kins3link-offsets <x> <y> <z> <right> <left> <z_deg>`
+   (`make kins3link-offsets` there) with the pen's measured CAD position and the joint
+   angles LinuxCNC shows, prints what to add to the three OFFSET_*_DEG. On Tom's robot with
+   the zeros as DxlAxisInit3.c sets them, the pen on the paper read 100.8 deg on Z where the
+   geometry expects 92.1 at the pen's apparent X Y - 8.7 deg, or 0.6 in of Y.
 3. `[JOINT_n] MIN_LIMIT / MAX_LIMIT`: the arms' real range (joint jogs stop there).
 4. `[AXIS_*] MIN_LIMIT / MAX_LIMIT`: a box inside the reachable workspace (world jogs run to
    them; programmed moves are checked against them).

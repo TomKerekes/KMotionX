@@ -3,3 +3,4 @@ kmotion-motion
 kmotion-mcode
 # KMotionServer writes its logs into the working directory of whoever started it (the harness)
 kmx_server_*
+kins3link-offsets
