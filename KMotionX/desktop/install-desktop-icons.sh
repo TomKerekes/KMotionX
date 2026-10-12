@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool linuxcnc-kmotion-kogna linuxcnc-kmotion-sim"
+launchers="kmotion-tool linuxcnc-kmotion-kogna linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 sizes="16 32 48 64 128 256"
 
 note() { printf '%s\n' "$*"; }
@@ -152,6 +152,19 @@ Terminal=false
 StartupNotify=false
 Categories=Science;Engineering;X-CNC;
 Keywords=cnc;linuxcnc;kmotion;simulate;
+END
+    write_launcher linuxcnc-kmotion-3link <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LinuxCNC (3 Link)
+Comment=LinuxCNC on the 3 Link pen robot, Dynamixel servos on a Kogna (kmotion-3link.ini)
+Exec="$linuxcnc" "$lcnc_tree/configs/kmotion-3link/kmotion-3link.ini"
+Icon=linuxcncicon
+Terminal=false
+StartupNotify=false
+Categories=Science;Engineering;X-CNC;
+Keywords=cnc;linuxcnc;kmotion;kogna;3link;robot;
 END
 fi
 

@@ -6,10 +6,11 @@ run as yourself, nothing outside your home directory:
 
     ~/KMotionX/KMotionX/desktop/install-desktop-icons.sh
 
-It puts three launchers on the desktop and in the menu (Science / Engineering):
+It puts four launchers on the desktop and in the menu (Science / Engineering):
 
 - **KMotion** – the Linux KMotion tool (Digital I/O, Axis, C Programs, Config, Console).
 - **LinuxCNC (Kogna)** – LinuxCNC with `configs/kmotion-kogna/kmotion-kogna.ini`.
+- **LinuxCNC (3 Link)** – LinuxCNC on the 3 Link pen robot, `configs/kmotion-3link/kmotion-3link.ini`.
 - **LinuxCNC (KMotion simulate)** – the same planner with no board,
   `configs/kmotion-sim/kmotion-sim.ini`.
 
