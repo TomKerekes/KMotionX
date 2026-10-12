@@ -41,7 +41,13 @@ if not enabled:
 # [APPLICATIONS] DELAY): try a few times, a little apart
 say("autostart: kmotion.all-enabled TRUE, pid %d" % os.getpid())
 # the GUI's init takes LinuxCNC from E-stop to E-stop reset when it is up: act after that
-# (a Machine on before it would be undone by it), or after 45 s should no GUI do it
+# transition (a Machine on before it would be undone by it). The status buffer can still hold
+# the last session's state when we start, so the E-stop itself must be seen first; 45 s at
+# most for the reset should no GUI do it
+if wait(lambda: s.task_state == linuxcnc.STATE_ESTOP, 20):
+    say("autostart: LinuxCNC is in its initial E-stop")
+else:
+    say("autostart: no initial E-stop seen within 20 s (a stale status?), going by the current state")
 if wait(lambda: s.task_state != linuxcnc.STATE_ESTOP, 45):
     say("autostart: the GUI is up (task_state %d)" % s.task_state)
 else:
