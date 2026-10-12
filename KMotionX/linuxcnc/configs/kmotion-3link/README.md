@@ -47,9 +47,9 @@ motion module's place (`KMotionX/linuxcnc/README.md`).
   the axes, so that is what happens; the next machine on runs the program again. If a servo
   does not answer, the program enables nothing and kmotion-motion reports it after
   `ENABLE_TIMEOUT_S`; the program's own messages are on the board's console, printed by
-  kmotion-motion on its terminal. The first run after the servos power up writes their gains
-  and takes well over 15 s (later runs 0.2 s), hence `ENABLE_TIMEOUT_S = 60`: past it the
-  machine drops back to E-stop reset.
+  kmotion-motion on its terminal. `ENABLE_TIMEOUT_S = 60` is headroom: the program takes about
+  0.2 s when timed, and the one start on which it timed out at 15 s is unexplained; past the
+  timeout the machine drops back to E-stop reset.
 - `[KMOTION] ACTUATOR_LIMITS = 1`: the planner limits the servos by `[JOINT_n]`'s
   MAX_VELOCITY / MAX_ACCELERATION / MAX_JERK (degrees), not the pen by the axis limits.
 - The file is a copy of Tom's `C Programs/SerialServo/Dynamixel/DxlAxisInit3.c` (KMotionSrcKogna);

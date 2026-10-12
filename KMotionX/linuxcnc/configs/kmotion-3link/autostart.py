@@ -9,6 +9,7 @@ import linuxcnc, os, subprocess, sys, time
 
 c = linuxcnc.command()
 s = linuxcnc.stat()
+ini = linuxcnc.ini(os.environ["INI_FILE_NAME"])
 LOG = "/tmp/kmotion-autostart.log"       # a desktop launch shows nothing: what happened, for the record
 
 
@@ -40,18 +41,26 @@ if not enabled:
 # the GUI's own init puts the machine into E-stop reset if it comes up after us (hence
 # [APPLICATIONS] DELAY): try a few times, a little apart
 say("autostart: kmotion.all-enabled TRUE, pid %d" % os.getpid())
-# the GUI's init takes LinuxCNC from E-stop to E-stop reset when it is up: act after that
-# transition (a Machine on before it would be undone by it). The status buffer can still hold
-# the last session's state when we start, so the E-stop itself must be seen first; 45 s at
-# most for the reset should no GUI do it
-if wait(lambda: s.task_state == linuxcnc.STATE_ESTOP, 20):
-    say("autostart: LinuxCNC is in its initial E-stop")
+# act once the GUI is up, not before: its init can reset the machine (gmoccapy's does) and
+# would undo a Machine on made earlier. A GUI registers a HAL component and marks it ready at
+# the end of its init: gmoccapy as "gmoccapy", AXIS as "axisui"
+gui = (ini.find("DISPLAY", "DISPLAY") or "").strip()
+comp = {"axis": "axisui"}.get(gui, gui)
+
+
+def gui_ready():
+    try:
+        out = subprocess.run(["halcmd", "show", "comp"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return False
+    return any(len(f := line.split()) >= 5 and f[2] == comp and f[4] == "ready" for line in out.splitlines())
+
+
+t0 = time.time()
+if comp and wait(gui_ready, 60):
+    say("autostart: the GUI (%s) is up after %.0f s" % (comp, time.time() - t0))
 else:
-    say("autostart: no initial E-stop seen within 20 s (a stale status?), going by the current state")
-if wait(lambda: s.task_state != linuxcnc.STATE_ESTOP, 45):
-    say("autostart: the GUI is up (task_state %d)" % s.task_state)
-else:
-    say("autostart: no E-stop reset from the GUI within 45 s, going ahead")
+    say("autostart: no ready HAL component %r within 60 s, going ahead" % comp)
 time.sleep(1)
 for attempt in range(3):
     s.poll()
