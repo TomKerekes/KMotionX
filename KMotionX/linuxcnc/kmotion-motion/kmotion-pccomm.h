@@ -27,3 +27,6 @@ void pccomm_stop();
 // a message for the operator from a board command (PC_COMM_MSG), if one is waiting: the
 // protocol loop reports it through motion's error ring, like the backend's own messages
 bool pccomm_message(std::string &out);
+// task's main-loop counter from its NML status (EMC_STAT.task.taskbeat), for the protocol
+// loop; 0 when task's status is not there. Its own channel: usable without the dispatcher
+unsigned long long pccomm_taskbeat();

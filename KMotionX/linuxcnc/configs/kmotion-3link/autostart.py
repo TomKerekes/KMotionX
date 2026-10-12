@@ -5,10 +5,18 @@ Machine on, nothing else - no init program, no homing (homing is the operator's 
 board's business, as in KMotionCNC; [TRAJ] NO_FORCE_HOMING lets moves run unhomed). With any
 axis disabled, LinuxCNC is left in E-stop as it normally starts. Run by LinuxCNC after the GUI
 starts ([APPLICATIONS] APP in the ini)."""
-import linuxcnc, subprocess, sys, time
+import linuxcnc, os, subprocess, sys, time
 
 c = linuxcnc.command()
 s = linuxcnc.stat()
+LOG = "/tmp/kmotion-autostart.log"       # a desktop launch shows nothing: what happened, for the record
+
+
+def say(msg, err=False):
+    line = time.strftime("%H:%M:%S ") + msg
+    print(line, file=sys.stderr if err else sys.stdout)
+    with open(LOG, "a") as f:
+        f.write(line + "\n")
 
 
 def wait(cond, timeout):
@@ -24,15 +32,24 @@ def wait(cond, timeout):
 try:
     enabled = subprocess.run(["halcmd", "getp", "kmotion.all-enabled"], capture_output=True, text=True, timeout=5).stdout.strip() == "TRUE"
 except Exception as e:
-    print("autostart: cannot read kmotion.all-enabled:", e, file=sys.stderr)
+    say("autostart: cannot read kmotion.all-enabled: %s" % e, True)
     sys.exit(1)
 if not enabled:
-    print("autostart: an axis is disabled on the board: LinuxCNC starts in E-stop")
+    say("autostart: an axis is disabled on the board: LinuxCNC starts in E-stop")
     sys.exit(0)
 # the GUI's own init puts the machine into E-stop reset if it comes up after us (hence
 # [APPLICATIONS] DELAY): try a few times, a little apart
+say("autostart: kmotion.all-enabled TRUE, pid %d" % os.getpid())
+# the GUI's init takes LinuxCNC from E-stop to E-stop reset when it is up: act after that
+# (a Machine on before it would be undone by it), or after 45 s should no GUI do it
+if wait(lambda: s.task_state != linuxcnc.STATE_ESTOP, 45):
+    say("autostart: the GUI is up (task_state %d)" % s.task_state)
+else:
+    say("autostart: no E-stop reset from the GUI within 45 s, going ahead")
+time.sleep(1)
 for attempt in range(3):
     s.poll()
+    say("autostart: attempt %d, task_state %d" % (attempt + 1, s.task_state))
     if s.task_state != linuxcnc.STATE_ON:
         c.state(linuxcnc.STATE_ESTOP_RESET); c.wait_complete()
         c.state(linuxcnc.STATE_ON); c.wait_complete()
@@ -42,7 +59,7 @@ for attempt in range(3):
     if s.task_state == linuxcnc.STATE_ON:
         c.mode(linuxcnc.MODE_MANUAL); c.wait_complete()
         c.teleop_enable(1); c.wait_complete()      # world mode: the GUI jogs the pen, not a servo
-        print("autostart: machine on (the axes were enabled on the board)")
+        say("autostart: machine on (the axes were enabled on the board), attempt %d" % (attempt + 1))
         sys.exit(0)
-print("autostart: the machine did not stay on", file=sys.stderr)
+say("autostart: the machine did not stay on", True)
 sys.exit(1)

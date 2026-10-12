@@ -573,6 +573,27 @@ static const char *name(int code)
     }
 }
 
+// ---- task's heartbeat for the protocol loop (its own channel, its own thread) ------------------
+unsigned long long pccomm_taskbeat()
+{
+    static RCS_STAT_CHANNEL *ch = nullptr;
+    static double next_try = 0;
+    if (!ch) {
+        double t = now_s();
+        if (t < next_try) return 0;
+        next_try = t + 2.0;
+        const char *file = cfg.nml_file.empty() ? EMC2_DEFAULT_NMLFILE : cfg.nml_file.c_str();
+        set_rcs_print_destination(RCS_PRINT_TO_NULL);
+        RCS_STAT_CHANNEL *c = new RCS_STAT_CHANNEL(emcFormat, "emcStatus", "xemc", file);
+        set_rcs_print_destination(RCS_PRINT_TO_STDERR);
+        if (!c->valid()) { delete c; return 0; }
+        ch = c;
+    }
+    if (ch->peek() != EMC_STAT_TYPE && !ch->get_address()) return 0;
+    const EMC_STAT *st = (const EMC_STAT *) ch->get_address();
+    return st ? st->task.taskbeat : 0;
+}
+
 // ---- the dispatcher thread -------------------------------------------------------------------
 static void pccomm_main()
 {

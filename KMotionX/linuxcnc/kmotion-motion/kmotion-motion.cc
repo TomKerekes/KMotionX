@@ -95,6 +95,10 @@ static int num_dio = 4;
 static bool keep_enabled_on_exit = false;
 static const double DISABLE_GRACE_S = 0.25;
 static double disable_due = 0;         // when the held disable goes to the board, 0 = none
+static unsigned long long disable_beat = 0;   // task's taskbeat when the DISABLE came: a task that
+                                       // no longer beats is shutting down (its loop ends before
+                                       // its halt), so the disable is dropped without waiting
+                                       // for the quit
 // task sends a DISABLE as part of its own start (its default state), and a GUI's init sends
 // another (E-stop reset) when it comes up: with KEEP_ENABLED_ON_EXIT those leave the board's
 // axes as they are, enabled from the last session or not. "Part of the start": within
@@ -1104,7 +1108,7 @@ static void handle_command()
         if (km && km->is_board()) {
             if (keep_enabled_on_exit && now_s() - start_time < STARTUP_WINDOW_S)
                 log_print("a DISABLE within the start: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
-            else if (keep_enabled_on_exit) disable_due = now_s() + DISABLE_GRACE_S;
+            else if (keep_enabled_on_exit) { disable_due = now_s() + DISABLE_GRACE_S; disable_beat = pccomm_taskbeat(); }
             else km->machine_on(false);
         }
         if (emcmotStatus->spindle_status[0].state) {
@@ -2159,7 +2163,9 @@ int main(int argc, char *argv[])
         update_io();
         if (disable_due > 0 && now_s() >= disable_due) {
             disable_due = 0;
-            if (km && km->is_board()) km->machine_on(false);
+            unsigned long long beat = pccomm_taskbeat();
+            if (beat != 0 && beat == disable_beat) log_print("task no longer beats: its shutdown's DISABLE, the axes stay enabled (KEEP_ENABLED_ON_EXIT)\n");
+            else if (km && km->is_board()) km->machine_on(false);
         }
 
         next += period_s;
