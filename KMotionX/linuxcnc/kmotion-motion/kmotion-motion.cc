@@ -89,12 +89,16 @@ static std::vector<int> out_sent;            // what each output bit was last se
 static int num_dio = 4;
 // [KMOTION] KEEP_ENABLED_ON_EXIT: the axes stay enabled when LinuxCNC exits, as KMotionCNC
 // leaves them (the next start then finds them enabled and can come up without an init).
-// Task's shutdown sends the same DISABLE as Machine off and E-stop do, with nothing to tell
-// it apart but the SIGTERM that follows a moment later: the board disable is held for
-// DISABLE_GRACE_S and dropped if the quit comes first
+// Task's shutdown sends the same DISABLE as Machine off and E-stop do, and gmoccapy's quit
+// first sends a Machine off and an E-stop of its own; nothing tells them from an operator's
+// but the shutdown that follows: task's loop stops (its heartbeat), then the quit. So the
+// board disable is held for DISABLE_GRACE_S ([KMOTION] DISABLE_GRACE_S, default 2) and
+// dropped if task stops beating or the quit comes first; an operator's Machine off or E-stop
+// reaches the board that much later
 static bool keep_enabled_on_exit = false;
-static const double DISABLE_GRACE_S = 0.25;
+static double disable_grace_s = 2.0;
 static double disable_due = 0;         // when the held disable goes to the board, 0 = none
+static double disable_beat_t = 0;
 static unsigned long long disable_beat = 0;   // task's taskbeat when the DISABLE came: a task that
                                        // no longer beats is shutting down (its loop ends before
                                        // its halt), so the disable is dropped without waiting
@@ -1108,7 +1112,7 @@ static void handle_command()
         if (km && km->is_board()) {
             if (keep_enabled_on_exit && now_s() - start_time < STARTUP_WINDOW_S)
                 log_print("a DISABLE within the start: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
-            else if (keep_enabled_on_exit) { disable_due = now_s() + DISABLE_GRACE_S; disable_beat = pccomm_taskbeat(); }
+            else if (keep_enabled_on_exit) { disable_due = now_s() + disable_grace_s; disable_beat = pccomm_taskbeat(); disable_beat_t = now_s(); }
             else km->machine_on(false);
         }
         if (emcmotStatus->spindle_status[0].state) {
@@ -1844,6 +1848,7 @@ static bool read_kmotion_config(KmConfig &cfg)
     cfg.input_bits = input_bits;
     num_dio = (int) ini.num(K, "NUM_DIO", 4);
     keep_enabled_on_exit = ini.num(K, "KEEP_ENABLED_ON_EXIT", 0) != 0;
+    disable_grace_s = ini.num(K, "DISABLE_GRACE_S", 2.0);
     if (num_dio < 0 || num_dio > EMCMOT_MAX_DIO) {
         fprintf(stderr, "kmotion-motion: [KMOTION] NUM_DIO: 0-%d\n", EMCMOT_MAX_DIO);
         return false;
@@ -2161,11 +2166,18 @@ int main(int argc, char *argv[])
         rtapi_mutex_give(&emcmotStruct->command_mutex);
         update_pins();
         update_io();
-        if (disable_due > 0 && now_s() >= disable_due) {
-            disable_due = 0;
+        if (disable_due > 0) {
+            // task's heartbeat is watched through the grace: a task that has not beaten for
+            // 0.3 s is shutting down (it beats every cycle, a few ms) - the disable is dropped
             unsigned long long beat = pccomm_taskbeat();
-            if (beat != 0 && beat == disable_beat) log_print("task no longer beats: its shutdown's DISABLE, the axes stay enabled (KEEP_ENABLED_ON_EXIT)\n");
-            else if (km && km->is_board()) km->machine_on(false);
+            if (beat != disable_beat) { disable_beat = beat; disable_beat_t = now_s(); }
+            if (beat != 0 && now_s() - disable_beat_t > 0.3) {
+                disable_due = 0;
+                log_print("task no longer beats: a shutdown's DISABLE, the axes stay enabled (KEEP_ENABLED_ON_EXIT)\n");
+            } else if (now_s() >= disable_due) {
+                disable_due = 0;
+                if (km && km->is_board()) km->machine_on(false);
+            }
         }
 
         next += period_s;

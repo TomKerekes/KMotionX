@@ -27,10 +27,13 @@ motion module's place (`KMotionX/linuxcnc/README.md`).
   program, no homing (`[TRAJ] NO_FORCE_HOMING = 1` lets moves run unhomed, homing is the
   operator's or the board's business, as in KMotionCNC). With any axis disabled, LinuxCNC
   starts in E-stop as usual and Machine on runs the enable program. Task's own shutdown sends
-  the same DISABLE as Machine off and E-stop do, so with KEEP_ENABLED_ON_EXIT a board disable
-  is held a quarter second and dropped if the quit follows; the DISABLEs of task's and the
-  GUI's start (the first 30 s) leave the board alone - an E-stop pressed that early shows in
-  LinuxCNC but keeps the torque on until the next Machine off.
+  the same DISABLE as Machine off and E-stop do, and gmoccapy's quit sends a Machine off and
+  an E-stop of its own before it; only the shutdown that follows tells them from an
+  operator's. So with KEEP_ENABLED_ON_EXIT a board disable is held `DISABLE_GRACE_S` (2 s)
+  and dropped when task stops beating or the quit comes; an operator's Machine off or E-stop
+  reaches the board that much later. The DISABLEs of task's and the GUI's start (the first
+  30 s) leave the board alone - an E-stop pressed that early shows in LinuxCNC but keeps the
+  torque on until the next Machine off.
 - Before every run the planner re-reads the position from the board (as KMotionCNC does), so
   axes moved behind its back - the KMotion console's MoveRel, a program on the board - do not
   make the next move start from a stale point. LinuxCNC's display follows the board anyway.
