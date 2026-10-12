@@ -59,6 +59,14 @@ def gui_ready():
 t0 = time.time()
 if comp and wait(gui_ready, 60):
     say("autostart: the GUI (%s) is up after %.0f s" % (comp, time.time() - t0))
+    # gmoccapy marks its component ready before its init is over, and the init can still
+    # reset the machine (E-stop to E-stop reset) a few seconds later: wait for that change,
+    # or 8 s
+    s.poll()
+    state0 = s.task_state
+    if wait(lambda: s.task_state != state0, 8):
+        say("autostart: the GUI's init changed the state to %d" % s.task_state)
+    time.sleep(1)
 else:
     say("autostart: no ready HAL component %r within 60 s, going ahead" % comp)
 time.sleep(1)
