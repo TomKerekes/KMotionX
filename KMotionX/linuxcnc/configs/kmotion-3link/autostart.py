@@ -20,19 +20,26 @@ def wait(cond, timeout):
     return False
 
 
-s.poll()
-if s.task_state != linuxcnc.STATE_ON:
-    c.state(linuxcnc.STATE_ESTOP_RESET); c.wait_complete()
-    c.state(linuxcnc.STATE_ON); c.wait_complete()
-    if not wait(lambda: s.task_state == linuxcnc.STATE_ON, 90):
-        print("autostart: the machine did not come on", file=sys.stderr)
-        sys.exit(1)
-if not all(s.homed[:3]):
-    c.mode(linuxcnc.MODE_MANUAL); c.wait_complete()
-    c.teleop_enable(0); c.wait_complete()
-    c.home(-1)
-    if not wait(lambda: all(s.homed[:3]), 30):
-        print("autostart: homing did not finish", file=sys.stderr)
-        sys.exit(1)
-    c.teleop_enable(1); c.wait_complete()      # world mode: the GUI jogs the pen, not a servo
-print("autostart: machine on and homed")
+# the GUI's own init puts the machine into E-stop reset if it comes up after us (hence
+# [APPLICATIONS] DELAY): try a few times, a little apart
+for attempt in range(3):
+    s.poll()
+    if s.task_state != linuxcnc.STATE_ON:
+        c.state(linuxcnc.STATE_ESTOP_RESET); c.wait_complete()
+        c.state(linuxcnc.STATE_ON); c.wait_complete()
+        if not wait(lambda: s.task_state == linuxcnc.STATE_ON, 90):
+            print("autostart: the machine did not come on", file=sys.stderr)
+            sys.exit(1)
+    if not all(s.homed[:3]):
+        c.mode(linuxcnc.MODE_MANUAL); c.wait_complete()
+        c.teleop_enable(0); c.wait_complete()
+        c.home(-1)
+        wait(lambda: all(s.homed[:3]), 30)
+    time.sleep(3)                                # the GUI, if it is still coming up, acts within this
+    s.poll()
+    if s.task_state == linuxcnc.STATE_ON and all(s.homed[:3]):
+        c.teleop_enable(1); c.wait_complete()      # world mode: the GUI jogs the pen, not a servo
+        print("autostart: machine on and homed")
+        sys.exit(0)
+print("autostart: the machine did not stay on and homed", file=sys.stderr)
+sys.exit(1)
