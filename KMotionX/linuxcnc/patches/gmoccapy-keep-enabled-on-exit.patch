@@ -1,8 +1,34 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..b4dd495a4a 100644
+index cae34386ee..e9e756a61a 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-@@ -2828,6 +2828,9 @@ class gmoccapy(object):
+@@ -524,6 +524,10 @@ class gmoccapy(object):
+         # the time between calls to the function, in milliseconds
+         # CYCLE_TIME = time, in milliseconds, that display will sleep between polls
+         cycle_time = self.get_ini_info.get_cycle_time()
++        # [DISPLAY] CLEAR_PLOT_AT_FIRST_MACHINE_ON, see _periodic
++        self._clear_plot_at_first_on = self._ini_flag("DISPLAY", "CLEAR_PLOT_AT_FIRST_MACHINE_ON")
++        self._clear_plot_pending = None
++        self._plot_cleared_once = False
+         GLib.timeout_add( cycle_time, self._periodic )  # time between calls to the function, in milliseconds
+         GLib.timeout_add(1000, self._periodic_1s)       # 1 s timer for elapsed time display
+         self.elapsed_time_run = 0
+@@ -2756,6 +2760,14 @@ class gmoccapy(object):
+         except:
+             raise SystemExit("gmoccapy can not poll linuxcnc status any more")
+ 
++        # [DISPLAY] CLEAR_PLOT_AT_FIRST_MACHINE_ON: the first position change after the
++        # session's first Machine on is the real position arriving (a machine whose position
++        # is unknown until its axes are enabled); the line the plot drew to it goes
++        if self._clear_plot_pending is not None and tuple(self.stat.actual_position) != self._clear_plot_pending:
++            self._clear_plot_pending = None
++            self._plot_cleared_once = True
++            self.widgets.gremlin.clear_live_plotter()
++
+         error = self.error_channel.poll()
+         if error:
+             self._show_error(error)
+@@ -2828,6 +2840,9 @@ class gmoccapy(object):
              if self.stat.task_state == linuxcnc.STATE_ESTOP_RESET:
                  widget.set_active(False)
          else:  # estop circuit is fine
@@ -12,10 +38,53 @@ index cae34386ee..b4dd495a4a 100644
              self.command.state(linuxcnc.STATE_ESTOP_RESET)
              self.command.wait_complete()
              self.stat.poll()
-@@ -3364,14 +3367,26 @@ class gmoccapy(object):
+@@ -3039,6 +3054,7 @@ class gmoccapy(object):
+         self.command.mode(linuxcnc.MODE_MANUAL)
+ 
+     def on_hal_status_state_estop_reset(self, widget=None):
++        self._note_plot_reference()
+         self.widgets.tbtn_estop.set_active(False)
+         self.widgets.tbtn_estop.set_image(self.widgets.img_emergency_off)
+         self.widgets.tbtn_on.set_image(self.widgets.img_machine_off)
+@@ -3071,7 +3087,16 @@ class gmoccapy(object):
+         self.widgets.ntb_info.set_current_page(0)
+         self.widgets.ntb_jog.set_current_page(0)
+ 
++    def _note_plot_reference(self):
++        # the position before the session's first Machine on: the first change after it is
++        # the real position arriving (the reference is taken at E-stop reset, or at the
++        # machine on when the GUI finds it on already, whichever comes first)
++        if self._clear_plot_at_first_on and not self._plot_cleared_once and self._clear_plot_pending is None:
++            self.stat.poll()
++            self._clear_plot_pending = tuple(self.stat.actual_position)
++
+     def on_hal_status_state_on(self, widget):
++        self._note_plot_reference()
+         widgetlist = ["rbt_manual", "btn_homing", "btn_touch", "btn_tool",
+                       "ntb_jog", "spc_feed", "btn_feed_100", "rbt_forward",
+                       "rbt_reverse", "rbt_stop", "tbtn_flood", "tbtn_mist",
+@@ -3081,7 +3106,9 @@ class gmoccapy(object):
+         if not self.widgets.tbtn_on.get_active():
+             self.widgets.tbtn_on.set_active(True)
+         self.widgets.tbtn_on.set_image(self.widgets.img_machine_on)
+-        self.widgets.btn_exit.set_sensitive(False)
++        # the exit button is for a machine that is off; with KEEP_ENABLED_ON_EXIT the exit
++        # leaves the machine on, so it stays available
++        self.widgets.btn_exit.set_sensitive(self._keep_enabled_on_exit())
+         if self.widgets.ntb_main.get_current_page() != 0:
+             self.command.mode(linuxcnc.MODE_MANUAL)
+             self.command.wait_complete()
+@@ -3364,14 +3391,33 @@ class gmoccapy(object):
          self.initialized = True
  
      # kill keyboard and estop machine before closing
++    def _ini_flag(self, section, key):
++        try:
++            v = linuxcnc.ini(os.environ["INI_FILE_NAME"]).find(section, key)
++        except Exception:
++            return False
++        return bool(v) and v.strip() not in ("0", "")
++
 +    def _keep_enabled_on_exit(self):
 +        """[EMC] KEEP_ENABLED_ON_EXIT: the machine stays as it is at the GUI's exit (no Machine
 +        off, no E-stop; task's shutdown leaves motion enabled too) and a machine found on at

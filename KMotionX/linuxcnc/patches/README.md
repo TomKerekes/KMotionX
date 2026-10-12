@@ -12,7 +12,24 @@ a session as always):
 - `gmoccapy-keep-enabled-on-exit.patch` (`src/emc/usr_intf/gmoccapy/gmoccapy.py`): with the
   key set, the quit sends no Machine off and no E-stop, and the E-stop button's start-up
   reset leaves a machine that is already on alone (the start-up script
-  `configs/kmotion-3link/autostart.py` turns it on before the GUI is up).
+  `configs/kmotion-3link/autostart.py` turns it on before the GUI is up), and the exit
+  button stays available while the machine is on (stock gmoccapy disables it then, since
+  its exit would turn the machine off; the window's close button works either way).
+
+The gmoccapy patch also adds `[DISPLAY] CLEAR_PLOT_AT_FIRST_MACHINE_ON = 1`: a machine
+whose position is unknown until its axes are enabled (serial servos read 0 until they are
+set up) shows a stand-in position at the start, and the first Machine on draws a line in
+the plot from there to the real position; with the key, the first position change after the
+session's first Machine on clears the plot.
+
+A third patch, `gremlin-backplot-clear.patch` (`lib/python/gremlin.py`,
+`lib/python/rs274/glcanon_gl.py`, `glcanon_scene.py`), fixes the clearing itself, in
+LinuxCNC 2.10's renderer: the live plot is kept in a GPU buffer that is only re-sent when
+the logger's point count shrinks, and after a clear the logger refills a two-point trail
+within milliseconds, so the plot kept drawing the old segment (the eraser button has the
+same flaw: it does nothing until the tool has moved). With the patch the buffer also
+recognises the trail by its first point, and gremlin redraws once the logger's trail is not
+the one it had before the clear. No timing is involved.
 
 Other GUIs decide for themselves what they send at init and at quit: AXIS sends nothing at
 either and needs no patch; another one would need its own.

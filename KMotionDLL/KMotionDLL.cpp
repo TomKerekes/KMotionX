@@ -143,11 +143,13 @@ int CKMotionDLL::ListLocations(int *nlocations, int *list)
 
 int CKMotionDLL::Failed()
 {
+	ReadStatus = true;  // the next connection starts afresh: check its status record size again
 	return PipeCmd(ENUM_Failed);
 }
 
 int CKMotionDLL::Disconnect()
 {
+	ReadStatus = true;
 	return PipeCmd(ENUM_Disconnect);
 }
 

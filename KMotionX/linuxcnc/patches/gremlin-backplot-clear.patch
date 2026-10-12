@@ -1,0 +1,100 @@
+diff --git a/lib/python/rs274/glcanon_gl.py b/lib/python/rs274/glcanon_gl.py
+index f39c529b92..70bb11ac0b 100644
+--- a/lib/python/rs274/glcanon_gl.py
++++ b/lib/python/rs274/glcanon_gl.py
+@@ -2643,6 +2643,10 @@ class BackplotRing:
+         self.palette = palette
+         #: the padded list the shader indexes
+         self.shader_palette: list[tuple[float, ...]] | None = None
++        #: the raw bytes of logger point 0 as resident. A clear restarts the
++        #: trail at the tool, and the logger refills a short trail faster than
++        #: a frame comes: the count alone cannot tell the new trail from the old.
++        self.head: bytes = b""
+         self._configured = False
+ 
+     @property
+@@ -2663,10 +2667,10 @@ class BackplotRing:
+         """
+         return self.count // self.vertices_per_point
+ 
+-    def resident_points(self, npts: int, is_xyuv: int) -> int:
++    def resident_points(self, npts: int, is_xyuv: int, head: bytes = b"") -> int:
+         """How many leading logger points the next frame may keep.
+ 
+-        0 means convert and upload the whole trail. Four conditions force that,
++        0 means convert and upload the whole trail. Five conditions force that,
+         all of them read from this object's own state:
+ 
+         1. the resident vertices are in the wide per-vertex-colour layout, so a
+@@ -2674,7 +2678,10 @@ class BackplotRing:
+         2. holding ``npts`` would grow the store, and a grow orphans it;
+         3. the foam mode changed, so the vertices mean something else;
+         4. the source shrank - a clear, or the C ring dropping its oldest -
+-           so what is resident is not a prefix of what is being asked for.
++           so what is resident is not a prefix of what is being asked for;
++        5. the trail's first point (``head``, its raw bytes) is not the one
++           resident: a clear the logger has already refilled to the same count,
++           which 4 cannot see.
+ 
+         Otherwise every resident point but the last survives. The last is
+         always re-converted because the C moves it in place
+@@ -2688,14 +2695,19 @@ class BackplotRing:
+         resident = self.npts
+         if npts < resident:                             # 4
+             return 0
++        if head != self.head:                           # 5
++            return 0
+         if npts * self.vertices_per_point > self.capacity:   # 2
+             return 0
+         return max(resident - 1, 0)
+ 
+     def write(self, verts: TrajectoryVerts | WideVerts, first_point: int,
+-              is_xyuv: int) -> None:
++              is_xyuv: int, head: bytes = b"") -> None:
+         """Write ``verts`` into the store starting at logger point ``first_point``.
+ 
++        ``head`` is the raw bytes of the trail's first point, kept for
++        :meth:`resident_points` to recognise the trail by next frame.
++
+         ``verts`` is exactly what should be transferred - the caller has
+         already narrowed it to the tail :meth:`resident_points` allowed - and
+         the layout is derived here, once, from the array itself: a palette
+@@ -2714,6 +2726,7 @@ class BackplotRing:
+         first_vertex = max(int(first_point), 0) * vpp
+         total = first_vertex + sent
+         self.is_xyuv = is_xyuv
++        self.head = head
+         self.mode = GL_LINES if is_xyuv else GL_LINE_STRIP
+         self.shader_palette = (self.palette.padded()
+                                if indexed and self.palette is not None
+@@ -2733,6 +2746,7 @@ class BackplotRing:
+         renumber a colour a surviving vertex still uses.
+         """
+         self.count = 0
++        self.head = b""
+ 
+     def ensure(self, total: int, indexed: bool = True) -> bool:
+         """Grow to hold >= ``total`` vertices in the given layout.
+diff --git a/lib/python/rs274/glcanon_scene.py b/lib/python/rs274/glcanon_scene.py
+index 38f0b0bff4..63d457fe90 100644
+--- a/lib/python/rs274/glcanon_scene.py
++++ b/lib/python/rs274/glcanon_scene.py
+@@ -1673,7 +1673,8 @@ class BackplotPart(Part):
+         if npts < 2:
+             ring.invalidate()
+             return
+-        first_point = ring.resident_points(npts, is_xyuv)
++        head = bytes(raw[:glcanon_bake.LOGGER_DTYPE.itemsize])
++        first_point = ring.resident_points(npts, is_xyuv, head)
+         verts = glcanon_bake.backplot_vertices(raw, npts, is_xyuv,
+                                                first_point=first_point,
+                                                palette=ring.palette)
+@@ -1683,7 +1684,7 @@ class BackplotPart(Part):
+             # the whole trail in the per-vertex-colour layout instead.
+             verts = glcanon_bake.backplot_vertices(raw, npts, is_xyuv)
+             first_point = 0
+-        ring.write(verts, first_point, is_xyuv)
++        ring.write(verts, first_point, is_xyuv, head)
+         ring.draw(ctx.renderer, self.mvp(ctx))
+ 
+ 

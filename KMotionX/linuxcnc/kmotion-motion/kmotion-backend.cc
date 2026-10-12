@@ -188,7 +188,7 @@ struct KmBackend::Impl {
     bool run_active = false;        // a run is downloaded/executing on the board
     double last_poll = 0;
     bool connected = false;
-    unsigned ever_enabled = 0;      // poller: axes seen enabled since the board came (bit = axis). A
+    std::atomic<unsigned> ever_enabled{0};   // poller: axes seen enabled since the board came (bit = axis). A
                                     // board fresh from power-up reads Dest 0 on channels nothing has
                                     // set up, which through a kinematics is some far-away point: its
                                     // positions are taken once every axis has been enabled at least
@@ -386,6 +386,7 @@ static void set_cm_position(KmBackend::Impl *d, const double pos[9])
 }
 
 static void w_abort(KmBackend::Impl *d);
+static bool read_board_position(KmBackend::Impl *d);
 
 // the planner refused a move or a flush. Our own abort (a probe trip's as well) makes it
 // return failures too (that is how the worker gets out of a blocking download): those are
@@ -417,13 +418,12 @@ static int begin_move(KmBackend::Impl *d, int id)
     // position before every run: the axes may have been moved behind the planner's back
     // (the KMotion console, a program on the board) since the last one
     if (!d->cfg.simulate && !d->run_active && !d->unflushed) {
-        double x, y, z, a, b, c, u, v;
-        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
-            double p[9] = {x, y, z, a, b, c, u, v, 0};
+        double before[9];
+        memcpy(before, d->pos, sizeof before);
+        if (read_board_position(d)) {
             double moved = 0;
-            for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(p[i] - d->pos[i]));
+            for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(d->pos[i] - before[i]));
             if (moved > 1e-6) {
-                memcpy(d->pos, p, sizeof p);
                 set_cm_position(d, d->pos);
                 memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
             }
@@ -609,11 +609,7 @@ static void w_abort(KmBackend::Impl *d)
         set_cm_position(d, d->pos);
     } else {
         cm->RearmCoordLaunch();
-        double x, y, z, a, b, c, u, v;
-        if (cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
-            double p[9] = {x, y, z, a, b, c, u, v, 0};
-            memcpy(d->pos, p, sizeof p);
-        }
+        read_board_position(d);
         cm->ClearAbort();
         // the planner's current position is the end of the last move it was given, up to
         // the lookahead ahead of the board; the next move must start where the board
@@ -701,6 +697,24 @@ static bool realtime_sequence(double T, int &seq)
     return true;
 }
 
+static void sim_act_pos(KmBackend::Impl *d);   // the actuators where the position puts them
+
+// the board's position into d->pos - once every axis has been enabled at least once since the
+// board came (d->ever_enabled); a board fresh from power-up reads 0 on channels nothing has
+// set up, which through a kinematics is some far-away point. false: not read
+static bool read_board_position(KmBackend::Impl *d)
+{
+    for (int i = 0; i < 8; i++) {
+        int ch = d->cfg.channel[i];
+        if (ch >= 0 && ch < N_CHANNELS_KOGNA && !(d->ever_enabled & (1u << i))) return false;
+    }
+    double x, y, z, a, b, c, u, v;
+    if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) != 0) return false;
+    double p[9] = {x, y, z, a, b, c, u, v, 0};
+    memcpy(d->pos, p, sizeof p);
+    return true;
+}
+
 // an I/O bit's state as MAIN_STATUS carries it, KMotion's numbering (KMotion.exe's Digital I/O
 // pages read them the same way): 1 or 0, or -1 for a bit the status does not carry
 static int status_bit(const MAIN_STATUS &st, int b)
@@ -751,13 +765,18 @@ static void w_poll_board(KmBackend::Impl *d)
     unsigned jog_written[8];                 // jogs this status read comes after
     for (int i = 0; i < 8; i++) jog_written[i] = d->jog_written[i];
     const int spindle_done = d->spindle_done;    // ... and spindle commands
-    if (d->km->WaitToken(false, 100, "kmotion-motion") != KMOTION_LOCKED) {
+    int tok = d->km->WaitToken(false, 100, "kmotion-motion");
+    if (tok == KMOTION_IN_USE) return;      // another client holds the board (a download, say): no loss
+    if (tok != KMOTION_LOCKED) {
         if (d->connected) { fprintf(stderr, "kmotion-motion: lost the board: no answer\n"); d->lost = true; }
         d->connected = false;
         return;
     }
     int r = d->km->GetStatus(status, false);
     d->km->ReleaseToken();
+    // a record of the wrong size is stale bytes from a reply nobody finished reading (the
+    // board rebooted mid-record, or a client quit mid-record): out of step with the board
+    if (r == 0 && (status.VersionAndSize & 0xffff) != (int) (sizeof status / sizeof(int))) r = -1;
     {
         static double last_ok = 0;
         double now = now_s();
@@ -765,7 +784,14 @@ static void w_poll_board(KmBackend::Impl *d)
         last_ok = now;
     }
     if (r) {
-        if (d->connected) { fprintf(stderr, "kmotion-motion: lost the board: GetStatus failed\n"); d->lost = true; }
+        if (d->connected) {
+            fprintf(stderr, "kmotion-motion: lost the board: %s\n", r < 0 ? "a status record of the wrong size" : "GetStatus failed");
+            d->lost = true;
+            // as KMotionCNC does on any communication error: drop the connection, so that the
+            // next command connects afresh with the buffers flushed on both ends (the server
+            // sends an abort and waits for its acknowledge before anything else)
+            d->km->Disconnect();
+        }
         d->connected = false;
         return;
     }
@@ -794,9 +820,13 @@ static void w_poll_board(KmBackend::Impl *d)
             d->enabled[i] = true;
         }
     }
-    if (all_ever) {               // else: not yet set up, the last known position stands
+    if (all_ever) {
         for (int i = 0; i < 8; i++) d->act_pos[i] = d->scale[i] > 0 ? acts[i] / d->scale[i] : 0;
         acts_to_cad(d, acts, d->pos);
+    } else {
+        // not yet set up: the last known position stands, and the joints shown are where it
+        // puts them (zeros for the joints would be some far-away point through a kinematics)
+        sim_act_pos(d);
     }
     // the spindle at speed (SPINDLE_AT_SPEED): its bit at the level, or its axis done (a jog at
     // speed has no trajectory left; a disabled axis is not done)
@@ -1050,12 +1080,8 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
             if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((status.Enables >> ch) & 1)) all = false;
         }
         if (all) {
-            double x, y, z, a, b, c, u, v;
-            if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
-                double p[9] = {x, y, z, a, b, c, u, v, 0};
-                memcpy(d->pos, p, sizeof p);
-                set_cm_position(d, d->pos);
-            }
+            d->ever_enabled = 0xff;
+            if (read_board_position(d)) set_cm_position(d, d->pos);
             return;
         }
         if (start_program(d, d->cfg.enable_program, d->cfg.enable_thread)) return;
@@ -1077,12 +1103,8 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
                 return;
             }
         }
-        double x, y, z, a, b, c, u, v;
-        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) == 0) {
-            double p[9] = {x, y, z, a, b, c, u, v, 0};
-            memcpy(d->pos, p, sizeof p);
-            set_cm_position(d, d->pos);
-        }
+        d->ever_enabled = 0xff;
+        if (read_board_position(d)) set_cm_position(d, d->pos);
         return;
     }
     bool have_status = d->km->GetStatus(status, true) == 0;
@@ -1191,13 +1213,7 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
             if (board_query(d, cmd, reply) == 0) ok_ch = (unsigned) strtol(reply, NULL, 10);
         }
         // where the board stands now is where the planner continues from
-        double x, y, z, a, bb, c, u, v;
-        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &bb, &c, &u, &v) == 0) {
-            double p[9] = {x, y, z, a, bb, c, u, v, 0};
-            memcpy(d->pos, p, sizeof p);
-        } else {
-            d->cm->ClearAbort();
-        }
+        if (!read_board_position(d)) d->cm->ClearAbort();
         set_cm_position(d, d->pos);
         unsigned ok_j = 0;
         for (int j = 0; j < 8; j++)
@@ -1315,14 +1331,8 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
     }
     if (a.type == KM_ACTION_PROGRAM_WAIT_SYNC) {
         // the program may have moved axes: carry on from where the board stands
-        double x, y, z, aa, bb, cc, u, v;
-        if (d->cm->ReadCurAbsPosition(&x, &y, &z, &aa, &bb, &cc, &u, &v) == 0) {
-            double p[9] = {x, y, z, aa, bb, cc, u, v, 0};
-            memcpy(d->pos, p, sizeof p);
-            set_cm_position(d, d->pos);
-        } else {
-            d->cm->ClearAbort();
-        }
+        if (read_board_position(d)) set_cm_position(d, d->pos);
+        else d->cm->ClearAbort();
     }
     return 0;
 }
@@ -1824,6 +1834,9 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         cm->RapidParamsDirty = false;
         set_cm_position(d, pos);
     } else {
+        // the server outlives LinuxCNC and may still hold the tail of a reply the last client
+        // never finished reading: connect afresh, with the buffers flushed on both ends
+        d->km->Disconnect();
         int type = 0;
         if (d->km->CheckKMotionVersion(&type)) {
             std::string m;
@@ -1869,6 +1882,7 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
                 d->ever_enabled = 0xff;
             } else {
                 fprintf(stderr, "kmotion-motion: an axis is disabled at the start: positions are taken once every axis has been enabled\n");
+                sim_act_pos(d);
             }
         }
         // programs that keep running (forever loops), once the axes and the coordinate system are set

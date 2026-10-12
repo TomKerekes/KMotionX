@@ -2160,7 +2160,6 @@ int main(int argc, char *argv[])
             return 1;
         }
         still_homed = km->still_homed();
-        if (still_homed) log_print("HOMED_PERSIST: joints 0x%02x homed by the last session, still enabled\n", still_homed);
         log_print("motion: %s; planner %s%s%s; axes", km->mode_name(), cfg.third_order ? "3rd order" : "standard",
                   cfg.third_order && cfg.cubic_knots ? ", cubic knots" : "", cfg.actuator_limits ? ", actuator limits" : ", axis limits");
         for (int i = 0; i < 8; i++)
