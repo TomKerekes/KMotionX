@@ -185,6 +185,19 @@ through the same shared memory block.
     For a setup that must come first, e.g. serial servos whose torque the program turns on
     before enabling at their measured positions. Machine off disables the axes as before. Its
     thread is reserved like a START_PROGRAM's.
+  - **Across sessions** (`[EMC] KEEP_ENABLED_ON_EXIT = 1`, with the two patches to LinuxCNC in
+    `patches/`): the board's axes stay enabled when LinuxCNC exits, as KMotionCNC leaves them,
+    and a start that finds them all enabled (HAL pin `kmotion.all-enabled`) can come up with
+    Machine on and no init - `configs/kmotion-3link/autostart.py` does that. The DISABLE task
+    sends as part of its own start leaves the board as it is; every other DISABLE (Machine off,
+    E-stop, and with a stock LinuxCNC the GUI's quit and task's shutdown) disables the board
+    at once. `[KMOTION] ALWAYS_HOMED = 1`: every joint is homed whenever the machine is on
+    (absolute feedback), no homing step. `[KMOTION] HOMED_PERSIST = <n>`: the joints homed are
+    remembered in persist variable n (bit = joint) across sessions, read by a start with every
+    axis enabled (HAL pin `kmotion.homed-mask`; such a joint's next homing request is answered
+    where it stands, once), cleared by a start with an axis disabled and by the board's power;
+    a board program may set or clear it. A board that stops answering takes the machine to
+    off and unhomed.
   - **Geometric correction** (`[KMOTION] GEO_FILE = <file>`, relative to the ini): KMotionCNC's
     Geo Correction File (Tool Setup), read by the kinematics at start as KMotionCNC reads it
     (`ReadGeoTable`: the XY table and any per-axis linear tables named after it); a file the

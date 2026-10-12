@@ -132,6 +132,11 @@ struct KmConfig {
     // coordinated motion. probe_bit -1 = probe moves run as plain moves that never trip
     int probe_bit = -1;                       // the probe's input bit (one the status carries) ...
     int probe_level = 1;                      // ... and the level that means contact
+    // [KMOTION] HOMED_PERSIST: a persist variable holding the mask of the joints that are
+    // homed (bit = LinuxCNC joint). Written as joints home and unhome; read at a start that
+    // finds every axis enabled, cleared by one that does not; the board's power clears it.
+    // A program on the board may set or clear it for its own reasons. -1 = none
+    int homed_persist = -1;
 };
 
 // the board's status carries this I/O bit (SPINDLE_AT_SPEED = BIT)
@@ -254,6 +259,10 @@ public:
     const char *mode_name() const;
     bool reload_geo_table();                     // GEO_FILE again (KMotionCNC's "reload"); false: failed
     const KmAxisParams &axis_params(int axis) const;   // the config's, 0-7
+    // HOMED_PERSIST (board mode): the mask found at the start with every axis enabled, and
+    // writing the current mask
+    unsigned still_homed() const;
+    bool homed_persist_write(unsigned mask);
 
     // board mode, for the board's commands to the PC (kmotion-pccomm.cc): the primitives
     // KMotionCNC's ServiceKFLOPCommands uses, each a short exchange on the board link (the

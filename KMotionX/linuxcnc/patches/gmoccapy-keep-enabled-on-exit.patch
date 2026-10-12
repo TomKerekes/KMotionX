@@ -1,0 +1,43 @@
+diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
+index cae34386ee..b4dd495a4a 100644
+--- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
++++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
+@@ -2828,6 +2828,9 @@ class gmoccapy(object):
+             if self.stat.task_state == linuxcnc.STATE_ESTOP_RESET:
+                 widget.set_active(False)
+         else:  # estop circuit is fine
++            self.stat.poll()
++            if self.stat.task_state == linuxcnc.STATE_ON and self._keep_enabled_on_exit():
++                return  # the machine is on already (a start found the axes enabled): leave it so
+             self.command.state(linuxcnc.STATE_ESTOP_RESET)
+             self.command.wait_complete()
+             self.stat.poll()
+@@ -3364,14 +3367,26 @@ class gmoccapy(object):
+         self.initialized = True
+ 
+     # kill keyboard and estop machine before closing
++    def _keep_enabled_on_exit(self):
++        """[EMC] KEEP_ENABLED_ON_EXIT: the machine stays as it is at the GUI's exit (no Machine
++        off, no E-stop; task's shutdown leaves motion enabled too) and a machine found on at
++        the start is left on. For machines whose axes keep their state across sessions, e.g.
++        absolute servos, as KMotionCNC leaves them. Off by default: the usual exit."""
++        try:
++            v = linuxcnc.ini(os.environ["INI_FILE_NAME"]).find("EMC", "KEEP_ENABLED_ON_EXIT")
++        except Exception:
++            return False
++        return bool(v) and v.strip() not in ("0", "")
++
+     def on_window1_destroy(self, widget, data=None):
+         LOG.debug("estoping / killing gmoccapy")
+         self._kill_dynamic_childs()
+ #        self._kill_keyboard()
+         if self.onboard:
+             self._kill_keyboard()
+-        self.command.state(linuxcnc.STATE_OFF)
+-        self.command.state(linuxcnc.STATE_ESTOP)
++        if not self._keep_enabled_on_exit():
++            self.command.state(linuxcnc.STATE_OFF)
++            self.command.state(linuxcnc.STATE_ESTOP)
+         Gtk.main_quit()
+ 
+     def on_focus_out(self, widget, data=None):

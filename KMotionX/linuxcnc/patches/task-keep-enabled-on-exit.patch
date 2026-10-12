@@ -1,0 +1,47 @@
+diff --git a/src/emc/task/emctaskmain.cc b/src/emc/task/emctaskmain.cc
+index 32c13a3566..2e1315329d 100644
+--- a/src/emc/task/emctaskmain.cc
++++ b/src/emc/task/emctaskmain.cc
+@@ -140,6 +140,7 @@ extern void backtrace(int signo);
+ int _task = 1; // control preview behaviour when remapping
+ static int joints = 0;
+ uint64_t task_beat = 0;  // Task's main loop heartbeat counter
++extern unsigned int emc_keep_enabled_on_exit;  // taskintf.cc: emcMotionHalt leaves motion enabled
+ 
+ // for operator display on iocontrol signalling a toolchanger fault if io.fault is set
+ // %d receives io.reason
+@@ -3404,6 +3405,11 @@ static int iniLoad(const char *filename)
+     // EMC debugging flags
+     emc_debug = inifile.findUIntV("DEBUG", "EMC", 0);
+ 
++    // [EMC] KEEP_ENABLED_ON_EXIT: task's shutdown leaves motion enabled (the machine's
++    // axes stay as they are, e.g. absolute servos keep their torque, as KMotionCNC leaves
++    // them); the GUI's part is its own ([DISPLAY] gmoccapy honours the same key)
++    emc_keep_enabled_on_exit = inifile.findUIntV("KEEP_ENABLED_ON_EXIT", "EMC", 0);
++
+     // set output for RCS messages
+     if (auto inival = mapRcsDestination(inifile, "RCS_DEBUG_DEST", "EMC")) {
+         set_rcs_print_destination(*inival);
+diff --git a/src/emc/task/taskintf.cc b/src/emc/task/taskintf.cc
+index 9b6fab24c6..7e23f66113 100644
+--- a/src/emc/task/taskintf.cc
++++ b/src/emc/task/taskintf.cc
+@@ -1896,6 +1896,9 @@ int emcMotionInit()
+     return 0;
+ }
+ 
++// [EMC] KEEP_ENABLED_ON_EXIT (emctaskmain.cc reads it): the shutdown does not disable motion
++unsigned int emc_keep_enabled_on_exit = 0;
++
+ int emcMotionHalt()
+ {
+     int r1, r2, r3, r4, r5;
+@@ -1908,7 +1911,7 @@ int emcMotionHalt()
+ 	}
+     }
+ 
+-    r2 = emcTrajDisable();
++    r2 = emc_keep_enabled_on_exit ? 0 : emcTrajDisable();
+     r3 = emcTrajHalt();
+     r4 = emcPositionSave();
+     r5 = ini_hal_exit();

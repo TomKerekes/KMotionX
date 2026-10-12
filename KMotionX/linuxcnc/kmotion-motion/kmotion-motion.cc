@@ -87,47 +87,25 @@ static std::vector<int> output_bits, input_bits;
 static hal_bool_t *out_pins = NULL, *in_pins = NULL, *dout_pins = NULL;   // in HAL shared memory
 static std::vector<int> out_sent;            // what each output bit was last set to (-1: not yet)
 static int num_dio = 4;
-// [KMOTION] KEEP_ENABLED_ON_EXIT: the axes stay enabled when LinuxCNC exits, as KMotionCNC
-// leaves them (the next start then finds them enabled and can come up without an init).
-// Task's shutdown sends the same DISABLE as Machine off and E-stop do, and gmoccapy's quit
-// first sends a Machine off and an E-stop of its own; nothing tells them from an operator's
-// but the shutdown that follows: task's loop stops (its heartbeat), then the quit. So the
-// board disable is held for DISABLE_GRACE_S ([KMOTION] DISABLE_GRACE_S, default 5: gmoccapy takes
-// about 2.6 s from its Machine off to task's shutdown) and
-// dropped if task stops beating or the quit comes first; an operator's Machine off or E-stop
-// reaches the board that much later
+// [EMC] KEEP_ENABLED_ON_EXIT: the board's axes are left as they are by the DISABLE task sends
+// as part of its own start (before the session's first ENABLE), so axes left enabled by the
+// last session stay so and a start can come up with Machine on and no init (the HAL pin
+// kmotion.all-enabled tells). Every other DISABLE disables the board at once: an operator's
+// Machine off or E-stop, and - with a stock LinuxCNC - the GUI's quit and task's shutdown,
+// which then end a session as LinuxCNC's users expect. Patched task and GUI
+// (linuxcnc/patches/) send none of those at exit, and the torque stays on as KMotionCNC
+// leaves it. No timing is involved anywhere
 static bool keep_enabled_on_exit = false;
-static double disable_grace_s = 5.0;
-static double disable_due = 0;         // when the held disable goes to the board, 0 = none
-static double disable_beat_t = 0;
-// the GUI's HAL component ([DISPLAY] DISPLAY: gmoccapy as "gmoccapy", AXIS as "axisui"): a
-// GUI that is quitting unloads it; checked through halcmd while a disable is held
-static std::string gui_comp;
-static double gui_checked_t = 0;
-static bool gui_comp_present()
-{
-    FILE *f = popen("halcmd show comp 2>/dev/null", "r");
-    if (!f) return true;
-    char line[256];
-    bool found = false;
-    while (fgets(line, sizeof line, f)) {
-        char id[32], type[32], name[128];
-        if (sscanf(line, "%31s %31s %127s", id, type, name) == 3 && gui_comp == name) found = true;
-    }
-    pclose(f);
-    return found;
-}
-static unsigned long long disable_beat = 0;   // task's taskbeat when the DISABLE came: a task that
-                                       // no longer beats is shutting down (its loop ends before
-                                       // its halt), so the disable is dropped without waiting
-                                       // for the quit
-// task sends a DISABLE as part of its own start (its default state), and a GUI's init sends
-// another (E-stop reset) when it comes up: with KEEP_ENABLED_ON_EXIT those leave the board's
-// axes as they are, enabled from the last session or not. "Part of the start": within
-// STARTUP_WINDOW_S of ours, which covers a slow GUI; an operator's E-stop that early shows
-// in LinuxCNC but leaves the torque on until the next Machine off
-static const double STARTUP_WINDOW_S = 30;
-static double start_time = 0;
+static bool enabled_once = false;      // the session's first ENABLE has been seen
+// [KMOTION] ALWAYS_HOMED: every joint is homed whenever the machine is on (absolute feedback,
+// e.g. the 3 Link robot's servos): no homing step, ever. Otherwise [KMOTION] HOMED_PERSIST
+// (KmConfig) remembers on the board which joints homed; a start that finds every axis
+// enabled reads it and such a joint's next homing request is answered where it stands,
+// without a homing run (the HAL pin kmotion.homed-mask tells the start-up script which)
+static bool always_homed = false;
+static unsigned homed_mask = 0;        // joints homed, as LinuxCNC's flags say (bit = joint)
+static unsigned still_homed = 0;       // HOMED_PERSIST's mask at the start, consumed as joints are homed from it
+static bool board_lost = false;        // the board went away: the machine is off and unhomed
 static bool mcode_configured[100];
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
@@ -451,6 +429,7 @@ static void spindle_net_scale(spindle_status_t &ss)
 }
 
 static void release_held();
+static void update_motion_state();
 
 static void model_step(double dt)
 {
@@ -459,6 +438,20 @@ static void model_step(double dt)
     if (km) {
         km->state(m.ks);                 // the worker thread keeps it current
         if (m.ks.message[0]) report_error("%s", m.ks.message);
+        if (km->is_board() && !m.ks.connected && !board_lost && GET_MOTION_ENABLE_FLAG()) {
+            // the board is gone (its link reports it at once on USB or a direct Ethernet
+            // link, after a timeout through a router): the machine is off and nothing is
+            // homed any more, as task will show
+            board_lost = true;
+            report_error("the board is not answering: machine off, joints unhomed");
+            SET_MOTION_ENABLE_FLAG(0);
+            m.queue.clear();
+            m.held.clear();
+            m.active = m.paused = m.stepping = false;
+            stop_jogs(-1);
+            for (int j = 0; j < num_joints; j++) mark_joint_homed(j, false);
+            update_motion_state();
+        }
         for (std::string pm; pccomm_message(pm);) report_error("%s", pm.c_str());
         release_held();
         if (m.stepping && emcmotStatus->id != m.step_id && m.ks.active_id) {
@@ -558,6 +551,7 @@ static void model_step(double dt)
 struct Pins {
     hal_bool_t motion_enabled, in_position, coord_mode, teleop_mode, on_soft_limit;
     hal_bool_t all_enabled;         // kmotion.all-enabled: every coordinate-system axis enabled on the board
+    hal_uint_t homed_mask;          // kmotion.homed-mask: the joints homed (bit = joint), HOMED_PERSIST's at the start
     hal_real_t current_vel, requested_vel, distance_to_go;
     hal_sint_t program_line, motion_type;
     struct {
@@ -590,6 +584,7 @@ static int create_pins()
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->coord_mode, 0, "motion.coord-mode"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->teleop_mode, 0, "motion.teleop-mode"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->all_enabled, 0, "kmotion.all-enabled"));
+    PIN(hal_pin_new_ui32(comp_id, HAL_OUT, &pins->homed_mask, 0, "kmotion.homed-mask"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->on_soft_limit, 0, "motion.on-soft-limit"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->current_vel, 0, "motion.current-vel"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->requested_vel, 0, "motion.requested-vel"));
@@ -859,6 +854,7 @@ static void update_pins()
         bool all = km && km->is_board();
         for (int i = 0; all && i < 8; i++) all = m.ks.enabled[i];
         hal_set_bool(pins->all_enabled, all);
+        hal_set_ui32(pins->homed_mask, homed_mask | still_homed);   // still_homed is consumed as joints home from it
     }
     hal_set_real(pins->current_vel, emcmotStatus->current_vel);
     hal_set_real(pins->requested_vel, emcmotStatus->requested_vel);
@@ -900,6 +896,11 @@ static void mark_joint_homed(int j, bool homed, bool move_to_home)
     emcmot_joint_status_t *js = &emcmotStatus->joint_status[j];
     js->homing = 0;
     js->homed = homed;
+    unsigned before = homed_mask;
+    if (homed) homed_mask |= 1u << j; else homed_mask &= ~(1u << j);
+    // the board's HOMED_PERSIST follows, once the session is under way (task unhomes every
+    // joint as part of its own start: that must not clear what the last session left)
+    if (homed_mask != before && enabled_once && km && km->is_board()) km->homed_persist_write(homed_mask);
     // homing ends at the HOME position; with joint_kins the joints are where the actuators are
     if (homed && move_to_home && j < NAXES && !joint_kins) m.pos[j] = m.joint_home[j];
 }
@@ -1117,7 +1118,9 @@ static void handle_command()
         break;
     case EMCMOT_ENABLE:
         log_print("ENABLE\n");
-        disable_due = 0;                 // a held disable is overtaken
+        enabled_once = true;
+        board_lost = false;
+        if (always_homed) for (int j = 0; j < num_joints; j++) mark_joint_homed(j, true, false);
         SET_MOTION_ENABLE_FLAG(1);
         SET_MOTION_ERROR_FLAG(0);
         if (km && km->is_board()) km->machine_on(true);
@@ -1128,12 +1131,8 @@ static void handle_command()
         SET_MOTION_ENABLE_FLAG(0);
         if (km) km->abort();
         if (km && km->is_board()) {
-            if (keep_enabled_on_exit && now_s() - start_time < STARTUP_WINDOW_S)
-                log_print("a DISABLE within the start: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
-            else if (keep_enabled_on_exit) {
-                disable_due = now_s() + disable_grace_s; disable_beat = pccomm_taskbeat(); disable_beat_t = now_s();
-                log_print("DISABLE held %.1f s (KEEP_ENABLED_ON_EXIT): task's beat %llu\n", disable_grace_s, disable_beat);
-            }
+            if (keep_enabled_on_exit && !enabled_once)
+                log_print("task's startup DISABLE: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
             else km->machine_on(false);
         }
         if (emcmotStatus->spindle_status[0].state) {
@@ -1257,6 +1256,14 @@ static void handle_command()
         unsigned mask = 0;
         for (int j = 0; j < num_joints; j++) {
             if (c->joint >= 0 && j != c->joint) continue;
+            if (always_homed || (still_homed & (1u << j))) {
+                // homed where it stands: absolute feedback, or homed before and nothing
+                // happened to it since (a still-homed joint answers so once; a second
+                // request homes it for real)
+                still_homed &= ~(1u << j);
+                mark_joint_homed(j, true, false);
+                continue;
+            }
             bool on_board = km && km->has_home_program() && j < 8 && m.hp[j].search_vel != 0;
             if (!on_board) { mark_joint_homed(j, true); continue; }
             KmHomeJoint &hj = req.joint[j];
@@ -1868,13 +1875,10 @@ static bool read_kmotion_config(KmConfig &cfg)
     if (input_bits.size() > 64) { fprintf(stderr, "kmotion-motion: [KMOTION] INPUT_BITS: at most 64\n"); return false; }
     cfg.input_bits = input_bits;
     num_dio = (int) ini.num(K, "NUM_DIO", 4);
-    keep_enabled_on_exit = ini.num(K, "KEEP_ENABLED_ON_EXIT", 0) != 0;
-    disable_grace_s = ini.num(K, "DISABLE_GRACE_S", 5.0);
-    if (const char *disp = ini.get("DISPLAY", "DISPLAY")) {
-        std::string g = disp;
-        g.erase(g.find_last_not_of(" \t\r") + 1);
-        gui_comp = g == "axis" ? "axisui" : g;
-    }
+    keep_enabled_on_exit = ini.num("EMC", "KEEP_ENABLED_ON_EXIT", 0) != 0;   // task's and the GUI's key too
+    always_homed = ini.num(K, "ALWAYS_HOMED", 0) != 0;
+    cfg.homed_persist = (int) ini.num(K, "HOMED_PERSIST", -1);
+    if (cfg.homed_persist >= 200) { fprintf(stderr, "kmotion-motion: [KMOTION] HOMED_PERSIST: a persist variable, 0-199\n"); return false; }
     if (num_dio < 0 || num_dio > EMCMOT_MAX_DIO) {
         fprintf(stderr, "kmotion-motion: [KMOTION] NUM_DIO: 0-%d\n", EMCMOT_MAX_DIO);
         return false;
@@ -2131,6 +2135,8 @@ int main(int argc, char *argv[])
             hal_exit(comp_id);
             return 1;
         }
+        still_homed = km->still_homed();
+        if (still_homed) log_print("HOMED_PERSIST: joints 0x%02x homed by the last session, still enabled\n", still_homed);
         log_print("motion: %s; planner %s%s%s; axes", km->mode_name(), cfg.third_order ? "3rd order" : "standard",
                   cfg.third_order && cfg.cubic_knots ? ", cubic knots" : "", cfg.actuator_limits ? ", actuator limits" : ", axis limits");
         for (int i = 0; i < 8; i++)
@@ -2172,7 +2178,6 @@ int main(int argc, char *argv[])
 
     double last = now_s();
     double next = last + period_s;
-    start_time = last;
     while (!quit) {
         double t = now_s();
         double dt = t - last;
@@ -2192,31 +2197,12 @@ int main(int argc, char *argv[])
         rtapi_mutex_give(&emcmotStruct->command_mutex);
         update_pins();
         update_io();
-        if (disable_due > 0) {
-            // task's heartbeat is watched through the grace: a task that has not beaten for
-            // 0.3 s is shutting down (it beats every cycle, a few ms) - the disable is dropped
-            unsigned long long beat = pccomm_taskbeat();
-            if (beat != disable_beat) { disable_beat = beat; disable_beat_t = now_s(); }
-            if (beat != 0 && now_s() - disable_beat_t > 0.3) {
-                disable_due = 0;
-                log_print("task no longer beats: a shutdown's DISABLE, the axes stay enabled (KEEP_ENABLED_ON_EXIT)\n");
-            } else if (!gui_comp.empty() && now_s() - gui_checked_t > 0.3 && (gui_checked_t = now_s(), !gui_comp_present())) {
-                disable_due = 0;
-                log_print("the GUI (%s) is gone: a quit's DISABLE, the axes stay enabled (KEEP_ENABLED_ON_EXIT)\n", gui_comp.c_str());
-            } else if (now_s() >= disable_due) {
-                disable_due = 0;
-                log_print("the held DISABLE goes to the board: task still beats (%llu)\n", beat);
-                if (km && km->is_board()) km->machine_on(false);
-            }
-        }
-
         next += period_s;
         double sleep_s = next - now_s();
         if (sleep_s > 0) usleep((useconds_t) (sleep_s * 1e6));
         else next = now_s();
     }
 
-    if (disable_due > 0) { disable_due = 0; log_print("exit: the axes stay enabled (KEEP_ENABLED_ON_EXIT)\n"); }
     log_print("kmotion-motion stopping\n");
     mcode_stop = true;
     if (mcode_thread.joinable()) mcode_thread.join();

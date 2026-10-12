@@ -189,6 +189,7 @@ struct KmBackend::Impl {
     double last_poll = 0;
     bool connected = false;
     int board_type = 0;             // BOARD_TYPE_KFLOP / BOARD_TYPE_KOGNA (the gather line length differs)
+    unsigned still_homed = 0;       // HOMED_PERSIST as read at the start (every axis enabled), else 0
     std::mutex pcmx;                // persist 100-107 from the last status read, and its count
     int pc_comm[8] = {};
     unsigned pc_count = 0;
@@ -1845,6 +1846,22 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
             }
         }
         d->connected = true;
+        // the homed mask the last session left on the board, valid while every axis of the
+        // coordinate system is still enabled; otherwise cleared here and now
+        if (cfg.homed_persist >= 0) {
+            MAIN_STATUS st;
+            memset(&st, 0, sizeof st);
+            bool all = d->km->GetStatus(st, true) == 0;
+            for (int i = 0; all && i < 8; i++) {
+                int ch = cfg.channel[i];
+                if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((st.Enables >> ch) & 1)) all = false;
+            }
+            int v = 0;
+            if (all && persist_get(cfg.homed_persist, v)) d->still_homed = (unsigned) v & 0xff;
+            else { d->still_homed = 0; persist_set(cfg.homed_persist, 0); }
+            fprintf(stderr, "kmotion-motion: HOMED_PERSIST %d: %s, homed mask 0x%02x\n", cfg.homed_persist,
+                    all ? "every axis enabled" : "an axis is disabled, cleared", d->still_homed);
+        }
     }
     cm->ClearAbort();
     cm->ClearHalt();
@@ -2022,6 +2039,14 @@ bool KmBackend::reload_geo_table()
 {
     if (!d->cfg.geo_file[0]) return false;
     return d->cm->Kinematics->ReadGeoTable(d->cfg.geo_file) == 0;
+}
+
+unsigned KmBackend::still_homed() const { return d->still_homed; }
+
+bool KmBackend::homed_persist_write(unsigned mask)
+{
+    if (d->cfg.simulate || d->cfg.homed_persist < 0) return false;
+    return persist_set(d->cfg.homed_persist, (int) mask);
 }
 
 const KmAxisParams &KmBackend::axis_params(int axis) const
