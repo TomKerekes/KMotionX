@@ -132,6 +132,11 @@ struct KmConfig {
     // coordinated motion. probe_bit -1 = probe moves run as plain moves that never trip
     int probe_bit = -1;                       // the probe's input bit (one the status carries) ...
     int probe_level = 1;                      // ... and the level that means contact
+    // limit switches, per axis (LinuxCNC joint) as channel[]: the input bit of each one (one
+    // the status carries; -1 none) and the level at which a switch is made
+    int limit_neg_bit[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    int limit_pos_bit[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    int limit_level = 1;
     // [KMOTION] HOMED_PERSIST: a persist variable holding the mask of the joints that are
     // homed (bit = LinuxCNC joint). Written as joints home and unhome; read at a start that
     // finds every axis enabled, cleared by one that does not; the board's power clears it.
@@ -190,6 +195,7 @@ struct KmState {
     int spindle_at_speed_done;    // ... a read made once this many spindle commands were done (cf. spindle_done)
     unsigned status_count;        // board: status reads so far
     unsigned long long input_states;  // board: bit i = KmConfig.input_bits[i] in the last status read
+    unsigned neg_limit, pos_limit;    // board: bit = axis whose limit switch is made (KmConfig.limit_*_bit), last status read
     bool probe_contact;           // board: the probe bit at its contact level, in the last status read
     int probe_serial;             // counts finished probe moves; the outcome and position are the last one's
     int probe_outcome;            // KM_PROBE_*

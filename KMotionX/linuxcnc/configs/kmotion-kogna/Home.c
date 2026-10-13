@@ -28,6 +28,8 @@
 // the index bit (-1 = none). Set here for the Thread7 home-switch simulator on this Kogna:
 // channels 0,1,2 read bits 46,47,48, each driven high (polarity 1) when that axis's
 // Destination falls below -1000/-2000/-3000 counts - so all three must search negative.
+// (The simulator makes limit switches too, bits 49-54, 500 counts beyond the home switches
+// and above +2000: kmotion-motion reads those, this program does not.)
 #include "KMotionDef.h"
 
 #define N_HOME_CHANNELS 3

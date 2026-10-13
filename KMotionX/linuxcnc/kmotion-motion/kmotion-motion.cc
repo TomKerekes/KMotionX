@@ -112,6 +112,8 @@ static bool axes_seen_enabled = false; // since the ENABLE, every axis was seen 
                                        // a fault on the board, or the KMotion console - takes the
                                        // machine off and unhomes the joint, as motmod's amp fault
 static bool mcode_configured[100];
+static bool limits_configured = false;  // [KMOTION] LIMIT_NEG_BITS / LIMIT_POS_BITS name a switch
+static bool overriding = false;         // a jog is running under OVERRIDE_LIMITS (motmod's emcmotInternal->overriding)
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
 
@@ -230,7 +232,7 @@ struct Model {
     unsigned wj_status_seen;    // the status read last logged for it
     int wj_logged;              // status reads logged since it started
     double joint_home[EMCMOT_MAX_JOINTS];
-    struct HomingParams { double home, offset, final_vel, search_vel, latch_vel; int flags, sequence; };
+    struct HomingParams { double home, offset, final_vel, search_vel, latch_vel; int flags, sequence; int volatile_home = 0; };
     HomingParams hp[EMCMOT_MAX_JOINTS];       // from SET_JOINT_HOMING_PARAMS
     int home_seen;          // backend homing runs already taken into account
     unsigned home_pending;  // joints the board is homing
@@ -479,6 +481,8 @@ static std::string joints_text(const double v[8])
     return b;
 }
 
+static void limit_switches();          // below, after the HAL pins it reads
+
 // diagnostics while the board runs a world jog: the first status reads after it starts
 // (counted by status read, not by time), the commanded joints next to their feedback
 static void log_world_jog_status()
@@ -595,6 +599,7 @@ static void model_step(double dt)
             segment_pos(s, s.progress / s.length, m.pos);
         }
     }
+    limit_switches();
     // jogs (free mode: joints, teleop: axes - identical without a KINEMATICS)
     bool stepped = false;
     for (int i = 0; i < NAXES; i++) {
@@ -672,6 +677,71 @@ struct Pins {
     hal_bool_t kspindle_at_speed;    // spindle 0 at speed, as motion uses it (for a GUI's LED)
 };
 static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires that
+
+// machine off from inside (a limit switch made, as motmod's amp-fault path): what the DISABLE
+// command does - the motion stopped, the board's axes disabled - and nothing unhomed, as
+// motmod keeps a faulted joint homed
+static void machine_off(bool disable_board)
+{
+    SET_MOTION_ENABLE_FLAG(0);
+    if (km) km->abort();
+    if (km && km->is_board() && disable_board) km->machine_on(false);
+    if (emcmotStatus->spindle_status[0].state) {
+        spindle_status_t &ss = emcmotStatus->spindle_status[0];
+        ss.speed = 0; ss.direction = 0; ss.state = 0;
+        spindle_to_board();
+    }
+    m.queue.clear();
+    m.held.clear();
+    m.active = false;
+    m.paused = false;
+    stop_jogs(-1);
+    update_motion_state();
+}
+
+// limit switches, as motmod's check_for_faults(): a joint's switch is made when the board's
+// bit says so ([KMOTION] LIMIT_NEG_BITS / LIMIT_POS_BITS, read with the status) or the HAL
+// pin joint.N.neg-lim-sw-in / pos-lim-sw-in is set. A switch made and not overridden
+// (OVERRIDE_LIMITS, the GUI's "ignore limits") trips: the joint gets its error flag, one
+// message, and the machine goes off - the joint stays homed. A joint being homed is exempt
+// (its home switch may be the limit switch). The override lasts for the jog made under it,
+// as motmod's does: when that jog ends, the limits count again
+static void limit_switches()
+{
+    bool board = km && km->is_board();
+    bool trip = false;
+    for (int j = 0; j < 8 && j < num_joints; j++) {
+        emcmot_joint_t *joint = &joints[j];
+        bool neg = hal_get_bool(pins->joint[j].neg_lim_sw) || (board && ((m.ks.neg_limit >> j) & 1));
+        bool pos = hal_get_bool(pins->joint[j].pos_lim_sw) || (board && ((m.ks.pos_limit >> j) & 1));
+        SET_JOINT_NHL_FLAG(joint, neg);
+        SET_JOINT_PHL_FLAG(joint, pos);
+        if (!GET_JOINT_ACTIVE_FLAG(joint) || !GET_MOTION_ENABLE_FLAG()) continue;
+        unsigned ovr = emcmotStatus->overrideLimitMask;
+        bool neg_ovr = (ovr >> (2 * j)) & 1, pos_ovr = (ovr >> (2 * j + 1)) & 1;
+        if (!((pos && !pos_ovr) || (neg && !neg_ovr))) continue;
+        if (m.home_pending & (1u << j)) continue;
+        if (!GET_JOINT_ERROR_FLAG(joint)) report_error("joint %d on limit switch error", j);
+        SET_JOINT_ERROR_FLAG(joint, 1);
+        trip = true;
+    }
+    if (trip) {
+        log_print("limit switch made: machine off\n");
+        machine_off(true);
+        // the error flag served as the once-only latch for the message; with the machine
+        // off the limits are not looked at until the next ENABLE, which clears the flags
+        // anyway. Left set, task would see the joint in error and abort every cycle, each
+        // abort a stop on the board (motmod keeps it set: its aborts cost nothing)
+        for (int j = 0; j < 8 && j < num_joints; j++) SET_JOINT_ERROR_FLAG(&joints[j], 0);
+    }
+    if (emcmotStatus->overrideLimitMask && any_jog_running()) overriding = true;
+    if (overriding && !any_jog_running()) {
+        overriding = false;
+        emcmotStatus->overrideLimitMask = 0;
+        log_print("the jog under OVERRIDE_LIMITS is over: limits count again\n");
+    }
+}
+
 
 #define PIN(call) do { int r_ = (call); if (r_ < 0) { fprintf(stderr, "kmotion-motion: HAL pin failed: %s\n", strerror(-r_)); return r_; } } while (0)
 
@@ -1027,6 +1097,26 @@ static void start_jog(int index, bool to_target, double target, double vel)
     if (index < 0 || index >= NAXES) return;
     if (!GET_MOTION_ENABLE_FLAG() || (km ? m.ks.running : (m.active && !m.paused))) return;
     bool teleop = GET_MOTION_TELEOP_FLAG();
+    if (!teleop && index < 8) {
+        // motmod's joint_jog_ok(): off a limit switch that is made, not further onto it. Both
+        // made at once (one input for both) tells nothing about the direction: not refused
+        emcmot_joint_t *joint = &joints[index];
+        double cur = joint_kins ? m.act[index] : m.pos[index];
+        double dir = to_target ? target - cur : vel;
+        if (!(GET_JOINT_PHL_FLAG(joint) && GET_JOINT_NHL_FLAG(joint))) {
+            if (dir > 0 && GET_JOINT_PHL_FLAG(joint)) { report_error("Can't jog joint %d further past max hard limit.", index); return; }
+            if (dir < 0 && GET_JOINT_NHL_FLAG(joint)) { report_error("Can't jog joint %d further past min hard limit.", index); return; }
+        }
+    } else if (teleop) {
+        // a world jog moves every joint: none while one is on its limit switch
+        for (int j = 0; j < 8 && j < num_joints; j++) {
+            emcmot_joint_t *joint = &joints[j];
+            if (GET_JOINT_ACTIVE_FLAG(joint) && (GET_JOINT_PHL_FLAG(joint) || GET_JOINT_NHL_FLAG(joint))) {
+                report_error("joint %d is on its limit switch: jog it off in joint mode", j);
+                return;
+            }
+        }
+    }
     if (km && km->is_board()) {
         if (joint_kins && teleop) {
             // a world jog with kinematics moves every actuator: a planner move toward the
@@ -1120,6 +1210,14 @@ static void start_jog(int index, bool to_target, double target, double vel)
 // move past the limits reached the planner and the board unchecked
 static bool in_range(const emcmot_command_t &cmd, const char *move_type)
 {
+    // motmod's limits_ok(): no move while a joint is on its limit switch
+    for (int j = 0; j < 8 && j < num_joints; j++) {
+        emcmot_joint_t *joint = &joints[j];
+        if (GET_JOINT_ACTIVE_FLAG(joint) && (GET_JOINT_PHL_FLAG(joint) || GET_JOINT_NHL_FLAG(joint))) {
+            report_error("%s move on line %d: joint %d is on its limit switch", move_type, cmd.id, j);
+            return false;
+        }
+    }
     double end[NAXES];
     pose_to_array(cmd.pos, end);
     bool ok = true;
@@ -1274,6 +1372,7 @@ static void handle_command()
         board_lost = false;
         axes_seen_enabled = false;
         if (always_homed) for (int j = 0; j < num_joints; j++) mark_joint_homed(j, true, false);
+        for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) SET_JOINT_ERROR_FLAG(&joints[j], 0);   // a limit switch trip, cleared as motmod does
         SET_MOTION_ENABLE_FLAG(1);
         SET_MOTION_ERROR_FLAG(0);
         if (km && km->is_board()) km->machine_on(true);
@@ -1281,24 +1380,9 @@ static void handle_command()
         break;
     case EMCMOT_DISABLE:
         log_print("DISABLE\n");
-        SET_MOTION_ENABLE_FLAG(0);
-        if (km) km->abort();
-        if (km && km->is_board()) {
-            if (keep_enabled_on_exit && !enabled_once)
-                log_print("task's startup DISABLE: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
-            else km->machine_on(false);
-        }
-        if (emcmotStatus->spindle_status[0].state) {
-            spindle_status_t &ss = emcmotStatus->spindle_status[0];
-            ss.speed = 0; ss.direction = 0; ss.state = 0;
-            spindle_to_board();
-        }
-        m.queue.clear();
-        m.held.clear();
-        m.active = false;
-        m.paused = false;
-        stop_jogs(-1);
-        update_motion_state();
+        if (km && km->is_board() && keep_enabled_on_exit && !enabled_once)
+            log_print("task's startup DISABLE: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
+        machine_off(!(keep_enabled_on_exit && !enabled_once));
         break;
     case EMCMOT_JOINT_ACTIVATE:
         log_print("JOINT_ACTIVATE joint=%d\n", c->joint);
@@ -1398,7 +1482,10 @@ static void handle_command()
         break;
     case EMCMOT_OVERRIDE_LIMITS:
         log_print("OVERRIDE_LIMITS joint=%d\n", c->joint);
-        emcmotStatus->overrideLimitMask = c->joint < 0 ? 0 : 1;
+        // as motmod: both limits of every joint (joint < 0: none), for the next jog
+        emcmotStatus->overrideLimitMask = 0;
+        if (c->joint >= 0) for (int j = 0; j < 8 && j < num_joints; j++) emcmotStatus->overrideLimitMask |= 3u << (2 * j);
+        overriding = false;
         break;
     case EMCMOT_JOINT_HOME: {
         log_print("JOINT_HOME joint=%d\n", c->joint);
@@ -1441,7 +1528,11 @@ static void handle_command()
     }
     case EMCMOT_JOINT_UNHOME:
         log_print("JOINT_UNHOME joint=%d\n", c->joint);
-        if (c->joint < 0) {
+        // as motmod: -1 every joint, -2 (task's, at machine off and E-stop) only the joints
+        // with [JOINT_n] VOLATILE_HOME - the others stay homed through a machine off
+        if (c->joint == -2) {
+            for (int j = 0; j < num_joints; j++) if (m.hp[j].volatile_home) mark_joint_homed(j, false);
+        } else if (c->joint < 0) {
             for (int j = 0; j < num_joints; j++) mark_joint_homed(j, false);
         } else {
             mark_joint_homed(c->joint, false);
@@ -1657,6 +1748,7 @@ static void handle_command()
             Model::HomingParams &hp = m.hp[c->joint];
             hp.home = c->home; hp.offset = c->offset; hp.final_vel = c->home_final_vel;
             hp.search_vel = c->search_vel; hp.latch_vel = c->latch_vel; hp.flags = c->flags; hp.sequence = c->home_sequence;
+            hp.volatile_home = c->volatile_home;
         }
         break;
     case EMCMOT_SET_JOINT_JERK_LIMIT:
@@ -2059,6 +2151,26 @@ static bool read_kmotion_config(KmConfig &cfg)
         fprintf(stderr, "kmotion-motion: [KMOTION] PROBE_BIT must be a bit the board's status carries, PROBE_ACTIVE 0 or 1\n");
         return false;
     }
+    // limit switches per axis, as CHANNELS: the input bit of each one (a bit the status
+    // carries, -1 none) and the level at which a switch is made
+    auto limit_bits = [&](const char *key, int *bits) {
+        const char *v = ini.get(K, key);
+        if (!v) return true;
+        std::istringstream in(v);
+        int b, i = 0;
+        while (i < 8 && in >> b) {
+            if (b >= 0 && !km_status_has_bit(b)) {
+                fprintf(stderr, "kmotion-motion: [KMOTION] %s = %s: bit %d is not one the board's status carries\n", key, v, b);
+                return false;
+            }
+            bits[i++] = b;
+            if (b >= 0) limits_configured = true;
+        }
+        return true;
+    };
+    if (!limit_bits("LIMIT_NEG_BITS", cfg.limit_neg_bit) || !limit_bits("LIMIT_POS_BITS", cfg.limit_pos_bit)) return false;
+    cfg.limit_level = (int) ini.num(K, "LIMIT_ACTIVE", 1);
+    if (cfg.limit_level != 0 && cfg.limit_level != 1) { fprintf(stderr, "kmotion-motion: [KMOTION] LIMIT_ACTIVE must be 0 or 1\n"); return false; }
     // programs that keep running must not share a thread with programs loaded on demand
     std::vector<std::pair<int, std::string>> forever = cfg.start_programs;
     if (cfg.enable_program[0]) forever.emplace_back(cfg.enable_thread, cfg.enable_program);

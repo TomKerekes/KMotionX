@@ -56,6 +56,19 @@ through the same shared memory block.
     are the machine's business and sit in a table at the top of Home.c. Stop or machine-off
     during homing kills the thread and stops the jogs. A joint with `HOME_SEARCH_VEL = 0`, or
     no `HOME_PROGRAM`, is declared homed where it stands.
+  - **Limit switches** are per joint, as LinuxCNC's own: `[KMOTION] LIMIT_NEG_BITS` and
+    `LIMIT_POS_BITS` name each joint's switch bit (in `CHANNELS` order, -1 none; a bit the
+    status carries) and `LIMIT_ACTIVE` the level at which a switch is made; the HAL pins
+    `joint.N.neg-lim-sw-in` / `pos-lim-sw-in` count as well (the only source in simulate
+    mode). Handled as motmod's `check_for_faults()` does: a switch made and not overridden
+    sets the joint's error flag, says "joint N on limit switch error" once and takes the
+    machine off (the joint stays homed); a joint being homed is exempt. The GUI's "ignore
+    limits" (`OVERRIDE_LIMITS`) lets the next joint jog run - off the switch, not further
+    onto it ("Can't jog joint N further past max hard limit") - and the limits count again
+    when that jog ends; no program move or world jog while a switch is made. A robot's
+    switches sit on its actuators, so there is no CAD-space hard limit. The bench's
+    `C Programs/SimulateHomes.c` makes the switches on bits 49-54 from the destinations
+    (`backend-test limits`).
   - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
     Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
     each one of KMotion's M-code actions, carried out as the G-code interpreter's

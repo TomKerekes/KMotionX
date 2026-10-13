@@ -153,6 +153,7 @@ struct KmBackend::Impl {
     // X's counts per inch, the surface speed in in/s and the maximum RPM
     std::atomic<double> css_xoff{0}, css_k{0}, css_surface{0}, css_max_rpm{0};
     std::atomic<unsigned long long> input_states{0};   // poller: KmConfig.input_bits as last read
+    std::atomic<unsigned> neg_limits{0}, pos_limits{0};   // poller: limit switches made, bit = axis
     std::atomic<int> mcode_posted{0}, mcode_done{0}, mcode_result{0};   // user M codes: tickets
     std::atomic<bool> probe_contact{false};    // poller: the probe bit at its contact level
     // G38: the probe move is being planned and downloaded (the poller watches for a trip
@@ -901,6 +902,15 @@ static void w_poll_board(KmBackend::Impl *d)
     for (size_t i = 0; i < d->cfg.input_bits.size() && i < 64; i++)
         if (status_bit(status, d->cfg.input_bits[i]) == 1) in |= 1ull << i;
     d->input_states = in;
+    {
+        unsigned neg = 0, pos = 0;
+        for (int i = 0; i < 8; i++) {
+            if (d->cfg.limit_neg_bit[i] >= 0 && status_bit(status, d->cfg.limit_neg_bit[i]) == d->cfg.limit_level) neg |= 1u << i;
+            if (d->cfg.limit_pos_bit[i] >= 0 && status_bit(status, d->cfg.limit_pos_bit[i]) == d->cfg.limit_level) pos |= 1u << i;
+        }
+        d->neg_limits = neg;
+        d->pos_limits = pos;
+    }
     if (d->cfg.probe_bit >= 0) d->probe_contact = status_bit(status, d->cfg.probe_bit) == d->cfg.probe_level;
     // a probe trip while the worker still plans or downloads the probe move: the watcher's
     // feed hold freezes the board's execution, and the planner's download pacing would wait
@@ -2121,6 +2131,8 @@ void KmBackend::state(KmState &out)
     for (int i = 0; i < 8; i++) if (d->jog_finished[i] != d->jog_issued[i]) out.jog_busy |= 1u << i;
     out.status_count = d->status_count;
     out.input_states = d->input_states;
+    out.neg_limit = d->cfg.simulate ? 0 : d->neg_limits.load();
+    out.pos_limit = d->cfg.simulate ? 0 : d->pos_limits.load();
     out.probe_contact = d->probe_contact;
     if (d->cfg.simulate || d->cfg.spindle_at_speed == KM_AT_SPEED_NONE) {
         out.spindle_at_speed = true;              // nothing to wait for

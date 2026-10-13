@@ -25,6 +25,10 @@
 //                         runs until it is stopped and the board has slowed to a stop, an
 //                         increment until the board is at the target (at the jog speed), a
 //                         stop ends an increment early, and an increment of 0 ends at once
+//   backend-test limits   (KM_BOARD=1 only) limit switches read with the status: C Programs/
+//                         SimulateHomes.c (started on thread 7) makes channel 0's positive
+//                         switch, bit 52, above +2000 counts and its negative one, bit 49,
+//                         below -1500; jogs to X1, X0, X-0.7 and back show them in the state
 //   backend-test atbit    (KM_BOARD=1 only) SPINDLE_AT_SPEED = BIT 1030 1: the at-speed state
 //                         follows virtual bit 1030 as the test sets and clears it
 //   backend-test io       (KM_BOARD=1 only) an output bit (set_bit 1026) read back as an input
@@ -594,6 +598,37 @@ static void scenario_atbit(KmBackend &km)
     check(board.WriteLine("ClearBit1030") == 0 && settle(false), "clear again: not at speed");
 }
 
+static void scenario_limits(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  limits: board mode only (KM_BOARD=1)\n"); return; }
+    // SimulateHomes.c (main started it on thread 7) makes the limit bits from the channels'
+    // destinations: channel 0's positive switch (bit 52) above +2000 counts, 0.787 in at 2540
+    // counts/in, its negative one (bit 49) below -1500 counts, -0.591 in
+    KmState st;
+    auto limits = [&](unsigned neg, unsigned pos, const char *what) {
+        for (int i = 0; i < 400; i++) {            // a jog of 1 in at 2 in/s, then the status
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            km.state(st);
+            if (st.message[0]) printf("  message: %s\n", st.message);
+            if ((st.neg_limit & 1) == neg && (st.pos_limit & 1) == pos && !(st.jog_busy & 1)) return true;
+        }
+        printf("  %s: neg 0x%x pos 0x%x jog_busy 0x%x at X%.4f\n", what, st.neg_limit, st.pos_limit, st.jog_busy, st.pos[0]);
+        return false;
+    };
+    km.state(st);
+    double x0 = st.pos[0];
+    printf("  X at %.4f; the positive switch above X%.4f, the negative below X%.4f (counts 0 = X0)\n", x0, 2000 / 2540.0, -1500 / 2540.0);
+    check(limits(0, 0, "at the start"), "no limit switch made at the start");
+    km.jog_to(0, 1.0, 2.0);
+    check(limits(0, 1, "after a jog to X1"), "X1: the positive switch (bit 52) is made, in the state");
+    km.jog_to(0, 0.0, 2.0);
+    check(limits(0, 0, "back at X0"), "X0: made no more");
+    km.jog_to(0, -0.7, 2.0);
+    check(limits(1, 0, "after a jog to X-0.7"), "X-0.7: the negative switch (bit 49) is made");
+    km.jog_to(0, x0, 2.0);
+    check(limits(0, 0, "back at the start"), "back at the start: none made");
+}
+
 static void scenario_io(KmBackend &km)
 {
     if (!km.is_board()) { printf("  io: board mode only (KM_BOARD=1)\n"); return; }
@@ -1001,6 +1036,11 @@ int main(int argc, char **argv)
             a.p[1] = 10;
             snprintf(a.file, sizeof a.file, "%s/mcodes/M100.c", kogna.c_str());
         }
+        if (strcmp(scenario, "limits") == 0) {       // the switch simulator, as the ini's commented START_PROGRAM
+            cfg.start_programs.emplace_back(7, kogna + "/../../../../C Programs/SimulateHomes.c");
+            for (int i = 0; i < 3; i++) { cfg.limit_neg_bit[i] = 49 + i; cfg.limit_pos_bit[i] = 52 + i; }
+            cfg.limit_level = 1;
+        }
         if (strcmp(scenario, "atbit") == 0) {
             cfg.spindle_at_speed = KM_AT_SPEED_BIT;
             cfg.spindle_at_speed_bit = 1030;
@@ -1026,6 +1066,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "jog") == 0) scenario_jog(*km);
     else if (strcmp(scenario, "atbit") == 0) scenario_atbit(*km);
     else if (strcmp(scenario, "io") == 0) scenario_io(*km);
+    else if (strcmp(scenario, "limits") == 0) scenario_limits(*km);
     else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
     else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
     else if (strcmp(scenario, "joglimit") == 0) scenario_joglimit(*km);
