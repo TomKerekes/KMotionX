@@ -154,6 +154,11 @@ struct KmBackend::Impl {
     std::atomic<double> css_xoff{0}, css_k{0}, css_surface{0}, css_max_rpm{0};
     std::atomic<unsigned long long> input_states{0};   // poller: KmConfig.input_bits as last read
     std::atomic<unsigned> neg_limits{0}, pos_limits{0};   // poller: limit switches made, bit = axis
+    // feed holds (StopImmediate0) queued for the urgent thread and sent by it: a stop's
+    // StopImmediate2 must come after every one of them, or a hold lands last and the board
+    // never runs the next buffer (seen: three aborts in a row from task, then an MDI move
+    // accepted and sitting in the buffer for good while jogs still worked)
+    std::atomic<unsigned> holds_queued{0}, holds_sent{0};
     std::atomic<int> mcode_posted{0}, mcode_done{0}, mcode_result{0};   // user M codes: tickets
     std::atomic<bool> probe_contact{false};    // poller: the probe bit at its contact level
     // G38: the probe move is being planned and downloaded (the poller watches for a trip
@@ -230,6 +235,7 @@ struct KmBackend::Impl {
     void send_urgent(const std::string &cmd, int jog_axis = -1)
     {
         std::lock_guard<std::mutex> lock(umx);
+        if (cmd == "StopImmediate0") holds_queued++;
         uq.push_back(Urgent{cmd, jog_axis});
         ucv.notify_one();
     }
@@ -443,11 +449,15 @@ static int begin_move(KmBackend::Impl *d, int id)
             for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(d->pos[i] - was[i]));
             if (moved > 1e-6) set_cm_position(d, d->pos);    // cmd_end too
         }
-        char t[400];
+        char t[600];
         snprintf(t, sizeof t, "planner run start (line %d): board position %s X%.5f Y%.5f Z%.5f, the planner was at "
                  "X%.5f Y%.5f Z%.5f (%.6f away), now X%.5f Y%.5f Z%.5f; abort %d halt %d",
                  id, read ? "read" : "NOT READ", d->pos[0], d->pos[1], d->pos[2], was[0], was[1], was[2], moved,
                  cm->current_x, cm->current_y, cm->current_z, (int) cm->GetAbort(), (int) cm->GetHalt());
+        char t2[120];
+        snprintf(t2, sizeof t2, "board stop state %d (0 none, 1 holding, 2 held), holds queued %u sent %u", d->stop_state.load(),
+                 d->holds_queued.load(), d->holds_sent.load());
+        strncat(t, t2, sizeof t - strlen(t) - 1);
         d->trace(t);
     }
     int seq = ++d->serial;
@@ -615,6 +625,12 @@ static void board_stop(KmBackend::Impl *d)
         }
         if (now_s() - t0 > 10) { d->message("the board did not come to a stop within 10 s"); break; }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    // every hold queued so far (abort(), pause()) must be on the board before the clear:
+    // a hold sent after it would stay, and the next buffer would never run
+    for (double t1 = now_s(); d->holds_sent != d->holds_queued;) {
+        if (now_s() - t1 > 2) { d->message("a feed hold queued for the board did not go out within 2 s"); break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (d->km->WriteLine("StopImmediate2")) d->message("StopImmediate2 failed");
     if (was_moving) fprintf(stderr, "kmotion-motion: board stopped (%.2f s)\n", now_s() - t0);
@@ -1060,8 +1076,10 @@ static void urgent_main(KmBackend::Impl *d)
             d->uq.pop_front();
         }
         double t0 = now_s();
-        if (d->lost) continue;
+        bool hold = cmd == "StopImmediate0";
+        if (d->lost) { if (hold) d->holds_sent++; continue; }
         if (d->km->WriteLine(cmd.c_str())) d->message(std::string("board command failed: ") + cmd);
+        if (hold) d->holds_sent++;
         if (jog_axis >= 0) d->jog_written[jog_axis]++;
         if (getenv("KM_DEBUG_STOP") && cmd.compare(0, 13, "StopImmediate") == 0)
             fprintf(stderr, "kmotion-motion: %s sent, took %.3f s\n", cmd.c_str(), now_s() - t0);
