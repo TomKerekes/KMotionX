@@ -1,8 +1,12 @@
 // backend-test: exercises KmBackend alone (no LinuxCNC, no board), followed in real time
-// at 5 ms as the protocol loop does. "make test" runs the first three scenarios:
+// at 5 ms as the protocol loop does. "make test" runs the first four scenarios:
 //   backend-test          resume-test.ngc's moves: the planner's timing and blending
 //   backend-test arcs     arc directions, planes and multiple turns as LinuxCNC encodes them
 //   backend-test abort    an abort in mid-program, then a move after it
+//   backend-test joglimit a world jog stops at a joint's soft limit (identity kinematics, the
+//                         joint's limit tighter than the axis's): kmotion-motion's decision
+//                         (kmotion-joglimit.h) driven as its simulate model drives a jog, and
+//                         as a planner move toward the axis limit the way the board runs one
 //   backend-test circles  two full circles as consecutive moves
 //   backend-test quit     pause mid-run, then abort and tear the backend down (process exit)
 //   backend-test gated    36 chords of a circle handed over the way task does it: only while
@@ -41,6 +45,7 @@
 // settings (2540 counts/in, 9.84 in/s, MinirouterInit.c): "abort" then measures the real
 // stop on the Kogna, with KM_JOG0=1 adding the Jog<ch>=0 the protocol side used to send.
 #include "kmotion-backend.h"
+#include "kmotion-joglimit.h"
 #include "KMotionDLL.h"   // the spindle scenario watches channel 3 through a second connection
 #undef check              // KMotionX's dbg.h has a check() macro; the harness has its own
 #include <array>
@@ -748,6 +753,87 @@ static void scenario_kins3link(KmBackend &km)
     check(f.messages.empty(), "no messages");
 }
 
+// a world jog in a config with identity kinematics stops at a joint's soft limit: the
+// decision kmotion-motion.cc makes each cycle (kmotion-joglimit.h: the joint beyond its
+// [JOINT_n] limit and heading further out, on the positions reported), first driven the way
+// its simulate model drives a world jog (positions stepped at the jog speed and handed to
+// the planner), then as the board runs one (a planner move toward the axis's limit, aborted
+// when a joint reaches its own). Joint 0's limit, 5, is tighter than the axis's, 10
+static void scenario_joglimit(KmBackend &km)
+{
+    check(km.identity_kinematics(), "no KINEMATICS: joint j is axis j");
+    double lo[8], hi[8];
+    for (int j = 0; j < 8; j++) { lo[j] = -10; hi[j] = 10; }
+    hi[0] = 5;
+    const unsigned active = 7;                  // joints 0-2
+    JogLimitWatch w;
+    KmState st;
+    km.state(st);
+    double pos[9], act[8];
+    memcpy(pos, st.pos, sizeof pos);
+    auto joints_from_pos = [&] { for (int j = 0; j < 8; j++) act[j] = pos[j]; };
+    // +X at 1 unit/s in 5 ms steps from X4.9 (the simulate model's jog): 5.005 is the first
+    // position past joint 0's limit
+    pos[0] = 4.9;
+    km.set_position(pos);
+    joints_from_pos();
+    w.start(act);
+    int hit = -1, dir = 0, steps = 0;
+    for (; hit < 0 && steps < 100; steps++) {
+        pos[0] += 1.0 * 0.005;
+        km.set_position(pos);
+        joints_from_pos();
+        hit = w.step(act, lo, hi, active, &dir);
+    }
+    printf("  +X jog from X4.9: joint %d on its %s limit at X%.3f after %d steps\n", hit, dir > 0 ? "max" : "min", pos[0], steps);
+    check(hit == 0 && dir == 1 && fabs(pos[0] - 5.005) < 1e-9, "the jog stops at the first position past joint 0's max limit 5");
+    check(w.step(act, lo, hi, active, &dir) < 0, "standing beyond the limit: no stop");
+    bool any = false;
+    for (int i = 0; i < 20; i++) { pos[0] -= 0.005; joints_from_pos(); if (w.step(act, lo, hi, active, &dir) >= 0) any = true; }
+    check(!any && pos[0] < 5, "a jog back from beyond the limit is never stopped (the joint can come back)");
+    pos[0] = 5.5;                               // joint 0 parked past its limit, Y jogging
+    joints_from_pos();
+    w.start(act);
+    any = false;
+    for (int i = 0; i < 20; i++) { pos[1] += 0.005; joints_from_pos(); if (w.step(act, lo, hi, active, &dir) >= 0) any = true; }
+    check(!any, "joint 0 parked past its limit while Y jogs: no stop");
+    pos[0] += 0.005;
+    joints_from_pos();
+    check(w.step(act, lo, hi, active & ~1u, &dir) < 0, "an inactive joint past its limit: no stop");
+    pos[0] = -9.99;                             // the min side
+    joints_from_pos();
+    w.start(act);
+    hit = -1;
+    for (steps = 0; hit < 0 && steps < 100; steps++) { pos[0] -= 0.005; joints_from_pos(); hit = w.step(act, lo, hi, active, &dir); }
+    check(hit == 0 && dir == -1 && pos[0] < -10 && pos[0] > -10.01, "-X: stopped at the first position past joint 0's min limit -10");
+
+    // the board way: from X0 a planner move toward X10 (the axis's limit) at 1 unit/s; the
+    // watch sees the state's joints every 5 ms and the first hit aborts the move, as
+    // kmotion-motion does. The planner's position must have taken the start first
+    for (int i = 0; i < 9; i++) pos[i] = 0;
+    pos[1] = 0;
+    km.set_position(pos);
+    for (int i = 0; i < 200; i++) { km.state(st); if (fabs(st.pos[0]) < 1e-9 && fabs(st.pos[1]) < 1e-9) break; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    check(fabs(st.pos[0]) < 1e-9, "the planner stands at X0 for the move");
+    double end[9] = {10, 0, 0, 0, 0, 0, 0, 0, 0};
+    Follower f(km);
+    w.start(st.act_pos);
+    km.line(end, 1.0, 100, false, 1);
+    double x_hit = -1;
+    int hit_dir = 0;
+    while (f.t < 15) {
+        f.run(f.t + 0.005, true);
+        int h = w.step(f.st.act_pos, lo, hi, active, &hit_dir);
+        if (h >= 0) { hit = h; x_hit = f.st.pos[0]; km.abort(); break; }
+    }
+    f.run(f.t + 3.0);                           // to rest
+    printf("  planner move toward X10: joint %d hit its %s limit at X%.4f, at rest at X%.4f\n", hit, hit_dir > 0 ? "max" : "min", x_hit, f.st.pos[0]);
+    check(hit == 0 && hit_dir == 1 && x_hit > 5 && x_hit < 5.05, "the move is aborted at the first report past joint 0's limit");
+    check(!f.st.running && f.st.pos[0] > 5 && f.st.pos[0] < 5.1, "and comes to rest just past it (1/s at 100/s^2 stops in 0.005)");
+    check(f.st.errors == 0, "no error counted for the stop");
+    check(f.messages.empty(), "no messages from the backend");
+}
+
 static void scenario_abort(KmBackend &km)
 {
     bool board = km.is_board();
@@ -902,6 +988,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "io") == 0) scenario_io(*km);
     else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
     else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
+    else if (strcmp(scenario, "joglimit") == 0) scenario_joglimit(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();

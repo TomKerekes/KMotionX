@@ -33,7 +33,7 @@ all: kmotion-motion kmotion-mcode
 kmotion-motion: $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS) $(LIBS) $(KM_LIBS)
 
-build/kmotion-motion.o: kmotion-motion.cc kmotion-backend.h kmotion-pccomm.h | build
+build/kmotion-motion.o: kmotion-motion.cc kmotion-backend.h kmotion-pccomm.h kmotion-joglimit.h | build
 	$(CXX) $(OPT) $(DEFS) $(INC) -Wall -Wextra -c -o $@ $<
 
 # the board's commands to the PC: LinuxCNC's NML on one side, PC-DSP.h's codes on the other
@@ -63,8 +63,9 @@ test: build/backend-test
 	./build/backend-test program 2>/dev/null | tail -14
 	./build/backend-test arcs 2>/dev/null | tail -16
 	./build/backend-test abort 2>/dev/null | tail -14
+	./build/backend-test joglimit 2>/dev/null | tail -16
 
-build/backend-test: backend-test.cc build/kmotion-backend.o kmotion-backend.h | build
+build/backend-test: backend-test.cc build/kmotion-backend.o kmotion-backend.h kmotion-joglimit.h | build
 	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) -I. $(KM_INC) -Wno-unknown-pragmas -Wno-overloaded-virtual -o $@ backend-test.cc build/kmotion-backend.o $(KM_LIBS) -lpthread
 
 .PHONY: test

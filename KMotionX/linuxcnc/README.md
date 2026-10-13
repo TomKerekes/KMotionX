@@ -169,7 +169,10 @@ through the same shared memory block.
     joint mode from world mode: a joint jog moves one actuator on the board (within the
     joint's `[JOINT_n]` limits - with or without a KINEMATICS, a continuous jog now runs to the
     limit, as motmod's do), a world jog is a planner move toward the axis's `[AXIS_*]` limit (or
-    the increment), stopped at the button's release the way an abort stops a move; the joint
+    the increment), stopped at the button's release the way an abort stops a move, and
+    stopped the same way, with one message, when a joint reaches its `[JOINT_n]` limit heading
+    out (motmod stops its teleop jogs there too; a joint already past its limit can be jogged
+    back; `kmotion-joglimit.h`, on the positions the status reports); the joint
     positions shown are the actuators' (from the status, or where the position puts them in
     simulate mode); homing is per joint as before (absolute actuators: `HOME_SEARCH_VEL = 0`,
     homed where they stand, nothing moves). `[KMOTION] ACTUATOR_LIMITS = 1` then takes the

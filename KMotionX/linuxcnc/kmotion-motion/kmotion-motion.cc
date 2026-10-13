@@ -55,6 +55,7 @@
 #include <motion_types.h>
 
 #include "kmotion-backend.h"
+#include "kmotion-joglimit.h"
 #include "kmotion-pccomm.h"
 
 // ---- the shared memory block, with the names mot_priv.h's macros expect ----------
@@ -204,6 +205,7 @@ struct Jog {
     bool held;              // board mode: a continuous jog, running on the board until it is stopped
     bool to_target;
     bool joint;             // simulate, joint_kins: a joint jog moves the actuator, the position follows
+    bool world;             // simulate: a world (teleop) jog, stopped when a joint reaches its soft limit
     double target;
     double vel;             // signed for continuous jogs
 };
@@ -221,6 +223,7 @@ struct Model {
     double axis_acc[NAXES];     // the axes' acceleration limits (SET_AXIS_ACC_LIMIT): world jogs
     double act[NAXES];          // joint_kins: the joints (the actuators) as last known
     bool world_jog;             // board, joint_kins: a world jog runs as a planner move, until its release
+    JogLimitWatch limit_watch;  // a world jog's joints against their soft limits (kmotion-joglimit.h)
     double joint_home[EMCMOT_MAX_JOINTS];
     struct HomingParams { double home, offset, final_vel, search_vel, latch_vel; int flags, sequence; };
     HomingParams hp[EMCMOT_MAX_JOINTS];       // from SET_JOINT_HOMING_PARAMS
@@ -269,6 +272,7 @@ static void model_init()
     m.spindle_posted = 0;
     m.home_pending = 0;
     m.world_jog = false;
+    m.limit_watch = JogLimitWatch();
     memset(&m.ks, 0, sizeof m.ks);
     m.last_move_time = 0;
     m.last_type = 0;
@@ -280,12 +284,6 @@ static bool jog_running(int i) { return m.jog[i].active || m.jog[i].held || ((m.
 static bool any_jog_running()
 {
     for (int i = 0; i < NAXES; i++) if (jog_running(i)) return true;
-    return false;
-}
-
-static bool any_jog_active()
-{
-    for (int i = 0; i < NAXES; i++) if (m.jog[i].active) return true;
     return false;
 }
 
@@ -435,6 +433,44 @@ static void spindle_net_scale(spindle_status_t &ss)
 static void release_held();
 static void update_motion_state();
 
+// the joints (the actuators) as the status reports them: the board's, or where the position
+// puts them through the kinematics; without a KINEMATICS joint j is axis j
+static void current_joints(double act[8])
+{
+    if (km && !km->identity_kinematics()) {
+        if (km->is_board()) memcpy(act, m.ks.act_pos, sizeof(double) * 8);
+        else if (!km->cad_to_joints(m.pos, act)) memcpy(act, m.act, sizeof(double) * 8);
+    } else {
+        for (int j = 0; j < 8; j++) act[j] = m.pos[j];
+    }
+}
+
+// a world (teleop) jog stops when a joint reaches its soft limit, as motmod's teleop jogs
+// do: on the board the planner move is aborted (the jog's release does the same), in the
+// simulate model the jog ends; one message. The decision (kmotion-joglimit.h) is made on
+// the joints' positions as reported, and only against a limit the joint is heading out of,
+// so a joint past its limit can be jogged back
+static void world_jog_limit_check()
+{
+    bool world_jogging = m.world_jog;
+    for (int i = 0; i < NAXES && !world_jogging; i++) world_jogging = m.jog[i].active && m.jog[i].world;
+    if (!world_jogging) return;
+    double act[8], lo[8], hi[8];
+    unsigned active = 0;
+    current_joints(act);
+    for (int j = 0; j < 8; j++) {
+        lo[j] = joints[j].min_pos_limit;
+        hi[j] = joints[j].max_pos_limit;
+        if (j < num_joints && GET_JOINT_ACTIVE_FLAG(&joints[j])) active |= 1u << j;
+    }
+    int dir = 0;
+    int hit = m.limit_watch.step(act, lo, hi, active, &dir);
+    if (hit < 0) return;
+    report_error("joint %d on its soft limit (%s %g), jog stopped", hit, dir > 0 ? "max" : "min", dir > 0 ? hi[hit] : lo[hit]);
+    end_world_jog();
+    for (int i = 0; i < NAXES; i++) if (m.jog[i].world) m.jog[i].active = false;
+}
+
 static void model_step(double dt)
 {
     m.current_vel = 0;
@@ -532,9 +568,11 @@ static void model_step(double dt)
         }
     }
     // jogs (free mode: joints, teleop: axes - identical without a KINEMATICS)
+    bool stepped = false;
     for (int i = 0; i < NAXES; i++) {
         Jog &j = m.jog[i];
         if (!j.active) continue;
+        stepped = true;
         double step = fabs(j.vel) * dt;
         if (j.joint && i < 8) {
             // a joint jog with kinematics: the actuator moves within the joint's limits, the
@@ -567,7 +605,8 @@ static void model_step(double dt)
         if (m.pos[i] < m.jog_min[i]) { m.pos[i] = m.jog_min[i]; j.active = false; }
         if (fabs(j.vel) > m.current_vel) m.current_vel = fabs(j.vel);
     }
-    if (km && any_jog_active()) km->set_position(m.pos);   // the planner continues from here
+    world_jog_limit_check();
+    if (km && stepped) km->set_position(m.pos);   // the planner continues from here (the jog's last step too)
 }
 
 // ---- HAL pins: what motmod offers and GUIs (AXIS at least) expect to find -----------
@@ -964,6 +1003,9 @@ static void start_jog(int index, bool to_target, double target, double vel)
             memcpy(end, m.pos, sizeof end);
             end[index] = t;
             double acc = m.axis_acc[index] > 0 ? m.axis_acc[index] : emcmotStatus->acc;
+            double acts[8];
+            current_joints(acts);
+            m.limit_watch.start(acts);      // the joints' travel is measured from here
             m.world_jog = true;
             km->line(end, fabs(vel), acc, false, 0);
             return;
@@ -988,6 +1030,12 @@ static void start_jog(int index, bool to_target, double target, double vel)
     Jog &j = m.jog[index];
     j.active = true;
     j.joint = joint_kins && !teleop;
+    j.world = teleop;
+    if (teleop) {
+        double acts[8];
+        current_joints(acts);
+        m.limit_watch.start(acts);
+    }
     j.to_target = to_target;
     j.target = target;
     j.vel = vel;
