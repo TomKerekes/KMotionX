@@ -127,6 +127,16 @@ struct KmBackend::Impl {
     std::atomic<bool> aborting{false}; // abort() requested, the worker has not finished it yet
     std::atomic<int> stop_state{0};    // board: MAIN_STATUS.StopImmediateState from the last status poll
     std::atomic<unsigned> status_count{0};   // board: status polls so far
+    double act_fb[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // poller: the channels' Position, in the actuators' units
+    unsigned axis_done = 0;                // poller: AxisDone by axis (bit = LinuxCNC joint)
+    std::atomic<unsigned> lines_posted{0}, lines_begun{0};   // line() calls, and the ones the worker took up
+    std::mutex tmx;                        // traces' own lock: they are written with wmx held, and publish takes smx before wmx
+    std::deque<std::string> traces;        // for the log (under tmx)
+    void trace(const std::string &t)
+    {
+        std::lock_guard<std::mutex> lock(tmx);
+        if (traces.size() < 200) traces.push_back(t);
+    }
     std::atomic<int> errors{0};        // planner failures so far (each one stopped the motion)
     std::atomic<bool> homing{false};   // board: the home program is running
     int home_serial = 0;               // under smx
@@ -420,14 +430,22 @@ static int begin_move(KmBackend::Impl *d, int id)
     if (!d->cfg.simulate && !d->run_active && !d->unflushed) {
         double before[9];
         memcpy(before, d->pos, sizeof before);
-        if (read_board_position(d)) {
-            double moved = 0;
+        double was[3] = {d->cm->current_x, d->cm->current_y, d->cm->current_z};
+        bool read = read_board_position(d);
+        double moved = 0;
+        if (read) {
             for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(d->pos[i] - before[i]));
             if (moved > 1e-6) {
                 set_cm_position(d, d->pos);
                 memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
             }
         }
+        char t[400];
+        snprintf(t, sizeof t, "planner run start (line %d): board position %s X%.5f Y%.5f Z%.5f (poller had it %.6f away), "
+                 "the planner was at X%.5f Y%.5f Z%.5f, now X%.5f Y%.5f Z%.5f; abort %d halt %d",
+                 id, read ? "read" : "NOT READ", d->pos[0], d->pos[1], d->pos[2], moved, was[0], was[1], was[2],
+                 d->cm->current_x, d->cm->current_y, d->cm->current_z, (int) d->cm->GetAbort(), (int) d->cm->GetHalt());
+        d->trace(t);
     }
     int seq = ++d->serial;
     d->ids.push_back(id);
@@ -440,9 +458,22 @@ static int begin_move(KmBackend::Impl *d, int id)
 static void w_line(KmBackend::Impl *d, const Cmd &c)
 {
     int seq = begin_move(d, c.id);
+    d->lines_begun++;
     // the planner's ID argument is its cutter-compensation hint (1/2/3), not a line number
     int r = d->cm->StraightFeedAccelRapid(c.vel, c.acc, c.rapid, true, c.end[0], c.end[1], c.end[2], c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, 0);
     if (!r) memcpy(d->cmd_end, c.end, sizeof d->cmd_end);
+    if (r) {
+        char t[400];
+        std::string why;
+        {
+            std::lock_guard<std::mutex> lock(g_msg_mutex);
+            why = g_message;
+        }
+        snprintf(t, sizeof t, "StraightFeed returned %d (line %d) to X%.5f Y%.5f Z%.5f vel %g acc %g; abort %d halt %d aborting %d; planner message \"%s\"",
+                 r, c.id, c.end[0], c.end[1], c.end[2], c.vel, c.acc, (int) d->cm->GetAbort(), (int) d->cm->GetHalt(),
+                 (int) d->aborting, why.c_str());
+        d->trace(t);
+    }
     harvest(d);
     if (r) fail(d, "StraightFeed", c.id);
 }
@@ -820,6 +851,16 @@ static void w_poll_board(KmBackend::Impl *d)
             d->enabled[i] = true;
         }
     }
+    {
+        unsigned done = 0;
+        for (int i = 0; i < 8; i++) {
+            int ch = d->cfg.channel[i];
+            if (ch < 0 || ch >= N_CHANNELS_KOGNA) continue;
+            d->act_fb[i] = d->scale[i] > 0 ? status.Position[ch] / d->scale[i] : 0;
+            if ((status.AxisDone >> ch) & 1) done |= 1u << i;
+        }
+        d->axis_done = done;
+    }
     if (all_ever) {
         for (int i = 0; i < 8; i++) d->act_pos[i] = d->scale[i] > 0 ? acts[i] / d->scale[i] : 0;
         acts_to_cad(d, acts, d->pos);
@@ -960,6 +1001,10 @@ static void publish(KmBackend::Impl *d)
     memcpy(s.pos, d->pos, sizeof s.pos);
     if (d->cfg.simulate) sim_act_pos(d);
     memcpy(s.act_pos, d->act_pos, sizeof s.act_pos);
+    if (d->cfg.simulate) memcpy(s.act_fb, d->act_pos, sizeof s.act_fb);
+    else memcpy(s.act_fb, d->act_fb, sizeof s.act_fb);
+    s.axis_done = d->axis_done;
+    s.lines_begun = d->lines_begun;
     for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
     s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
@@ -1945,8 +1990,18 @@ int KmBackend::line(const double end[9], double vel, double acc, bool rapid, int
     c.kind = Cmd::LINE;
     memcpy(c.end, end, sizeof c.end);
     c.vel = vel; c.acc = acc; c.rapid = rapid; c.id = id;
+    int serial = (int) ++d->lines_posted;
     d->post(c);
-    return 0;
+    return serial;
+}
+
+bool KmBackend::trace(std::string &line)
+{
+    std::lock_guard<std::mutex> lock(d->tmx);
+    if (d->traces.empty()) return false;
+    line = d->traces.front();
+    d->traces.pop_front();
+    return true;
 }
 
 int KmBackend::arc(const double end[9], const double center[3], const double normal[3], int turn, double vel, double acc, int id)

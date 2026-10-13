@@ -205,7 +205,8 @@ struct Jog {
     bool held;              // board mode: a continuous jog, running on the board until it is stopped
     bool to_target;
     bool joint;             // simulate, joint_kins: a joint jog moves the actuator, the position follows
-    bool world;             // simulate: a world (teleop) jog, stopped when a joint reaches its soft limit
+    int limit_joint = -1;   // simulate: a world jog cut where this joint reaches its soft limit (-1: none),
+    int limit_dir = 0;      // ... its max (+1) or min (-1): reported when the jog arrives there
     double target;
     double vel;             // signed for continuous jogs
 };
@@ -223,7 +224,11 @@ struct Model {
     double axis_acc[NAXES];     // the axes' acceleration limits (SET_AXIS_ACC_LIMIT): world jogs
     double act[NAXES];          // joint_kins: the joints (the actuators) as last known
     bool world_jog;             // board, joint_kins: a world jog runs as a planner move, until its release
-    JogLimitWatch limit_watch;  // a world jog's joints against their soft limits (kmotion-joglimit.h)
+    // the board's world jog cut where a joint reaches its soft limit (kmotion-joglimit.h): the
+    // joint (-1: not cut) and which limit, the planner move's serial (line()), and its log
+    int wj_limit_joint, wj_limit_dir, wj_line;
+    unsigned wj_status_seen;    // the status read last logged for it
+    int wj_logged;              // status reads logged since it started
     double joint_home[EMCMOT_MAX_JOINTS];
     struct HomingParams { double home, offset, final_vel, search_vel, latch_vel; int flags, sequence; };
     HomingParams hp[EMCMOT_MAX_JOINTS];       // from SET_JOINT_HOMING_PARAMS
@@ -272,7 +277,11 @@ static void model_init()
     m.spindle_posted = 0;
     m.home_pending = 0;
     m.world_jog = false;
-    m.limit_watch = JogLimitWatch();
+    m.wj_limit_joint = -1;
+    m.wj_limit_dir = 0;
+    m.wj_line = 0;
+    m.wj_status_seen = 0;
+    m.wj_logged = 0;
     memset(&m.ks, 0, sizeof m.ks);
     m.last_move_time = 0;
     m.last_type = 0;
@@ -293,6 +302,7 @@ static void end_world_jog()
 {
     if (!m.world_jog) return;
     m.world_jog = false;
+    m.wj_limit_joint = -1;
     if (km) km->abort();
 }
 
@@ -305,6 +315,7 @@ static void stop_jogs(int which)       // -1: all
         if (jog_running(i) && km && km->is_board()) km->jog_stop(i);
         m.jog[i].active = false;
         m.jog[i].held = false;
+        m.jog[i].limit_joint = -1;          // released or stopped: it did not arrive at a limit
     }
     if (which < 0 || GET_MOTION_TELEOP_FLAG()) end_world_jog();
 }
@@ -433,42 +444,53 @@ static void spindle_net_scale(spindle_status_t &ss)
 static void release_held();
 static void update_motion_state();
 
-// the joints (the actuators) as the status reports them: the board's, or where the position
-// puts them through the kinematics; without a KINEMATICS joint j is axis j
-static void current_joints(double act[8])
+// the joints at a CAD position: through the kinematics, or joint j = axis j without one
+static bool joints_at(const double pos[9], double jp[8])
 {
-    if (km && !km->identity_kinematics()) {
-        if (km->is_board()) memcpy(act, m.ks.act_pos, sizeof(double) * 8);
-        else if (!km->cad_to_joints(m.pos, act)) memcpy(act, m.act, sizeof(double) * 8);
-    } else {
-        for (int j = 0; j < 8; j++) act[j] = m.pos[j];
-    }
+    if (km && !km->identity_kinematics()) return km->cad_to_joints(pos, jp);
+    for (int j = 0; j < 8; j++) jp[j] = pos[j];
+    return true;
 }
 
-// a world (teleop) jog stops when a joint reaches its soft limit, as motmod's teleop jogs
-// do: on the board the planner move is aborted (the jog's release does the same), in the
-// simulate model the jog ends; one message. The decision (kmotion-joglimit.h) is made on
-// the joints' positions as reported, and only against a limit the joint is heading out of,
-// so a joint past its limit can be jogged back
-static void world_jog_limit_check()
+// where a world jog from `from` toward `to` must end: the first point where an active joint
+// reaches its [JOINT_n] limit heading out (kmotion-joglimit.h), decided once from the path
+static JogLimit world_jog_cut(const double from[9], const double to[9])
 {
-    bool world_jogging = m.world_jog;
-    for (int i = 0; i < NAXES && !world_jogging; i++) world_jogging = m.jog[i].active && m.jog[i].world;
-    if (!world_jogging) return;
-    double act[8], lo[8], hi[8];
+    double lo[8], hi[8];
     unsigned active = 0;
-    current_joints(act);
     for (int j = 0; j < 8; j++) {
         lo[j] = joints[j].min_pos_limit;
         hi[j] = joints[j].max_pos_limit;
         if (j < num_joints && GET_JOINT_ACTIVE_FLAG(&joints[j])) active |= 1u << j;
     }
-    int dir = 0;
-    int hit = m.limit_watch.step(act, lo, hi, active, &dir);
-    if (hit < 0) return;
-    report_error("joint %d on its soft limit (%s %g), jog stopped", hit, dir > 0 ? "max" : "min", dir > 0 ? hi[hit] : lo[hit]);
-    end_world_jog();
-    for (int i = 0; i < NAXES; i++) if (m.jog[i].world) m.jog[i].active = false;
+    return jog_limit(from, to, joints_at, lo, hi, active);
+}
+
+static void report_joint_limit(int joint, int dir, const char *what)
+{
+    report_error("joint %d on its soft limit (%s %g), jog %s", joint, dir > 0 ? "max" : "min",
+                 dir > 0 ? joints[joint].max_pos_limit : joints[joint].min_pos_limit, what);
+}
+
+static std::string joints_text(const double v[8])
+{
+    char b[160];
+    snprintf(b, sizeof b, "%.4f %.4f %.4f", v[0], v[1], v[2]);
+    return b;
+}
+
+// diagnostics while the board runs a world jog: the first status reads after it starts
+// (counted by status read, not by time), the commanded joints next to their feedback
+static void log_world_jog_status()
+{
+    if (!km || !km->is_board() || !m.world_jog || m.wj_logged >= 25 || m.ks.status_count == m.wj_status_seen) return;
+    m.wj_status_seen = m.ks.status_count;
+    m.wj_logged++;
+    log_print("  world jog status %u: X%.5f Y%.5f Z%.5f; joints cmd %s fb %s; running %d lines_begun %u/%d; "
+              "enabled %d%d%d done 0x%x jog_busy 0x%x\n",
+              m.ks.status_count, m.ks.pos[0], m.ks.pos[1], m.ks.pos[2], joints_text(m.ks.act_pos).c_str(),
+              joints_text(m.ks.act_fb).c_str(), (int) m.ks.running, m.ks.lines_begun, m.wj_line,
+              (int) m.ks.enabled[0], (int) m.ks.enabled[1], (int) m.ks.enabled[2], m.ks.axis_done, m.ks.jog_busy);
 }
 
 static void model_step(double dt)
@@ -477,6 +499,8 @@ static void model_step(double dt)
     // coordinated motion
     if (km) {
         km->state(m.ks);                 // the worker thread keeps it current
+        for (std::string t; km->trace(t);) log_print("backend: %s\n", t.c_str());
+        log_world_jog_status();
         if (m.ks.message[0]) report_error("%s", m.ks.message);
         if (km->is_board() && m.ks.connected && GET_MOTION_ENABLE_FLAG() && !board_lost) {
             bool all = true;
@@ -488,6 +512,10 @@ static void model_step(double dt)
                 std::string which;
                 for (int i = 0; i < 8; i++) if (off & (1u << i)) which += std::string(which.empty() ? "" : ", ") + "XYZABCUV"[i];
                 report_error("axis %s disabled on the board: machine off, the joint unhomed", which.c_str());
+                log_print("  at the disable (status %u): X%.5f Y%.5f Z%.5f; joints cmd %s fb %s; running %d world_jog %d "
+                          "done 0x%x jog_busy 0x%x\n", m.ks.status_count, m.ks.pos[0], m.ks.pos[1], m.ks.pos[2],
+                          joints_text(m.ks.act_pos).c_str(), joints_text(m.ks.act_fb).c_str(), (int) m.ks.running,
+                          (int) m.world_jog, m.ks.axis_done, m.ks.jog_busy);
                 SET_MOTION_ENABLE_FLAG(0);
                 m.queue.clear();
                 m.held.clear();
@@ -605,7 +633,18 @@ static void model_step(double dt)
         if (m.pos[i] < m.jog_min[i]) { m.pos[i] = m.jog_min[i]; j.active = false; }
         if (fabs(j.vel) > m.current_vel) m.current_vel = fabs(j.vel);
     }
-    world_jog_limit_check();
+    // a world jog cut at a joint's limit has arrived there: the simulate model's jog ended at
+    // its target, the board's planner move (taken up, no longer running) is over
+    for (int i = 0; i < NAXES; i++) {
+        Jog &j = m.jog[i];
+        if (!j.active && j.limit_joint >= 0) { report_joint_limit(j.limit_joint, j.limit_dir, "stopped"); j.limit_joint = -1; }
+    }
+    if (km && m.world_jog && m.wj_limit_joint >= 0 && (int) m.ks.lines_begun >= m.wj_line && !m.ks.running) {
+        log_print("world jog arrived at joint %d's limit: X%.5f Y%.5f Z%.5f, joints %s\n", m.wj_limit_joint,
+                  m.ks.pos[0], m.ks.pos[1], m.ks.pos[2], joints_text(m.ks.act_pos).c_str());
+        report_joint_limit(m.wj_limit_joint, m.wj_limit_dir, "stopped");
+        m.wj_limit_joint = -1;
+    }
     if (km && stepped) km->set_position(m.pos);   // the planner continues from here (the jog's last step too)
 }
 
@@ -1003,11 +1042,26 @@ static void start_jog(int index, bool to_target, double target, double vel)
             memcpy(end, m.pos, sizeof end);
             end[index] = t;
             double acc = m.axis_acc[index] > 0 ? m.axis_acc[index] : emcmotStatus->acc;
-            double acts[8];
-            current_joints(acts);
-            m.limit_watch.start(acts);      // the joints' travel is measured from here
+            // the move ends where a joint would reach its limit: the board stops there itself
+            double axis_end = end[index];
+            JogLimit cut = world_jog_cut(m.pos, end);
+            if (cut.s < 1) for (int i = 0; i < NAXES; i++) end[i] = m.pos[i] + cut.s * (end[i] - m.pos[i]);
+            log_print("WORLD_JOG %c from X%.5f Y%.5f Z%.5f toward %.5f: %s end %.5f; joints cmd %s fb %s; "
+                      "running %d done 0x%x jog_busy 0x%x status %u\n", "XYZABCUVW"[index], m.pos[0], m.pos[1], m.pos[2],
+                      axis_end, cut.joint >= 0 ? "cut at a joint limit," : cut.reach ? "not cut," : "cut at the reach,",
+                      end[index], joints_text(m.ks.act_pos).c_str(), joints_text(m.ks.act_fb).c_str(), (int) m.ks.running,
+                      m.ks.axis_done, m.ks.jog_busy, m.ks.status_count);
+            if (fabs(end[index] - m.pos[index]) < 1e-9) {
+                if (cut.joint >= 0) report_joint_limit(cut.joint, cut.dir, "refused");
+                else if (!cut.reach) report_error("jog refused: the kinematics' reach ends here");
+                return;
+            }
             m.world_jog = true;
-            km->line(end, fabs(vel), acc, false, 0);
+            m.wj_limit_joint = cut.joint;
+            m.wj_limit_dir = cut.dir;
+            m.wj_line = km->line(end, fabs(vel), acc, false, 0);
+            m.wj_status_seen = m.ks.status_count;
+            m.wj_logged = 0;
             return;
         }
         // the board jogs the actuator (the joint) itself. A continuous jog runs to the joint's
@@ -1030,15 +1084,34 @@ static void start_jog(int index, bool to_target, double target, double vel)
     Jog &j = m.jog[index];
     j.active = true;
     j.joint = joint_kins && !teleop;
-    j.world = teleop;
-    if (teleop) {
-        double acts[8];
-        current_joints(acts);
-        m.limit_watch.start(acts);
-    }
     j.to_target = to_target;
     j.target = target;
     j.vel = vel;
+    j.limit_joint = -1;
+    j.limit_dir = 0;
+    if (teleop) {
+        // a world jog ends where a joint would reach its limit (decided here, from the path)
+        double goal = to_target ? target : (vel > 0 ? m.jog_max[index] : m.jog_min[index]);
+        if (goal > m.pos[index] + 1e5) goal = m.pos[index] + 1e5;     // no axis limit: search a long way
+        if (goal < m.pos[index] - 1e5) goal = m.pos[index] - 1e5;
+        double end[NAXES];
+        memcpy(end, m.pos, sizeof end);
+        end[index] = goal;
+        JogLimit cut = world_jog_cut(m.pos, end);
+        if (cut.s < 1) {
+            double stop = m.pos[index] + cut.s * (goal - m.pos[index]);
+            if (fabs(stop - m.pos[index]) < 1e-9) {
+                j.active = false;
+                if (cut.joint >= 0) report_joint_limit(cut.joint, cut.dir, "refused");
+                else report_error("jog refused: the kinematics' reach ends here");
+                return;
+            }
+            j.to_target = true;
+            j.target = stop;
+            j.limit_joint = cut.joint;
+            j.limit_dir = cut.dir;
+        }
+    }
 }
 
 // motmod's inRange() (motion/command.c): a programmed move's end point must lie within the

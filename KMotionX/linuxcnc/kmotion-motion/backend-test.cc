@@ -3,10 +3,10 @@
 //   backend-test          resume-test.ngc's moves: the planner's timing and blending
 //   backend-test arcs     arc directions, planes and multiple turns as LinuxCNC encodes them
 //   backend-test abort    an abort in mid-program, then a move after it
-//   backend-test joglimit a world jog stops at a joint's soft limit (identity kinematics, the
-//                         joint's limit tighter than the axis's): kmotion-motion's decision
-//                         (kmotion-joglimit.h) driven as its simulate model drives a jog, and
-//                         as a planner move toward the axis limit the way the board runs one
+//   backend-test joglimit a world jog stops where a joint reaches its soft limit: the cut on
+//                         the jog's path that kmotion-motion makes at the jog's start
+//                         (kmotion-joglimit.h), with identity kinematics and with the 3Link
+//                         kinematics at the robot's poses, then a planner move to the cut end
 //   backend-test circles  two full circles as consecutive moves
 //   backend-test quit     pause mid-run, then abort and tear the backend down (process exit)
 //   backend-test gated    36 chords of a circle handed over the way task does it: only while
@@ -753,12 +753,12 @@ static void scenario_kins3link(KmBackend &km)
     check(f.messages.empty(), "no messages");
 }
 
-// a world jog in a config with identity kinematics stops at a joint's soft limit: the
-// decision kmotion-motion.cc makes each cycle (kmotion-joglimit.h: the joint beyond its
-// [JOINT_n] limit and heading further out, on the positions reported), first driven the way
-// its simulate model drives a world jog (positions stepped at the jog speed and handed to
-// the planner), then as the board runs one (a planner move toward the axis's limit, aborted
-// when a joint reaches its own). Joint 0's limit, 5, is tighter than the axis's, 10
+// a world jog stops where a joint reaches its soft limit: the cut kmotion-motion.cc makes
+// at the jog's start (kmotion-joglimit.h), on the jog's path, so the board ends the move
+// there by itself. Identity kinematics first (joint 0's limit 5 tighter than the axis's
+// 10), then the 3Link kinematics at the poses met on the robot with test limits Right min
+// -15 and Z max 84, where a joint's travel along an axis is not monotonic. Last, the board
+// way: the planner move to the cut end comes to rest there, nothing aborts it
 static void scenario_joglimit(KmBackend &km)
 {
     check(km.identity_kinematics(), "no KINEMATICS: joint j is axis j");
@@ -766,72 +766,112 @@ static void scenario_joglimit(KmBackend &km)
     for (int j = 0; j < 8; j++) { lo[j] = -10; hi[j] = 10; }
     hi[0] = 5;
     const unsigned active = 7;                  // joints 0-2
-    JogLimitWatch w;
-    KmState st;
-    km.state(st);
-    double pos[9], act[8];
-    memcpy(pos, st.pos, sizeof pos);
-    auto joints_from_pos = [&] { for (int j = 0; j < 8; j++) act[j] = pos[j]; };
-    // +X at 1 unit/s in 5 ms steps from X4.9 (the simulate model's jog): 5.005 is the first
-    // position past joint 0's limit
-    pos[0] = 4.9;
-    km.set_position(pos);
-    joints_from_pos();
-    w.start(act);
-    int hit = -1, dir = 0, steps = 0;
-    for (; hit < 0 && steps < 100; steps++) {
-        pos[0] += 1.0 * 0.005;
-        km.set_position(pos);
-        joints_from_pos();
-        hit = w.step(act, lo, hi, active, &dir);
-    }
-    printf("  +X jog from X4.9: joint %d on its %s limit at X%.3f after %d steps\n", hit, dir > 0 ? "max" : "min", pos[0], steps);
-    check(hit == 0 && dir == 1 && fabs(pos[0] - 5.005) < 1e-9, "the jog stops at the first position past joint 0's max limit 5");
-    check(w.step(act, lo, hi, active, &dir) < 0, "standing beyond the limit: no stop");
-    bool any = false;
-    for (int i = 0; i < 20; i++) { pos[0] -= 0.005; joints_from_pos(); if (w.step(act, lo, hi, active, &dir) >= 0) any = true; }
-    check(!any && pos[0] < 5, "a jog back from beyond the limit is never stopped (the joint can come back)");
-    pos[0] = 5.5;                               // joint 0 parked past its limit, Y jogging
-    joints_from_pos();
-    w.start(act);
-    any = false;
-    for (int i = 0; i < 20; i++) { pos[1] += 0.005; joints_from_pos(); if (w.step(act, lo, hi, active, &dir) >= 0) any = true; }
-    check(!any, "joint 0 parked past its limit while Y jogs: no stop");
-    pos[0] += 0.005;
-    joints_from_pos();
-    check(w.step(act, lo, hi, active & ~1u, &dir) < 0, "an inactive joint past its limit: no stop");
-    pos[0] = -9.99;                             // the min side
-    joints_from_pos();
-    w.start(act);
-    hit = -1;
-    for (steps = 0; hit < 0 && steps < 100; steps++) { pos[0] -= 0.005; joints_from_pos(); hit = w.step(act, lo, hi, active, &dir); }
-    check(hit == 0 && dir == -1 && pos[0] < -10 && pos[0] > -10.01, "-X: stopped at the first position past joint 0's min limit -10");
+    auto ident = [](const double p[9], double j[8]) { for (int i = 0; i < 8; i++) j[i] = p[i]; return true; };
+    auto line = [](double x0, double y0, double z0, double x1, double y1, double z1, double *f, double *t) {
+        for (int i = 0; i < 9; i++) f[i] = t[i] = 0;
+        f[0] = x0; f[1] = y0; f[2] = z0; t[0] = x1; t[1] = y1; t[2] = z1;
+    };
+    double f[9], t[9];
+    line(4.9, 0, 0, 10, 0, 0, f, t);
+    JogLimit c = jog_limit(f, t, ident, lo, hi, active);
+    double x = f[0] + c.s * (t[0] - f[0]);
+    printf("  +X from X4.9 toward X10: cut by joint %d (%s) at X%.9f\n", c.joint, c.dir > 0 ? "max" : "min", x);
+    check(c.joint == 0 && c.dir == 1 && fabs(x - 5) < 1e-9, "+X stops exactly at joint 0's max limit 5");
+    line(5, 0, 0, 10, 0, 0, f, t);
+    c = jog_limit(f, t, ident, lo, hi, active);
+    check(c.joint == 0 && c.s < 1e-9, "+X from the limit itself: refused");
+    line(5.5, 0, 0, 10, 0, 0, f, t);
+    c = jog_limit(f, t, ident, lo, hi, active);
+    check(c.joint == 0 && c.s == 0, "+X with joint 0 already beyond: refused");
+    line(5.5, 0, 0, -10, 0, 0, f, t);
+    c = jog_limit(f, t, ident, lo, hi, active);
+    check(c.joint < 0 && c.s == 1, "-X from beyond the limit runs all the way to the axis limit (the joint comes back)");
+    line(5.5, 0, 0, 5.5, 10, 0, f, t);
+    c = jog_limit(f, t, ident, lo, hi, active);
+    check(c.joint < 0 && c.s == 1, "Y with joint 0 parked beyond its limit: not cut");
+    line(5.5, 0, 0, 10, 0, 0, f, t);
+    c = jog_limit(f, t, ident, lo, hi, active & ~1u);
+    check(c.joint < 0 && c.s == 1, "an inactive joint is not looked at");
+    line(0, -9.9, 0, 0, -20, 0, f, t);
+    c = jog_limit(f, t, ident, lo, hi, active);
+    double y = f[1] + c.s * (t[1] - f[1]);
+    check(c.joint == 1 && c.dir == -1 && fabs(y + 10) < 1e-9, "-Y stops exactly at joint 1's min limit -10");
 
-    // the board way: from X0 a planner move toward X10 (the axis's limit) at 1 unit/s; the
-    // watch sees the state's joints every 5 ms and the first hit aborts the move, as
-    // kmotion-motion does. The planner's position must have taken the start first
-    for (int i = 0; i < 9; i++) pos[i] = 0;
-    pos[1] = 0;
-    km.set_position(pos);
-    for (int i = 0; i < 200; i++) { km.state(st); if (fabs(st.pos[0]) < 1e-9 && fabs(st.pos[1]) < 1e-9) break; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
-    check(fabs(st.pos[0]) < 1e-9, "the planner stands at X0 for the move");
-    double end[9] = {10, 0, 0, 0, 0, 0, 0, 0, 0};
-    Follower f(km);
-    w.start(st.act_pos);
-    km.line(end, 1.0, 100, false, 1);
-    double x_hit = -1;
-    int hit_dir = 0;
-    while (f.t < 15) {
-        f.run(f.t + 0.005, true);
-        int h = w.step(f.st.act_pos, lo, hi, active, &hit_dir);
-        if (h >= 0) { hit = h; x_hit = f.st.pos[0]; km.abort(); break; }
+    // the 3Link kinematics (the kmotion-3link settings), test limits Right min -15, Z max 84
+    KmConfig k3;
+    snprintf(k3.kinematics, sizeof k3.kinematics, "3Link");
+    for (int i = 0; i < 3; i++) {
+        KmAxisParams &a = k3.axis[i];
+        a.counts_per_unit = 11.37778; a.max_vel = 3; a.max_accel = 30; a.max_jerk = 300;
+        a.act_max_vel = i == 0 ? 35 : 17.6; a.act_max_accel = 700; a.act_max_jerk = 7000; a.act_degrees = true;
     }
-    f.run(f.t + 3.0);                           // to rest
-    printf("  planner move toward X10: joint %d hit its %s limit at X%.4f, at rest at X%.4f\n", hit, hit_dir > 0 ? "max" : "min", x_hit, f.st.pos[0]);
-    check(hit == 0 && hit_dir == 1 && x_hit > 5 && x_hit < 5.05, "the move is aborted at the first report past joint 0's limit");
-    check(!f.st.running && f.st.pos[0] > 5 && f.st.pos[0] < 5.1, "and comes to rest just past it (1/s at 100/s^2 stops in 0.005)");
-    check(f.st.errors == 0, "no error counted for the stop");
-    check(f.messages.empty(), "no messages from the backend");
+    double origin[9] = {0};
+    KmBackend kb;
+    check(kb.init(k3, origin), "a 3Link backend (simulate)");
+    auto kins = [&](const double p[9], double j[8]) { return kb.cad_to_joints(p, j); };
+    double lo3[8] = {-15, 90, -45, -1e9, -1e9, -1e9, -1e9, -1e9}, hi3[8] = {90, 270, 84, 1e9, 1e9, 1e9, 1e9, 1e9};
+    double jp[8], p[9];
+    // +Z from the center of travel: the Z servo (80.02 at Z0, 87.14 at Z1) reaches 84
+    line(0, 0, 0, 0, 0, 1, f, t);
+    c = jog_limit(f, t, kins, lo3, hi3, active);
+    for (int i = 0; i < 9; i++) p[i] = f[i] + c.s * (t[i] - f[i]);
+    kb.cad_to_joints(p, jp);
+    printf("  +Z from X0 Y0 Z0: cut by joint %d at Z%.5f, Z servo %.6f\n", c.joint, p[2], jp[2]);
+    check(c.joint == 2 && c.dir == 1 && fabs(jp[2] - 84) < 1e-6, "+Z stops with the Z servo exactly at 84");
+    // the pose the robot was left at: Right -15.26, past its min. Along every axis one way
+    // brings it in: that way runs, and the other is refused at once
+    const double P[3] = {3.4185, 0.6397, 0.9998};
+    const double ax_lo[3] = {-4, -2, -0.1}, ax_hi[3] = {4, 2, 1.0};
+    int refused = 0, ran = 0;
+    for (int a = 0; a < 3; a++)
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            for (int i = 0; i < 9; i++) f[i] = t[i] = 0;
+            for (int i = 0; i < 3; i++) f[i] = t[i] = P[i];
+            t[a] = sgn > 0 ? ax_hi[a] : ax_lo[a];
+            c = jog_limit(f, t, kins, lo3, hi3, active);
+            double q[9], j0[8], j1[8];
+            for (int i = 0; i < 9; i++) q[i] = f[i] + 1e-4 * (t[i] - f[i]) / fabs(t[a] - f[a]);
+            kb.cad_to_joints(f, j0);
+            kb.cad_to_joints(q, j1);
+            bool inward = j1[0] > j0[0];
+            printf("  %c%c from X%.4f Y%.4f Z%.4f: Right %s, cut s=%.4f by joint %d\n", sgn > 0 ? '+' : '-', "XYZ"[a],
+                   P[0], P[1], P[2], inward ? "comes in" : "goes out", c.s, c.joint);
+            if (fabs(t[a] - f[a]) < 1e-9) continue;   // at the axis limit already (Z1 is 0.0002 away: tiny but real)
+            if (inward) { if (c.s > 0) ran++; }
+            else if (c.s == 0 && c.joint == 0) refused++;
+        }
+    printf("  of the six directions: %d ran with Right coming in, %d refused with Right going out\n", ran, refused);
+    check(ran + refused == 6, "every direction that brings Right in runs, every one that takes it out is refused");
+    // X4 Y-2 Z1: Right -69.8 and Z 101.4, both past; -X first takes Right further out (-69.96
+    // at X3.5) before it comes in: refused, +Y brings both in and runs
+    line(4, -2, 1, -4, -2, 1, f, t);
+    c = jog_limit(f, t, kins, lo3, hi3, active);
+    check(c.s == 0 && c.joint >= 0, "-X from X4 Y-2 Z1: refused (a joint's first step goes out)");
+    line(4, -2, 1, 4, 2, 1, f, t);
+    c = jog_limit(f, t, kins, lo3, hi3, active);
+    check(c.s > 0.5, "+Y from X4 Y-2 Z1: runs (both joints come in)");
+
+    // the board way: the planner move goes to the cut end and comes to rest there
+    KmState st;
+    double pos[9] = {0};
+    km.set_position(pos);
+    for (int i = 0; i < 200; i++) { km.state(st); if (fabs(st.pos[0]) < 1e-9) break; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    line(0, 0, 0, 10, 0, 0, f, t);
+    c = jog_limit(f, t, ident, lo, hi, active);
+    double end[9];
+    for (int i = 0; i < 9; i++) end[i] = f[i] + c.s * (t[i] - f[i]);
+    Follower fo(km);
+    int serial = km.line(end, 1.0, 100, false, 1);
+    check(serial > 0, "line() returns the move's serial");
+    bool begun = false;
+    while (fo.t < 15) {
+        fo.run(fo.t + 0.005, true);
+        if ((int) fo.st.lines_begun >= serial) begun = true;
+        if (begun && !fo.st.running) break;
+    }
+    printf("  planner move to the cut end X%.4f: at rest at X%.6f, taken up %d\n", end[0], fo.st.pos[0], (int) begun);
+    check(begun && !fo.st.running && fabs(fo.st.pos[0] - 5) < 1e-6, "it ends at rest exactly at joint 0's limit, no abort");
+    check(fo.st.errors == 0 && fo.messages.empty(), "no errors, no messages");
 }
 
 static void scenario_abort(KmBackend &km)

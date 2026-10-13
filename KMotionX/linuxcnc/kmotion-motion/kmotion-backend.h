@@ -197,6 +197,9 @@ struct KmState {
     int spindle_done;             // counts spindle() calls carried out (or superseded)
     double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
+    double act_fb[8];             // board: the actuators' feedback (the channels' Position), in their units
+    unsigned axis_done;           // board: bit per axis, the channel has no trajectory (AxisDone) in the last read
+    unsigned lines_begun;         // line() moves the planner has taken up (cf. line()'s return value)
     double current_vel;
     double distance_to_go;
     // board: persist 100-107 as the last status read carried them (PC_COMM, the board's
@@ -221,6 +224,8 @@ public:
     bool joints_to_cad(const double joints[8], double pos[9]);
     // simulate mode: the machine "moved" by other means (jog, homing) while idle
     void set_position(const double pos[9]);
+    // returns the move's serial: once state().lines_begun reaches it the planner has taken
+    // it up, and `running` then says whether it is still executing
     int line(const double end[9], double vel, double acc, bool rapid, int id);
     int arc(const double end[9], const double center[3], const double normal[3], int turn, double vel, double acc, int id);
     int dwell(double seconds, int id);
@@ -256,6 +261,8 @@ public:
     void jog_stop(int axis);                     // -1: all
     // the latest state (the worker keeps it current)
     void state(KmState &out);
+    // diagnostics for the log: one line the backend wrote (planner starts, refusals); false: none
+    bool trace(std::string &line);
     const char *mode_name() const;
     bool reload_geo_table();                     // GEO_FILE again (KMotionCNC's "reload"); false: failed
     const KmAxisParams &axis_params(int axis) const;   // the config's, 0-7
