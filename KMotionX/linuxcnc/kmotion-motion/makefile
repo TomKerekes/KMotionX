@@ -31,7 +31,7 @@ KM_LIBS = -L$(KMOTIONX_DIR)/bin -Wl,-rpath,$(KMOTIONX_DIR)/bin -lGCodeInterprete
 all: kmotion-motion kmotion-mcode
 
 kmotion-motion: $(OBJS)
-	$(CXX) -o $@ $(OBJS) $(LDFLAGS) $(LIBS) $(KM_LIBS)
+	$(CXX) -o $@ $(OBJS) $(LDFLAGS) -rdynamic $(LIBS) $(KM_LIBS)     # -rdynamic: names in the crash handler's backtrace
 
 build/kmotion-motion.o: kmotion-motion.cc kmotion-backend.h kmotion-pccomm.h kmotion-joglimit.h | build
 	$(CXX) $(OPT) $(DEFS) $(INC) -Wall -Wextra -c -o $@ $<

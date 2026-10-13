@@ -38,6 +38,7 @@
 #include <vector>
 #include <string>
 #include <signal.h>
+#include <execinfo.h>
 #include <thread>
 #include <chrono>
 #include <unistd.h>
@@ -2367,6 +2368,27 @@ static double now_s()
     return ts.tv_sec + ts.tv_nsec * 1e-9;
 }
 
+// a crash leaves its backtrace in the log and on stderr (the process is a HAL component:
+// no terminal, and LinuxCNC's processes run without core dumps). Addresses, not names, for
+// the file's static functions: addr2line -e kmotion-motion <addr> names them
+static void crash_handler(int sig)
+{
+    void *frames[64];
+    int n = backtrace(frames, 64);
+    char head[96];
+    int len = snprintf(head, sizeof head, "kmotion-motion: fatal signal %d (%s), backtrace:\n", sig, strsignal(sig));
+    if (write(2, head, len) < 0) {}
+    backtrace_symbols_fd(frames, n, 2);
+    if (logfile) {
+        fflush(logfile);
+        int fd = fileno(logfile);
+        if (write(fd, head, len) < 0) {}
+        backtrace_symbols_fd(frames, n, fd);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 int main(int argc, char *argv[])
 {
     for (int i = 1; i < argc; i++) {
@@ -2389,6 +2411,7 @@ int main(int argc, char *argv[])
     signal(SIGTERM, sighandler);
     signal(SIGHUP, sighandler);
     signal(SIGUSR1, SIG_IGN);
+    for (int sig : {SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL}) signal(sig, crash_handler);
     signal(SIGUSR2, SIG_IGN);
 
     model_init();

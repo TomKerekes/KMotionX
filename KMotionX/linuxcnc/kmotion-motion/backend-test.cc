@@ -29,6 +29,9 @@
 //                         SimulateHomes.c (started on thread 7) makes channel 0's positive
 //                         switch, bit 52, above +2000 counts and its negative one, bit 49,
 //                         below -1500; jogs to X1, X0, X-0.7 and back show them in the state
+//   backend-test offon    (KM_BOARD=1 only) a move, three aborts, the axes disabled and
+//                         enabled again (a machine off and on), a jog, an abort, then the
+//                         first program move: LinuxCNC's sequence around a limit switch trip
 //   backend-test atbit    (KM_BOARD=1 only) SPINDLE_AT_SPEED = BIT 1030 1: the at-speed state
 //                         follows virtual bit 1030 as the test sets and clears it
 //   backend-test io       (KM_BOARD=1 only) an output bit (set_bit 1026) read back as an input
@@ -629,6 +632,42 @@ static void scenario_limits(KmBackend &km)
     check(limits(0, 0, "back at the start"), "back at the start: none made");
 }
 
+// the sequence LinuxCNC runs around a limit switch trip (or any machine off), on the board:
+// a move, the aborts task sends in a row, the axes disabled and enabled again (machine off
+// and on), a jog, task's abort at the mode change, then the first program move - which
+// twice left kmotion-motion dead on the bench right after the planner took it up
+static void scenario_offon(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  offon: board mode only (KM_BOARD=1)\n"); return; }
+    Follower f(km);
+    f.km.state(f.st);
+    double x0 = f.st.pos[0];
+    double e[9]; memcpy(e, f.st.pos, sizeof e);
+    e[0] = x0 + 0.3;
+    km.line(e, 2.0, 50, true, 1);
+    f.run(10);
+    check(f.at(e[0], e[1], e[2], 1e-3), "a move to X+0.3 runs");
+    for (int i = 0; i < 3; i++) km.abort();                   // task's aborts in a row
+    km.machine_on(false);                                     // machine off (a limit trip)
+    km.machine_on(true);                                      // and on again
+    for (int i = 0; i < 300; i++) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); km.state(f.st); if (!f.st.running) break; }
+    check(!f.st.running, "idle after the aborts, off and on");
+    km.jog_to(0, x0 + 0.1, 1.0);                              // the jog off the switch
+    for (int i = 0; i < 500; i++) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); km.state(f.st); if (!(f.st.jog_busy & 1) && i > 5) break; }
+    km.jog_stop(0);
+    check(fabs(f.st.pos[0] - (x0 + 0.1)) < 1e-3, "the jog ran to X+0.1");
+    km.abort();                                               // task's abort at the mode change
+    for (int i = 0; i < 300; i++) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); km.state(f.st); if (!f.st.running) break; }
+    e[0] = x0;
+    printf("  the first program move after the off/on: X%.4f -> X%.4f\n", f.st.pos[0], x0);
+    f.t0 = std::chrono::steady_clock::now();
+    f.t = 0;
+    km.line(e, 2.0, 50, true, 2);
+    f.run(10);
+    check(f.at(x0, e[1], e[2], 1e-3), "it runs to the start");
+    check(f.messages.empty(), "no messages");
+}
+
 static void scenario_io(KmBackend &km)
 {
     if (!km.is_board()) { printf("  io: board mode only (KM_BOARD=1)\n"); return; }
@@ -1067,6 +1106,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "atbit") == 0) scenario_atbit(*km);
     else if (strcmp(scenario, "io") == 0) scenario_io(*km);
     else if (strcmp(scenario, "limits") == 0) scenario_limits(*km);
+    else if (strcmp(scenario, "offon") == 0) scenario_offon(*km);
     else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
     else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
     else if (strcmp(scenario, "joglimit") == 0) scenario_joglimit(*km);
