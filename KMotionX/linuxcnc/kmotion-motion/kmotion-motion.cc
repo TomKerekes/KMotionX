@@ -114,6 +114,11 @@ static bool axes_seen_enabled = false; // since the ENABLE, every axis was seen 
                                        // machine off and unhomes the joint, as motmod's amp fault
 static bool mcode_configured[100];
 static bool limits_configured = false;  // [KMOTION] LIMIT_NEG_BITS / LIMIT_POS_BITS name a switch
+static std::string measure_file;        // [KMOTION] MEASURE_FILE: the geo correction measurements (KMotionCNC's Measure)
+static std::string geo_file_name;       // [KMOTION] GEO_FILE as given, for messages
+static double hold_fro = 0;             // the temporary override the board has for the hold jog (0: none)
+static bool measure_was = false, geo_reload_was = false;   // the buttons' last state (edges)
+static void hold_jog_release();        // the hold jog's override back to 0 (defined with the buttons)
 static bool overriding = false;         // a jog is running under OVERRIDE_LIMITS (motmod's emcmotInternal->overriding)
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
@@ -676,6 +681,11 @@ struct Pins {
     // feedback display or spindle.0.speed-in
     hal_real_t kspindle_rpm, kspindle_rpm_abs, kspindle_rps;
     hal_bool_t kspindle_at_speed;    // spindle 0 at speed, as motion uses it (for a GUI's LED)
+    // KMotionCNC's buttons (HAL in, for a gladevcp panel): forward/reverse through the paused
+    // program while held, at hold-rate (0: 0.2) of the programmed speed; measure appends the
+    // position to the geo measurement file; geo-reload reads GEO_FILE again
+    hal_bool_t hold_forward, hold_reverse, measure, geo_reload;
+    hal_real_t hold_rate;
 };
 static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires that
 
@@ -685,6 +695,7 @@ static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires
 static void machine_off(bool disable_board)
 {
     SET_MOTION_ENABLE_FLAG(0);
+    hold_jog_release();
     if (km) km->abort();
     if (km && km->is_board() && disable_board) km->machine_on(false);
     if (emcmotStatus->spindle_status[0].state) {
@@ -791,6 +802,11 @@ static int create_pins()
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rpm_abs, 0, "kmotion.spindle-rpm-abs"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->kspindle_rps, 0, "kmotion.spindle-rps"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->kspindle_at_speed, 0, "kmotion.spindle-at-speed"));
+    PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->hold_forward, 0, "kmotion.hold-forward"));
+    PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->hold_reverse, 0, "kmotion.hold-reverse"));
+    PIN(hal_pin_new_real(comp_id, HAL_IN, &pins->hold_rate, 0, "kmotion.hold-rate"));
+    PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->measure, 0, "kmotion.measure"));
+    PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->geo_reload, 0, "kmotion.geo-reload"));
     return 0;
 }
 
@@ -1365,6 +1381,7 @@ static void handle_command()
     switch (c->command) {
     case EMCMOT_ABORT:
         log_print("ABORT\n");
+        hold_jog_release();
         if (km) km->abort();
         SET_MOTION_ERROR_FLAG(0);
         m.queue.clear();
@@ -1414,6 +1431,7 @@ static void handle_command()
         log_print("RESUME\n");
         m.paused = false;
         m.stepping = false;
+        hold_jog_release();                 // before the resume: the resumed motion must not be held at 0
         if (km) km->pause(false);
         break;
     case EMCMOT_STEP:
@@ -2049,6 +2067,13 @@ static bool read_kmotion_config(KmConfig &cfg)
         std::string f = g;
         f.erase(f.find_last_not_of(" \t\r") + 1);
         if (!f.empty()) snprintf(cfg.geo_file, sizeof cfg.geo_file, "%s", ini_relative(ini_path, f).c_str());
+        geo_file_name = cfg.geo_file;
+    }
+    {
+        // KMotionCNC's Measure writes here (the geo format; the header is written by hand)
+        std::string f = "Measurements.txt";
+        if (const char *mf = ini.get(K, "MEASURE_FILE")) { f = mf; f.erase(f.find_last_not_of(" \t\r") + 1); }
+        measure_file = ini_relative(ini_path, f);
     }
     if (const char *ep = ini.get(K, "ENABLE_PROGRAM")) {   // <thread> <file>: enables the axes at machine on
         std::istringstream in(ep);
@@ -2285,8 +2310,64 @@ static int create_io_pins()
 
 // every cycle: an output bit follows its pin (board mode; at start it is set once to the pin's
 // value), the input pins and the digital outputs follow the status
+// KMotionCNC's forward/reverse in feed hold: while a button is held and the program is
+// paused, the board runs its buffer at hold-rate of the programmed speed, backwards for
+// reverse (SetFROTemp: a temporary override within the hold, the position follows from the
+// board as ever). Released, or the pause over, the override goes back to 0 - before a
+// resume, so the resumed motion is not held at 0 (StopImmediate1 then restores the real FRO)
+static void hold_jog_release()
+{
+    if (hold_fro == 0) return;
+    hold_fro = 0;
+    if (km) km->hold_jog(0);
+    log_print("hold jog released\n");
+}
+
+static void hold_jog_buttons()
+{
+    bool allowed = km && km->is_board() && m.paused && GET_MOTION_ENABLE_FLAG();
+    double want = 0;
+    if (allowed) {
+        double rate = hal_get_real(pins->hold_rate);
+        if (rate <= 0) rate = 0.2;
+        if (hal_get_bool(pins->hold_forward)) want = rate;
+        else if (hal_get_bool(pins->hold_reverse)) want = -rate;
+    }
+    if (want == hold_fro) return;
+    if (want == 0) { hold_jog_release(); return; }
+    hold_fro = want;
+    km->hold_jog(want);
+    log_print("hold jog %s at %g of the programmed speed\n", want > 0 ? "forward" : "reverse", fabs(want));
+}
+
+// KMotionCNC's Measure: a press appends the position to MEASURE_FILE as the next grid
+// point; geo-reload reads GEO_FILE again (the measurements, once complete and copied there)
+static void measure_buttons()
+{
+    bool measure_now = hal_get_bool(pins->measure);
+    if (measure_now && !measure_was) {
+        int row = 0, col = 0, index = 0, total = 0;
+        double pos[9];
+        std::string err;
+        if (!km) report_error("measure: no planner (stand-in mode)");
+        else if (!km->measure_point(measure_file.c_str(), row, col, index, total, pos, err)) report_error("measure: %s", err.c_str());
+        else report_error("measure: point %d of %d (row %d, col %d) recorded at X%.4f Y%.4f Z%.4f", index, total, row, col, pos[0], pos[1], pos[2]);
+    }
+    measure_was = measure_now;
+    bool reload_now = hal_get_bool(pins->geo_reload);
+    if (reload_now && !geo_reload_was) {
+        if (!km) report_error("geo reload: no planner (stand-in mode)");
+        else if (geo_file_name.empty()) report_error("geo reload: no [KMOTION] GEO_FILE configured");
+        else if (km->reload_geo_table()) report_error("geo correction table reloaded from %s", geo_file_name.c_str());
+        else report_error("geo reload: %s could not be read", geo_file_name.c_str());
+    }
+    geo_reload_was = reload_now;
+}
+
 static void update_io()
 {
+    hold_jog_buttons();
+    measure_buttons();
     for (size_t i = 0; i < output_bits.size(); i++) {
         int v = hal_get_bool(out_pins[i]) ? 1 : 0;
         if (v != out_sent[i] && km && km->is_board()) {

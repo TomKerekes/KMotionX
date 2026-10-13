@@ -29,6 +29,9 @@
 //                         SimulateHomes.c (started on thread 7) makes channel 0's positive
 //                         switch, bit 52, above +2000 counts and its negative one, bit 49,
 //                         below -1500; jogs to X1, X0, X-0.7 and back show them in the state
+//   backend-test measure  KMotionCNC's Measure: points appended to a geo measurement file
+//   backend-test holdjog  (KM_BOARD=1 only) KMotionCNC's forward/reverse in feed hold: a move
+//                         paused half way runs backwards and forwards while "held"
 //   backend-test offon    (KM_BOARD=1 only) a move, three aborts, the axes disabled and
 //                         enabled again (a machine off and on), a jog, an abort, then the
 //                         first program move: LinuxCNC's sequence around a limit switch trip
@@ -675,6 +678,80 @@ static void scenario_offon(KmBackend &km)
     check(other.empty(), "no messages but the bench's stop-time warning");
 }
 
+// KMotionCNC's Measure: a geo correction measurement file with its header, three points
+// appended from the planner's position, the file as the kinematics read it
+static void scenario_measure(KmBackend &km)
+{
+    const char *file = "/tmp/claude-backend-test-measure.txt";
+    FILE *f = fopen(file, "w");
+    check(f != NULL, "a measurement file with the header: 2 rows, 3 columns, spacing 1, offset 0");
+    if (!f) return;
+    fprintf(f, "2,3\n1.0,1.0\n0.0,0.0\n");
+    fclose(f);
+    int row, col, index, total;
+    double pos[9];
+    std::string err;
+    KmState st;
+    double p[9] = {0.5, 0.25, 0.125, 0, 0, 0, 0, 0, 0};
+    km.set_position(p);
+    for (int i = 0; i < 200; i++) { km.state(st); if (fabs(st.pos[0] - 0.5) < 1e-9) break; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    check(km.measure_point(file, row, col, index, total, pos, err), "the first point is recorded");
+    check(row == 0 && col == 0 && index == 1 && total == 6 && fabs(pos[0] - 0.5) < 1e-9, "as row 0, col 0, point 1 of 6, at the planner's position");
+    p[0] = 1.5;
+    km.set_position(p);
+    for (int i = 0; i < 200; i++) { km.state(st); if (fabs(st.pos[0] - 1.5) < 1e-9) break; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    check(km.measure_point(file, row, col, index, total, pos, err) && row == 0 && col == 1 && index == 2, "the second: row 0, col 1");
+    check(km.measure_point(file, row, col, index, total, pos, err) && row == 0 && col == 2 && index == 3, "the third: row 0, col 2");
+    check(km.measure_point(file, row, col, index, total, pos, err) && row == 1 && col == 0 && index == 4, "the fourth starts row 1 (columns first)");
+    f = fopen(file, "r");
+    int nrows, ncols, n = 0, r, c;
+    double sx, sy, ox, oy, x, y, z, lastx = -1;
+    bool hdr = f && fscanf(f, "%d,%d", &nrows, &ncols) == 2 && fscanf(f, "%lf,%lf", &sx, &sy) == 2 && fscanf(f, "%lf,%lf", &ox, &oy) == 2;
+    while (hdr && fscanf(f, "%d,%d,%lf,%lf,%lf", &r, &c, &x, &y, &z) == 5) { n++; lastx = x; }
+    if (f) fclose(f);
+    check(hdr && nrows == 2 && ncols == 3 && n == 4 && fabs(lastx - 1.5) < 1e-6, "the file reads back: header intact, 4 points, the last at X1.5");
+    check(!km.measure_point("/tmp/claude-backend-test-no-such-dir/x.txt", row, col, index, total, pos, err) && !err.empty(), "a missing file is refused with a reason");
+    remove(file);
+}
+
+// KMotionCNC's forward/reverse in feed hold, on the board: a slow move, a hold half way,
+// reverse while "held" for a second (the position goes back), stop, forward (it advances),
+// release, resume (the move completes)
+static void scenario_holdjog(KmBackend &km)
+{
+    if (!km.is_board()) { printf("  holdjog: board mode only (KM_BOARD=1)\n"); return; }
+    Follower f(km);
+    f.km.state(f.st);
+    double x0 = f.st.pos[0];
+    double e[9]; memcpy(e, f.st.pos, sizeof e);
+    e[0] = x0 + 1.0;
+    km.line(e, 0.5, 50, false, 1);                        // 2 s at 0.5 in/s
+    f.run(1.0, true);
+    km.pause(true);
+    f.run(f.t + 1.0, true);
+    double x_hold = f.st.pos[0];
+    printf("  paused at X%.4f (started at X%.4f)\n", x_hold, x0);
+    check(x_hold > x0 + 0.2 && x_hold < x0 + 0.9 && f.st.paused, "paused in the middle of the move");
+    km.hold_jog(-0.5);
+    f.run(f.t + 1.0, true);
+    km.hold_jog(0);
+    f.run(f.t + 0.5, true);
+    double x_back = f.st.pos[0];
+    printf("  after a second of reverse at 0.5: X%.4f\n", x_back);
+    check(x_back < x_hold - 0.1, "reverse while held: the position went back");
+    km.hold_jog(0.5);
+    f.run(f.t + 0.5, true);
+    km.hold_jog(0);
+    f.run(f.t + 0.5, true);
+    double x_fwd = f.st.pos[0];
+    printf("  after half a second forward: X%.4f\n", x_fwd);
+    check(x_fwd > x_back + 0.05, "forward while held: it advanced");
+    km.pause(false);
+    f.run(10);
+    check(f.at(e[0], e[1], e[2], 1e-3), "resumed: the move completes at X+1");
+    check(f.messages.empty(), "no messages");
+}
+
 static void scenario_io(KmBackend &km)
 {
     if (!km.is_board()) { printf("  io: board mode only (KM_BOARD=1)\n"); return; }
@@ -1114,6 +1191,8 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "io") == 0) scenario_io(*km);
     else if (strcmp(scenario, "limits") == 0) scenario_limits(*km);
     else if (strcmp(scenario, "offon") == 0) scenario_offon(*km);
+    else if (strcmp(scenario, "measure") == 0) scenario_measure(*km);
+    else if (strcmp(scenario, "holdjog") == 0) scenario_holdjog(*km);
     else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
     else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
     else if (strcmp(scenario, "joglimit") == 0) scenario_joglimit(*km);

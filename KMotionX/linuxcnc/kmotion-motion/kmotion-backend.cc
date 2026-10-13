@@ -2177,6 +2177,51 @@ bool KmBackend::reload_geo_table()
     return d->cm->Kinematics->ReadGeoTable(d->cfg.geo_file) == 0;
 }
 
+void KmBackend::hold_jog(double fro)
+{
+    if (d->cfg.simulate) return;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "SetFROTemp %.4f", fro);
+    d->send_urgent(cmd);
+}
+
+// the file is in KMotionCNC's geo correction format (Kinematics::ReadGeoTable): a header
+// of "NRows,NCols", "GeoSpacingX,GeoSpacingY", "GeoOffsetX,GeoOffsetY", then one
+// "row,col,x,y,z" per grid point measured, columns first. The next point is the one after
+// the last line present, so the measurement survives a restart (KMotionCNC counts in
+// memory). The position is the planner's CAD position, as the DRO shows it
+bool KmBackend::measure_point(const char *file, int &row, int &col, int &index, int &total, double pos[9], std::string &err)
+{
+    FILE *f = fopen(file, "r");
+    if (!f) { err = std::string("cannot open ") + file + " (it needs the header: rows,cols / spacing x,y / offset x,y)"; return false; }
+    int nrows = 0, ncols = 0, n = 0;
+    double sx, sy, ox, oy;
+    if (fscanf(f, "%d,%d", &nrows, &ncols) != 2 || nrows < 2 || ncols < 2 || fscanf(f, "%lf,%lf", &sx, &sy) != 2 ||
+        fscanf(f, "%lf,%lf", &ox, &oy) != 2) {
+        fclose(f);
+        err = std::string("invalid header in ") + file + " (rows,cols / spacing x,y / offset x,y)";
+        return false;
+    }
+    int r, c;
+    double x, y, z;
+    while (fscanf(f, "%d,%d,%lf,%lf,%lf", &r, &c, &x, &y, &z) == 5) n++;
+    fclose(f);
+    total = nrows * ncols;
+    if (n >= total) { err = "the grid is complete: every point is measured"; return false; }
+    row = n / ncols;
+    col = n % ncols;
+    index = n + 1;
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        memcpy(pos, d->pos, sizeof(double) * 9);
+    }
+    f = fopen(file, "a");
+    if (!f) { err = std::string("cannot append to ") + file; return false; }
+    fprintf(f, "%d,%d,%f,%f,%f\n", row, col, pos[0], pos[1], pos[2]);
+    fclose(f);
+    return true;
+}
+
 unsigned KmBackend::still_homed() const { return d->still_homed; }
 
 bool KmBackend::homed_persist_write(unsigned mask)

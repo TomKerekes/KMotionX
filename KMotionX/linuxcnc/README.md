@@ -71,6 +71,17 @@ through the same shared memory block.
     switches sit on its actuators, so there is no CAD-space hard limit. The bench's
     `C Programs/SimulateHomes.c` makes the switches on bits 49-54 from the destinations
     (`backend-test limits`).
+  - **KMotionCNC's buttons** as HAL pins, for the gladevcp panel `panels/kmotion-panel.ui`
+    (embedded in gmoccapy's bottom row by `[DISPLAY] EMBED_TAB_*`, netted by
+    `panels/kmotion-panel.hal`, which gladevcp runs itself with `-H` once its pins exist): `kmotion.hold-reverse` / `hold-forward` run the paused program
+    backwards or forwards while held, at `kmotion.hold-rate` (0: 0.2) of the programmed
+    speed - the board's temporary override within the hold (`SetFROTemp`), as KMotionCNC's
+    feed hold buttons; released, or at the resume, it goes back to 0 (board mode only).
+    `kmotion.measure` appends the current position to `[KMOTION] MEASURE_FILE` as the next
+    grid point of a geo correction table (KMotionCNC's Measure: the header - rows,cols,
+    spacing, offset - by hand, then one press per grid point, columns first; the next point
+    is read from the file, so it survives a restart); `kmotion.geo-reload` reads `GEO_FILE`
+    again. Each press answers with a message.
   - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
     Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
     each one of KMotion's M-code actions, carried out as the G-code interpreter's

@@ -271,6 +271,14 @@ public:
     bool trace(std::string &line);
     const char *mode_name() const;
     bool reload_geo_table();                     // GEO_FILE again (KMotionCNC's "reload"); false: failed
+    // KMotionCNC's forward/reverse buttons in feed hold: the board runs its buffer at this
+    // fraction of the programmed speed, negative backwards, 0 stops again (SetFROTemp, a
+    // temporary override that does not end the hold). Board mode only
+    void hold_jog(double fro);
+    // KMotionCNC's Measure button: the current position appended to the geo correction
+    // measurement file as its next grid point (row, col; the file's header says the grid).
+    // Returns false with the reason in err
+    bool measure_point(const char *file, int &row, int &col, int &index, int &total, double pos[9], std::string &err);   // index: the point's number, 1-based
     const KmAxisParams &axis_params(int axis) const;   // the config's, 0-7
     // HOMED_PERSIST (board mode): the mask found at the start with every axis enabled, and
     // writing the current mask
