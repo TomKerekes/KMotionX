@@ -65,7 +65,9 @@ through the same shared memory block.
     machine off (the joint stays homed); a joint being homed is exempt. The GUI's "ignore
     limits" (`OVERRIDE_LIMITS`) lets the next joint jog run - off the switch, not further
     onto it ("Can't jog joint N further past max hard limit") - and the limits count again
-    when that jog ends; no program move or world jog while a switch is made. A robot's
+    when that jog ends; no program move while a switch is made. A world jog under identity
+    kinematics (no joint mode in the GUI) follows the same rule for its own joint; under a
+    KINEMATICS it is refused while a switch is made, as it moves every joint. A robot's
     switches sit on its actuators, so there is no CAD-space hard limit. The bench's
     `C Programs/SimulateHomes.c` makes the switches on bits 49-54 from the destinations
     (`backend-test limits`).

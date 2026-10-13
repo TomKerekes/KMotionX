@@ -1108,12 +1108,24 @@ static void start_jog(int index, bool to_target, double target, double vel)
             if (dir < 0 && GET_JOINT_NHL_FLAG(joint)) { report_error("Can't jog joint %d further past min hard limit.", index); return; }
         }
     } else if (teleop) {
-        // a world jog moves every joint: none while one is on its limit switch
-        for (int j = 0; j < 8 && j < num_joints; j++) {
-            emcmot_joint_t *joint = &joints[j];
-            if (GET_JOINT_ACTIVE_FLAG(joint) && (GET_JOINT_PHL_FLAG(joint) || GET_JOINT_NHL_FLAG(joint))) {
-                report_error("joint %d is on its limit switch: jog it off in joint mode", j);
-                return;
+        if (km && !km->identity_kinematics()) {
+            // under a KINEMATICS a world jog moves every joint, and could drive one further
+            // onto its switch unseen: none while a switch is made (joint mode exists there)
+            for (int j = 0; j < 8 && j < num_joints; j++) {
+                emcmot_joint_t *joint = &joints[j];
+                if (GET_JOINT_ACTIVE_FLAG(joint) && (GET_JOINT_PHL_FLAG(joint) || GET_JOINT_NHL_FLAG(joint))) {
+                    report_error("joint %d is on its limit switch: jog it off in joint mode", j);
+                    return;
+                }
+            }
+        } else if (index < 8) {
+            // identity kinematics (no joint mode in the GUI): a world jog of axis i is a jog of
+            // joint i - off its switch, not further onto it, as for a joint jog
+            emcmot_joint_t *joint = &joints[index];
+            double dir = to_target ? target - m.pos[index] : vel;
+            if (!(GET_JOINT_PHL_FLAG(joint) && GET_JOINT_NHL_FLAG(joint))) {
+                if (dir > 0 && GET_JOINT_PHL_FLAG(joint)) { report_error("Can't jog joint %d further past max hard limit.", index); return; }
+                if (dir < 0 && GET_JOINT_NHL_FLAG(joint)) { report_error("Can't jog joint %d further past min hard limit.", index); return; }
             }
         }
     }
