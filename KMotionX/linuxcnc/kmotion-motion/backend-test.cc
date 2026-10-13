@@ -46,7 +46,7 @@
 //   backend-test arcspeed how fast the planner lets a circle of r=1 run
 // Each check prints ok/FAIL; the exit status is the number of failures.
 // KM_BOARD=1 in the environment runs the backend in board mode with the kmotion-kogna
-// settings (2540 counts/in, 9.84 in/s, MinirouterInit.c): "abort" then measures the real
+// settings (2540 counts/in, 9.84 in/s, the config's MinirouterInit.c): "abort" then measures the real
 // stop on the Kogna, with KM_JOG0=1 adding the Jog<ch>=0 the protocol side used to send.
 #include "kmotion-backend.h"
 #include "kmotion-joglimit.h"
@@ -1000,9 +1000,9 @@ int main(int argc, char **argv)
     }
     if (getenv("KM_BOARD")) {
         cfg.simulate = false;
-        cfg.init_programs.push_back("/home/tk/KMotionXCNC/settings/c-programs/MinirouterInit.c");
-        cfg.init_thread = 1;
         const std::string kogna = kogna_config_dir();
+        cfg.init_programs.push_back(kogna + "/MinirouterInit.c");   // the bench's copy, as kmotion-kogna.ini runs it
+        cfg.init_thread = 1;
         snprintf(cfg.home_program, sizeof cfg.home_program, "%s", (kogna + "/Home.c").c_str());
         if (strcmp(scenario, "spindle") == 0) {           // as kmotion-kogna.ini sets it up
             cfg.init_programs.push_back(kogna + "/spindle/SpindleAxis.c");
