@@ -665,7 +665,14 @@ static void scenario_offon(KmBackend &km)
     km.line(e, 2.0, 50, true, 2);
     f.run(10);
     check(f.at(x0, e[1], e[2], 1e-3), "it runs to the start");
-    check(f.messages.empty(), "no messages");
+    // the bench's axes (MinirouterInit.c: Accel 4000 at Vel 40000 counts/s) take about 20 s to
+    // stop, far over 75% of the lookahead: the planner says so once, through the interpreter's
+    // Translate() - which had no interpreter here and crashed the process until it was made
+    // safe (GCodeInterpreter.cpp). That warning is the one message allowed
+    std::string other = f.messages;
+    size_t w = other.find("Warning Controller configuration takes longer to stop");
+    if (w != std::string::npos) other.erase(w, other.find('\n', w) == std::string::npos ? std::string::npos : other.find('\n', w) - w + 1);
+    check(other.empty(), "no messages but the bench's stop-time warning");
 }
 
 static void scenario_io(KmBackend &km)

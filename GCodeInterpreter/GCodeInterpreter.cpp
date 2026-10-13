@@ -2081,9 +2081,13 @@ int CGCodeInterpreter::ReadToolFile()
 	return read_tool_file(ToolFile, &_setup);
 }
 
-// Global function for language translation
+// Global function for language translation. CM is the interpreter's CoordMotion: a client
+// that drives CCoordMotion without a CGCodeInterpreter (LinuxCNC's kmotion-motion) has
+// none, and the planner's and the kinematics' messages reach here all the same - then the
+// text goes out untranslated rather than through a null pointer
 CString Translate(CString s)
 {
+	if (CM == NULL || CM->KMotionDLL == NULL) return s;
 	return CM->KMotionDLL->Translate(s);
 }
 
@@ -2095,4 +2099,4 @@ int CGCodeInterpreter::convert_tool_length_offset(int g_code, int Tool)
 	dummy_block.h_number = Tool;
 
 	return ::convert_tool_length_offset(g_code, &dummy_block, &_setup);
-}
+}
