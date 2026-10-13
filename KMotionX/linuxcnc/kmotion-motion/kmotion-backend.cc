@@ -428,23 +428,25 @@ static int begin_move(KmBackend::Impl *d, int id)
     // position before every run: the axes may have been moved behind the planner's back
     // (the KMotion console, a program on the board) since the last one
     if (!d->cfg.simulate && !d->run_active && !d->unflushed) {
-        double before[9];
-        memcpy(before, d->pos, sizeof before);
-        double was[3] = {d->cm->current_x, d->cm->current_y, d->cm->current_z};
+        // compared with the planner's own position, not d->pos: the status poller keeps
+        // d->pos current, so after joint jogs (the board moved behind the planner's back)
+        // d->pos already matched the board and the planner was left at the last move's end -
+        // the next move then started there and the board jumped (Left and Z tripped their
+        // following error on the 3 Link robot)
+        CCoordMotion *cm = d->cm;
+        double was[8] = {cm->current_x, cm->current_y, cm->current_z, cm->current_a,
+                         cm->current_b, cm->current_c, cm->current_u, cm->current_v};
         bool read = read_board_position(d);
         double moved = 0;
         if (read) {
-            for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(d->pos[i] - before[i]));
-            if (moved > 1e-6) {
-                set_cm_position(d, d->pos);
-                memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
-            }
+            for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(d->pos[i] - was[i]));
+            if (moved > 1e-6) set_cm_position(d, d->pos);    // cmd_end too
         }
         char t[400];
-        snprintf(t, sizeof t, "planner run start (line %d): board position %s X%.5f Y%.5f Z%.5f (poller had it %.6f away), "
-                 "the planner was at X%.5f Y%.5f Z%.5f, now X%.5f Y%.5f Z%.5f; abort %d halt %d",
-                 id, read ? "read" : "NOT READ", d->pos[0], d->pos[1], d->pos[2], moved, was[0], was[1], was[2],
-                 d->cm->current_x, d->cm->current_y, d->cm->current_z, (int) d->cm->GetAbort(), (int) d->cm->GetHalt());
+        snprintf(t, sizeof t, "planner run start (line %d): board position %s X%.5f Y%.5f Z%.5f, the planner was at "
+                 "X%.5f Y%.5f Z%.5f (%.6f away), now X%.5f Y%.5f Z%.5f; abort %d halt %d",
+                 id, read ? "read" : "NOT READ", d->pos[0], d->pos[1], d->pos[2], was[0], was[1], was[2], moved,
+                 cm->current_x, cm->current_y, cm->current_z, (int) cm->GetAbort(), (int) cm->GetHalt());
         d->trace(t);
     }
     int seq = ++d->serial;
