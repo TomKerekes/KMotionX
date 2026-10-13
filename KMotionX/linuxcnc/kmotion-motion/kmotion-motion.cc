@@ -1163,16 +1163,21 @@ static bool to_planner(const emcmot_command_t &cmd)
     double end[NAXES];
     pose_to_array(cmd.pos, end);
     switch (cmd.command) {
+    // line() and arc() queue the move and return its serial (not a status): a planner
+    // refusal comes later, through the state's error count
     case EMCMOT_SET_LINE:
-        return km->line(end, cmd.vel, cmd.acc, cmd.motion_type == EMC_MOTION_TYPE_TRAVERSE, cmd.id) == 0;
+        km->line(end, cmd.vel, cmd.acc, cmd.motion_type == EMC_MOTION_TYPE_TRAVERSE, cmd.id);
+        return true;
     case EMCMOT_PROBE:
         if (km->has_probe()) {
             km->probe(end, cmd.vel, cmd.acc, cmd.id, (cmd.probe_type & 2) != 0);
             return true;
         }
-        return km->line(end, cmd.vel, cmd.acc, false, cmd.id) == 0;
+        km->line(end, cmd.vel, cmd.acc, false, cmd.id);
+        return true;
     case EMCMOT_RIGID_TAP:
-        return km->line(end, cmd.vel, cmd.acc, false, cmd.id) == 0;
+        km->line(end, cmd.vel, cmd.acc, false, cmd.id);
+        return true;
     case EMCMOT_SET_CIRCLE: {
         double center[3] = {cmd.center.x, cmd.center.y, cmd.center.z}, normal[3] = {cmd.normal.x, cmd.normal.y, cmd.normal.z};
         return km->arc(end, center, normal, cmd.turn, cmd.vel, cmd.acc, cmd.id) == 0;
