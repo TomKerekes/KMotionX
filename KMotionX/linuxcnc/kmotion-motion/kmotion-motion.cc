@@ -1334,7 +1334,7 @@ static bool to_planner(const emcmot_command_t &cmd)
         // the spindle as LinuxCNC has it (M3 S before the G33.1; negative: M4), the pitch from
         // the SET_SPINDLESYNC that came with the move, the retract multiplier (I) in scale
         const spindle_status_t &ss = emcmotStatus->spindle_status[0];
-        km->tap(end, m.spindle_pitch, ss.speed / 60.0, cmd.scale, cmd.id);
+        km->tap(end, cmd.spindlesync, ss.speed / 60.0, cmd.scale, cmd.id);   // the pitch, carried with the command
         return true;
     }
     case EMCMOT_SET_CIRCLE: {
@@ -1706,7 +1706,14 @@ static void handle_command()
                   c->scale, m.spindle_pitch, emcmotStatus->spindle_status[0].speed);
         if (!in_range(*c, "Rigid tap")) { refuse_move(); break; }
         if (km) {
-            if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_FEED)) && !to_planner(*c))
+            // the pitch travels with the command: the interpreter sends SET_SPINDLESYNC with
+            // the pitch, the tap, then SET_SPINDLESYNC 0 - and the tap may wait at the
+            // spindle-at-speed barrier, by which time the pitch here is 0 again (seen on
+            // the robot: "a rigid tap needs the spindle turning and a pitch"). The command's
+            // own spindlesync field is unused for a RIGID_TAP
+            emcmot_command_t tc = *c;
+            tc.spindlesync = m.spindle_pitch;
+            if (!hold(tc, atspeed_barrier(EMC_MOTION_TYPE_FEED)) && !to_planner(tc))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
             m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
             break;
