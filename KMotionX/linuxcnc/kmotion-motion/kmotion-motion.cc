@@ -275,6 +275,7 @@ struct Model {
     int probe_seen;         // board probing: the backend's probe_serial when the probe move was sent
     double spindle_pitch;   // SET_SPINDLESYNC: units per revolution for the next G33.1 (0: none)
     int tap_seen;           // rigid taps already taken into account (the backend's tap_serial)
+    int tap_dir0;           // the spindle's direction as commanded when the tap started (shown again after it)
 };
 static Model m;
 
@@ -304,6 +305,7 @@ static void model_init()
     m.world_jog = false;
     m.spindle_pitch = 0;
     m.tap_seen = 0;
+    m.tap_dir0 = 0;
     m.wj_limit_joint = -1;
     m.wj_limit_dir = 0;
     m.wj_line = 0;
@@ -574,10 +576,28 @@ static void model_step(double dt)
             km->pause(true);                  // the next line has started: the step is done
             m.stepping = false;
         }
+        if (m.ks.tapping) {
+            // the spindle as it really turns during the tap (motmod flips its speed at the
+            // reversal, and the GUI shows it): the sign from the measured speed
+            spindle_status_t &ss = emcmotStatus->spindle_status[0];
+            double meas = m.ks.spindle_rpm_measured;
+            if (m.tap_dir0 == 0) m.tap_dir0 = ss.direction;
+            if (fabs(meas) > 5) {
+                int dir = meas > 0 ? 1 : -1;
+                ss.direction = dir;
+                ss.speed = dir * fabs(ss.speed);
+            }
+        }
         if (m.ks.tap_serial != m.tap_seen) {
             // a rigid tap ended: the position is where the board stands; a failure aborts
-            // the program as a refused move does
+            // the program as a refused move does; the spindle shows its commanded direction again
             m.tap_seen = m.ks.tap_serial;
+            if (m.tap_dir0 != 0) {
+                spindle_status_t &ss = emcmotStatus->spindle_status[0];
+                ss.direction = m.tap_dir0;
+                ss.speed = m.tap_dir0 * fabs(ss.speed);
+                m.tap_dir0 = 0;
+            }
             log_print("rigid tap %s\n", m.ks.tap_result == 0 ? "done" : m.ks.tap_result == 2 ? "aborted" : "FAILED");
             if (m.ks.tap_result == 1) { report_error("rigid tap failed"); SET_MOTION_ERROR_FLAG(1); }
         }
@@ -2150,6 +2170,7 @@ static bool read_kmotion_config(KmConfig &cfg)
     cfg.spindle_speed_axis = (int) ini.num(K, "SPINDLE_SPEED_AXIS", -1);
     cfg.spindle_counts_per_rev = ini.num(K, "SPINDLE_COUNTS_PER_REV", 0);
     cfg.spindle_speed_tau = ini.num(K, "SPINDLE_SPEED_TAU", 0.1);
+    cfg.spindle_at_speed_tol = ini.num(K, "SPINDLE_AT_SPEED_TOLERANCE", 0.01);
     if (const char *from = ini.get(K, "SPINDLE_SPEED_FROM")) {
         std::string f = from;
         f.erase(f.find_last_not_of(" \t\r") + 1);

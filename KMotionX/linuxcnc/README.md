@@ -95,7 +95,9 @@ through the same shared memory block.
     once the encoder is back at the start and reports through persist 192-196; the module
     then clears the motion, sets the planner to where the board stands and restarts the
     spindle as LinuxCNC has it. The program holds what the machine is: the encoder axis,
-    counts per revolution, how the spindle runs. The interpreter wants the spindle turning
+    counts per revolution from the ini (`SPINDLE_SPEED_AXIS`, `SPINDLE_COUNTS_PER_REV`, persist
+    197-198), how the spindle runs. While the tap runs the spindle's status shows the
+    direction it really turns, as motmod's does. The interpreter wants the spindle turning
     (M3 S) before a G33.1; an aborted tap stops the spindle, a pause is refused (the board's
     feed hold stops the motion whatever the spindle does), the feed override is 1 for the
     tap. The firmware starts the sync when the spindle reaches a start position two
@@ -168,6 +170,9 @@ through the same shared memory block.
     in a row with the board idle let the moves go, so a read from before the spin-up (or before
     `ServiceCSS()`'s next update) cannot. `kmotion.spindle-at-speed` shows it (the kmotion-kogna
     config lights gmoccapy's at-speed LED with it); the bench uses `AXIS 3`.
+    `SPINDLE_AT_SPEED_TOLERANCE` (default 0.01) is the fraction of the commanded speed within
+    which `AXIS` counts as at speed; it leaves again at twice that, so the LED does not
+    flicker with the read timing.
   - **Board I/O bits as HAL pins**: `[KMOTION] OUTPUT_BITS = <bit> ...` makes a pin
     `kmotion.out.<bit>` (HAL in) per bit, which the board bit follows (`SetStateBit`, set once
     at start, then on every change); `INPUT_BITS` makes `kmotion.in.<bit>` (HAL out) from the

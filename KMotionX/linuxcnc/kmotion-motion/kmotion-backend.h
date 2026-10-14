@@ -129,6 +129,7 @@ struct KmConfig {
     int spindle_at_speed_bit = -1;            // BIT: the I/O bit and the level meaning at speed
     int spindle_at_speed_level = 1;
     int spindle_at_speed_axis = -1;           // AXIS: the board channel (spindle_counts_per_rev converts)
+    double spindle_at_speed_tol = 0.01;       // AXIS: within this fraction of the target (at least 1 RPM); leaves at twice it
     // board input bits whose states every status read publishes (KmState.input_states)
     std::vector<int> input_bits;              // at most 64, each one the status carries
     // LinuxCNC's user M codes M100-M199 (index n - 100): KMotionCNC's M-code actions; P and Q

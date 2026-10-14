@@ -935,8 +935,11 @@ static void w_poll_board(KmBackend::Impl *d)
             if (d->at_have_prev && dt > 0.001 && dt < 1.0) {
                 double rpm = spindle_target_rpm(d, status);
                 double v = fabs(p - d->at_prev_dest) / dt, target = fabs(rpm) * cpr / 60.0;
-                double tol = std::max(0.01 * target, cpr / 60.0);
-                at = rpm < 0 || fabs(v - target) <= tol;
+                // within the tolerance to get there, twice it to leave: the Dest's speed
+                // between two reads jitters with the read timing, and a LED that follows
+                // every read flickers
+                double tol = std::max(d->cfg.spindle_at_speed_tol * target, cpr / 60.0);
+                at = rpm < 0 || fabs(v - target) <= (d->sp_at_speed ? 2 * tol : tol);
             }
             d->at_prev_dest = p;
             d->at_prev_stamp = status.TimeStamp;
@@ -1239,8 +1242,9 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
 // program (TAP_PROGRAM, Tap.c) waits for the launch, lets the spindle turn the revolutions
 // for the depth, reverses it at the retract speed, stops it once back at the start and
 // reports. Then the buffer is cleared, the planner set to where the board stands, and the
-// spindle told what LinuxCNC has for it (M3 S, as before the tap). Persist 192-196 carry
-// the parameters and the result. The firmware (DSP_KOGNA/fast.c, TrigThreading/DoSpindle):
+// spindle told what LinuxCNC has for it (M3 S, as before the tap). Persist 192-198 carry
+// the parameters (197 the spindle's channel, 198 its counts per revolution, from the ini's
+// SPINDLE_SPEED_AXIS / SPINDLE_COUNTS_PER_REV) and the result. The firmware (DSP_KOGNA/fast.c, TrigThreading/DoSpindle):
 // the motion begins when the spindle reaches a start position two revolutions past the
 // trigger, the time base held at zero until then; it is the real time scaled by the
 // spindle's progress, negative when the spindle reverses, floored at the path's start;
@@ -1248,7 +1252,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
 // deceleration; a feed hold ramps the time base to zero whatever the spindle does
 static void w_tap(KmBackend::Impl *d, const Cmd &c)
 {
-    enum { P_STATE = 192, P_REVS = 193, P_RPS = 194, P_RETRACT = 195, P_OVERSHOOT = 196 };
+    enum { P_STATE = 192, P_REVS = 193, P_RPS = 194, P_RETRACT = 195, P_OVERSHOOT = 196, P_AXIS = 197, P_CPR = 198 };
     auto finish = [&](int result, const char *why) {
         if (why) d->message(why);
         std::lock_guard<std::mutex> lock(d->smx);
@@ -1281,10 +1285,12 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
         return;
     }
     if (!d->cfg.tap_program[0]) { finish(1, "rigid tapping needs [KMOTION] TAP_PROGRAM (a program that turns and reverses the spindle)"); return; }
+    if (d->cfg.spindle_speed_axis < 0 || d->cfg.spindle_counts_per_rev <= 0) { finish(1, "rigid tapping needs [KMOTION] SPINDLE_SPEED_AXIS and SPINDLE_COUNTS_PER_REV (the spindle's channel and encoder)"); return; }
     double end[9];
     for (int i = 0; i < 9; i++) end[i] = start[i] + dir[i] * (1 + d->cfg.tap_overshoot_revs * pitch / len);
     if (set_persist(d, P_STATE, 0) || set_persist(d, P_REVS, lround(revs * 1e6)) || set_persist(d, P_RPS, lround(rps * 1e6)) ||
-        set_persist(d, P_RETRACT, lround(scale * 1e6)) || set_persist(d, P_OVERSHOOT, lround(d->cfg.tap_overshoot_revs * 1e6))) {
+        set_persist(d, P_RETRACT, lround(scale * 1e6)) || set_persist(d, P_OVERSHOOT, lround(d->cfg.tap_overshoot_revs * 1e6)) ||
+        set_persist(d, P_AXIS, d->cfg.spindle_speed_axis) || set_persist(d, P_CPR, lround(d->cfg.spindle_counts_per_rev))) {
         finish(1, "the rigid tap's parameters could not be written to the board");
         return;
     }
