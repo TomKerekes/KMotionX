@@ -1024,9 +1024,10 @@ static void w_poll_board(KmBackend::Impl *d)
         if (d->tapping && d->tap_trace_left > 0) {
             // what the measurement sees during a tap, for the log
             d->tap_trace_left--;
-            char t[200];
-            snprintf(t, sizeof t, "tap: status at %.4f s: spindle channel %d Position %.1f Dest %.1f, measured %.1f RPM, dt %.4f, path segments %d of %d downloaded",
-                     status.TimeStamp, ch, status.Position[ch], status.Dest[ch], d->sp_measured.load(), dt, cm->m_nsegs_downloaded, nsegs);
+            char t[320];
+            snprintf(t, sizeof t, "tap: status at %.4f s: spindle channel %d Position %.1f Dest %.1f, measured %.1f RPM, dt %.4f; path segments %d of %d downloaded, executed %.2f of %.2f s; joints %.1f %.1f %.1f",
+                     status.TimeStamp, ch, status.Position[ch], status.Dest[ch], d->sp_measured.load(), dt, cm->m_nsegs_downloaded, nsegs,
+                     cm->m_TimeAlreadyExecuted, cm->m_TotalDownloadedTime, status.Dest[0], status.Dest[1], status.Dest[2]);
             d->trace(t);
         }
         if (d->tap_flush_watch && !d->tap_flush_cut) {
@@ -1345,30 +1346,43 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     d->lines_begun++;
     cm->m_ThreadingMode = true;
     cm->m_ThreadingBaseSpeedRPS = rps;
+    // The whole path goes to the board before the launch. The planner streams a run: it
+    // downloads only TPLookahead seconds ahead of the board's executed time and waits for
+    // the rest - and in spindle sync that time advances only as the spindle turns, so a tap
+    // longer than the lookahead was fed as the spindle went (the robot: 1150 ten-millisecond
+    // segments for a 1 in path at 100 RPM, downloaded at the pace they were consumed, the
+    // motion stopping eight times on the way down) and once Tap.c had stopped the spindle at
+    // the top the download waited forever (the worker in the planner for minutes). The board
+    // holds 35000 segments; the download itself takes a fraction of a second. For the tap
+    // the lookahead is made unbounded, so nothing waits on the board, and restored after
+    MOTION_PARAMS *MP = cm->GetMotionParams();
+    const double lookahead = MP->TPLookahead;
+    MP->TPLookahead = 1e9;
+    d->tap_flush_cut = false;
+    d->tap_flush_watch = !d->cfg.simulate;    // the safety net: the poller cuts a download that
+                                              // still waits once the program has ended
     int r = cm->StraightFeedAccelRapid(pitch * fabs(rps), c.acc, false, true, end[0], end[1], end[2], end[3], end[4], end[5], end[6], end[7], seq, 0);
     if (!r) memcpy(d->cmd_end, end, sizeof d->cmd_end);
     harvest(d);
     if (!r) {
         if (d->cfg.simulate) w_flush(d);
         else {
-            // FlushSegments finishes the plan, downloads it and sends TrigThread. A path longer
-            // than the board's buffer (the overshoot allowance at a coarse pitch) downloads as
-            // the board frees space, which it does only as the spindle turns: once the program
-            // has finished (the spindle stopped at the top) nothing frees it and the download
-            // would wait forever (seen on the robot: 0.7 in of tap plus 1.8 in of allowance,
-            // Tap.c done, the worker in FlushSegments for minutes). The poller watches the
-            // program meanwhile and cuts the download when it has ended: the rest of the path
-            // was the allowance, never needed
+            // FlushSegments finishes the plan, downloads the rest and sends TrigThread
             { std::lock_guard<std::mutex> lk(d->wmx); d->unflushed = false; }
-            d->tap_flush_cut = false;
-            d->tap_flush_watch = true;
+            double t0 = now_s();
             int fr = cm->FlushSegments();
-            d->tap_flush_watch = false;
-            if (d->tap_flush_cut) {
-                cm->ClearAbort();
-                d->trace("rigid tap: the program finished before the whole path was downloaded (the rest was the overshoot allowance)");
-            } else if (fr) r = fr;
+            char t[160];
+            snprintf(t, sizeof t, "rigid tap: %d segments on the board, the flush took %.3f s", cm->m_nsegs_downloaded, now_s() - t0);
+            d->trace(t);
+            if (fr && !d->tap_flush_cut) r = fr;
         }
+    }
+    d->tap_flush_watch = false;
+    MP->TPLookahead = lookahead;
+    if (d->tap_flush_cut) {
+        cm->ClearAbort();
+        r = 0;
+        d->trace("rigid tap: the program finished before the whole path was downloaded (the rest was the overshoot allowance)");
     }
     cm->m_ThreadingMode = false;
     char cmd[64], reply[MAX_LINE + 1];
