@@ -102,7 +102,12 @@ through the same shared memory block.
     feed hold stops the motion whatever the spindle does), the feed override is 1 for the
     tap. The firmware starts the sync when the spindle reaches a start position two
     revolutions past the trigger, and the path's end ends it, so `TAP_OVERSHOOT_REVS` must
-    cover the spindle's deceleration. In simulate mode the tap is replayed as a move down
+    cover the spindle's deceleration - and no more: the allowance is `TAP_OVERSHOOT_REVS` x
+    pitch of path beyond the bottom, and a path longer than the board's buffer is downloaded
+    while the spindle turns (a run can go jerky when the download falls behind), the
+    download cut short once the program has finished (a long path never deadlocks, the
+    rest of it was the allowance). At a coarse pitch or a slow spindle a smaller value does
+    (the spindle's deceleration takes fewer revolutions). In simulate mode the tap is replayed as a move down
     and back. **G84 and G74** (the tapping cycles, right- and left-hand) are rigid taps too
     with `[RS274NGC] RIGID_TAP_CYCLES = 1` and the interpreter patch
     `patches/interp-rigid-tap-cycles.patch`: the cycle's rapid to the retract plane, then the

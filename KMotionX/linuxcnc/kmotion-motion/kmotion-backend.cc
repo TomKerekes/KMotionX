@@ -157,6 +157,8 @@ struct KmBackend::Impl {
     double at_prev_dest = 0, at_prev_stamp = 0;   // poller, AXIS: the spindle channel's last Dest and its time
     double at_v_filt = 0;                  // ... its speed, low-pass filtered (counts/s)
     int tap_trace_left = 0;                // poller: status reads still to trace during a tap
+    std::atomic<bool> tap_flush_watch{false}; // the worker downloads the tap's path: the poller watches the program
+    std::atomic<bool> tap_flush_cut{false};   // ... and cut the download because the program had finished
     bool at_have_prev = false;
     // G96 as last written to the board (w_css), for the AXIS target: the X counts of radius 0,
     // X's counts per inch, the surface speed in in/s and the maximum RPM
@@ -1023,9 +1025,19 @@ static void w_poll_board(KmBackend::Impl *d)
             // what the measurement sees during a tap, for the log
             d->tap_trace_left--;
             char t[200];
-            snprintf(t, sizeof t, "tap: status at %.4f s: spindle channel %d Position %.1f Dest %.1f, measured %.1f RPM, dt %.4f",
-                     status.TimeStamp, ch, status.Position[ch], status.Dest[ch], d->sp_measured.load(), dt);
+            snprintf(t, sizeof t, "tap: status at %.4f s: spindle channel %d Position %.1f Dest %.1f, measured %.1f RPM, dt %.4f, path segments %d of %d downloaded",
+                     status.TimeStamp, ch, status.Position[ch], status.Dest[ch], d->sp_measured.load(), dt, cm->m_nsegs_downloaded, nsegs);
             d->trace(t);
+        }
+        if (d->tap_flush_watch && !d->tap_flush_cut) {
+            // the worker is downloading the tap's path (see w_tap): once the program has
+            // ended the spindle stands and no buffer space frees again - cut the download
+            char cmd[32], reply[MAX_LINE + 1];
+            snprintf(cmd, sizeof cmd, "CheckThread%d", d->cfg.tap_thread);
+            if (board_query(d, cmd, reply) == 0 && strcmp(reply, "0") == 0) {
+                d->tap_flush_cut = true;
+                cm->SetAbort();
+            }
         }
     }
 
@@ -1336,7 +1348,28 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     int r = cm->StraightFeedAccelRapid(pitch * fabs(rps), c.acc, false, true, end[0], end[1], end[2], end[3], end[4], end[5], end[6], end[7], seq, 0);
     if (!r) memcpy(d->cmd_end, end, sizeof d->cmd_end);
     harvest(d);
-    if (!r) w_flush(d);                 // FlushSegments finishes the plan, downloads it and sends TrigThread
+    if (!r) {
+        if (d->cfg.simulate) w_flush(d);
+        else {
+            // FlushSegments finishes the plan, downloads it and sends TrigThread. A path longer
+            // than the board's buffer (the overshoot allowance at a coarse pitch) downloads as
+            // the board frees space, which it does only as the spindle turns: once the program
+            // has finished (the spindle stopped at the top) nothing frees it and the download
+            // would wait forever (seen on the robot: 0.7 in of tap plus 1.8 in of allowance,
+            // Tap.c done, the worker in FlushSegments for minutes). The poller watches the
+            // program meanwhile and cuts the download when it has ended: the rest of the path
+            // was the allowance, never needed
+            { std::lock_guard<std::mutex> lk(d->wmx); d->unflushed = false; }
+            d->tap_flush_cut = false;
+            d->tap_flush_watch = true;
+            int fr = cm->FlushSegments();
+            d->tap_flush_watch = false;
+            if (d->tap_flush_cut) {
+                cm->ClearAbort();
+                d->trace("rigid tap: the program finished before the whole path was downloaded (the rest was the overshoot allowance)");
+            } else if (fr) r = fr;
+        }
+    }
     cm->m_ThreadingMode = false;
     char cmd[64], reply[MAX_LINE + 1];
     bool killed = false;
