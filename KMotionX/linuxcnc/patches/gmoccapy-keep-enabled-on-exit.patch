@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..e9e756a61a 100644
+index cae34386ee..4cbb8c43b6 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -524,6 +524,10 @@ class gmoccapy(object):
@@ -33,12 +33,23 @@ index cae34386ee..e9e756a61a 100644
                  widget.set_active(False)
          else:  # estop circuit is fine
 +            self.stat.poll()
-+            if self.stat.task_state == linuxcnc.STATE_ON and self._keep_enabled_on_exit():
-+                return  # the machine is on already (a start found the axes enabled): leave it so
++            if self.stat.task_state == linuxcnc.STATE_ON:
++                return  # the machine is on already (a start found the axes enabled, or it was turned on from outside): nothing to reset
              self.command.state(linuxcnc.STATE_ESTOP_RESET)
              self.command.wait_complete()
              self.stat.poll()
-@@ -3039,6 +3054,7 @@ class gmoccapy(object):
+@@ -2837,6 +2852,10 @@ class gmoccapy(object):
+ 
+     # toggle machine on / off button
+     def on_tbtn_on_toggled(self, widget, data=None):
++        # the state as it is now, not as the last periodic poll (up to CYCLE_TIME ago) saw
++        # it: a machine turned on from outside (the autostart) right after its E-stop reset
++        # would read as still in E-stop here, and the button would turn it off again
++        self.stat.poll()
+         if widget.get_active():
+             if self.stat.task_state == linuxcnc.STATE_ESTOP:
+                 widget.set_active(False)
+@@ -3039,6 +3058,7 @@ class gmoccapy(object):
          self.command.mode(linuxcnc.MODE_MANUAL)
  
      def on_hal_status_state_estop_reset(self, widget=None):
@@ -46,7 +57,7 @@ index cae34386ee..e9e756a61a 100644
          self.widgets.tbtn_estop.set_active(False)
          self.widgets.tbtn_estop.set_image(self.widgets.img_emergency_off)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_off)
-@@ -3071,7 +3087,16 @@ class gmoccapy(object):
+@@ -3071,7 +3091,21 @@ class gmoccapy(object):
          self.widgets.ntb_info.set_current_page(0)
          self.widgets.ntb_jog.set_current_page(0)
  
@@ -60,10 +71,15 @@ index cae34386ee..e9e756a61a 100644
 +
      def on_hal_status_state_on(self, widget):
 +        self._note_plot_reference()
++        # a machine turned on from outside within one status poll of its E-stop reset (the
++        # autostart does both at once): the reset's own signal never came, and the E-stop
++        # button - with the jog notebook it gates - would stay as in E-stop
++        if self.widgets.tbtn_estop.get_active():
++            self.on_hal_status_state_estop_reset()
          widgetlist = ["rbt_manual", "btn_homing", "btn_touch", "btn_tool",
                        "ntb_jog", "spc_feed", "btn_feed_100", "rbt_forward",
                        "rbt_reverse", "rbt_stop", "tbtn_flood", "tbtn_mist",
-@@ -3081,7 +3106,9 @@ class gmoccapy(object):
+@@ -3081,7 +3115,9 @@ class gmoccapy(object):
          if not self.widgets.tbtn_on.get_active():
              self.widgets.tbtn_on.set_active(True)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_on)
@@ -74,7 +90,7 @@ index cae34386ee..e9e756a61a 100644
          if self.widgets.ntb_main.get_current_page() != 0:
              self.command.mode(linuxcnc.MODE_MANUAL)
              self.command.wait_complete()
-@@ -3364,14 +3391,33 @@ class gmoccapy(object):
+@@ -3364,14 +3400,33 @@ class gmoccapy(object):
          self.initialized = True
  
      # kill keyboard and estop machine before closing
