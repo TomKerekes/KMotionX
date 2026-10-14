@@ -1387,9 +1387,13 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
         // the spindle: off, as the program is gone (an aborted tap is not a running spindle)
         if (d->sp_state == 1 || d->sp_state == -1) { Cmd sc{}; sc.kind = Cmd::SPINDLE; sc.sp_state = 0; sc.sp_rpm = 0; w_spindle(d, sc); }
     } else if (d->sp_state == 1 || d->sp_state == -1) {
-        // the spindle back as LinuxCNC has it: the program left it stopped at the top
+        // the spindle back as LinuxCNC has it: the program left it stopped at the top, so
+        // the worker must forget that it had it running, or it sends nothing (it sends S
+        // and M3/M4 only for a change)
         Cmd sc{};
         sc.kind = Cmd::SPINDLE; sc.sp_state = d->sp_state; sc.sp_rpm = d->sp_rpm; sc.sp_css = d->sp_css_mode == 2;
+        d->sp_state = 0;
+        d->sp_rpm = -1;
         w_spindle(d, sc);
     }
     finish(result, result == 1 && state != -1 ? "the rigid tap program reported a failure" : nullptr);
