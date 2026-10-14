@@ -3,3 +3,6 @@
 # panel's own nets are in panels/kmotion-panel.hal, run by gladevcp itself)
 newsig gui-ready bit
 sets gui-ready 1
+# the fake spindle's measured speed and at-speed state for the GUI (kmotion-3link.ini: SPINDLE_*)
+net spindle-rpm-measured kmotion.spindle-rpm-abs => gmoccapy.spindle_feedback_bar
+net spindle-at-speed kmotion.spindle-at-speed => gmoccapy.spindle_at_speed_led
