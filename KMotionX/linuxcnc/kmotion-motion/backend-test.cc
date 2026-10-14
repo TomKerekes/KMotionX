@@ -1183,6 +1183,25 @@ static void scenario_abort(KmBackend &km)
     check(f.messages.empty(), "no messages");
 }
 
+// the 3 Link's tap path as the planner cuts it (simulate, the kmotion-3link settings, the
+// segment log /tmp/TPSegLog.csv): a rapid to Z0.8, then the tap's feed from Z0.8 to Z-0.2
+// (bottom Z0.1 plus the 0.3 in allowance) at 0.08333 in/s - 100 RPM at 0.05 in/rev, as on
+// the robot. Knots of the feed with no motion are pauses the board will make
+static void scenario_tapsegs(KmBackend &km)
+{
+    Follower f(km);
+    double top[9] = {0, 0, 0.8, 0, 0, 0, 0, 0, 0}, bottom[9] = {0, 0, -0.2, 0, 0, 0, 0, 0, 0};
+    km.line(top, 3.0, 30.0, true, 1);
+    f.run();
+    check(f.at(0, 0, 0.8), "the rapid ends at Z0.8");
+    km.line(bottom, 0.083333, 1e9, false, 2);
+    f.t0 = std::chrono::steady_clock::now(); f.t = 0;
+    f.run();
+    printf("  t=%.2f: the feed ended at Z%.4f\n", f.t, f.st.pos[2]);
+    check(f.at(0, 0, -0.2), "the feed ends at Z-0.2");
+    printf("  the planner's knots are in /tmp/TPSegLog.csv\n");
+}
+
 int main(int argc, char **argv)
 {
     const char *scenario = argc > 1 ? argv[1] : "program";
@@ -1197,7 +1216,7 @@ int main(int argc, char **argv)
     if (getenv("KM_JERK")) for (int i = 0; i < 3; i++) cfg.axis[i].max_jerk = atof(getenv("KM_JERK"));
     if (getenv("KM_BREAK_ANGLE")) cfg.break_angle = atof(getenv("KM_BREAK_ANGLE"));
     if (strcmp(scenario, "gated") == 0) cfg.queue_limit = 20;     // the backend must know task's limit
-    if (strcmp(scenario, "kins3link") == 0) {                      // the kmotion-3link settings, simulate mode
+    if (strcmp(scenario, "kins3link") == 0 || strcmp(scenario, "tapsegs") == 0) {                      // the kmotion-3link settings, simulate mode
         snprintf(cfg.kinematics, sizeof cfg.kinematics, "3Link");
         for (int i = 0; i < 3; i++) {
             KmAxisParams &a = cfg.axis[i];
@@ -1286,6 +1305,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
     else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
     else if (strcmp(scenario, "joglimit") == 0) scenario_joglimit(*km);
+    else if (strcmp(scenario, "tapsegs") == 0) scenario_tapsegs(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();
