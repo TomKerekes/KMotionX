@@ -273,6 +273,8 @@ struct Model {
     int atspeed_reads;      // status reads in a row that found the spindle at speed, the board idle
     unsigned atspeed_seen;  // the status read looked at last
     int probe_seen;         // board probing: the backend's probe_serial when the probe move was sent
+    double spindle_pitch;   // SET_SPINDLESYNC: units per revolution for the next G33.1 (0: none)
+    int tap_seen;           // rigid taps already taken into account (the backend's tap_serial)
 };
 static Model m;
 
@@ -300,6 +302,8 @@ static void model_init()
     m.spindle_posted = 0;
     m.home_pending = 0;
     m.world_jog = false;
+    m.spindle_pitch = 0;
+    m.tap_seen = 0;
     m.wj_limit_joint = -1;
     m.wj_limit_dir = 0;
     m.wj_line = 0;
@@ -569,6 +573,13 @@ static void model_step(double dt)
         if (m.stepping && emcmotStatus->id != m.step_id && m.ks.active_id) {
             km->pause(true);                  // the next line has started: the step is done
             m.stepping = false;
+        }
+        if (m.ks.tap_serial != m.tap_seen) {
+            // a rigid tap ended: the position is where the board stands; a failure aborts
+            // the program as a refused move does
+            m.tap_seen = m.ks.tap_serial;
+            log_print("rigid tap %s\n", m.ks.tap_result == 0 ? "done" : m.ks.tap_result == 2 ? "aborted" : "FAILED");
+            if (m.ks.tap_result == 1) { report_error("rigid tap failed"); SET_MOTION_ERROR_FLAG(1); }
         }
         if (m.ks.home_serial != m.home_seen) {
             // the board's home program has finished (or was stopped)
@@ -966,7 +977,7 @@ static void update_status()
         emcmotStatus->probeVal = m.ks.probe_contact;
         if (emcmotStatus->probing && m.ks.probe_serial != m.probe_seen) probe_result();
     }
-    bool coord_busy = km ? (m.ks.running || m.ks.homing || m.spindle_posted != m.ks.spindle_done || !m.held.empty() ||
+    bool coord_busy = km ? (m.ks.running || m.ks.homing || m.ks.tapping || m.spindle_posted != m.ks.spindle_done || !m.held.empty() ||
                             (km->has_probe() && emcmotStatus->probing))
                          : (m.active || !m.queue.empty());
     bool inpos = !coord_busy && !any_jog_running();
@@ -1319,9 +1330,13 @@ static bool to_planner(const emcmot_command_t &cmd)
         }
         km->line(end, cmd.vel, cmd.acc, false, cmd.id);
         return true;
-    case EMCMOT_RIGID_TAP:
-        km->line(end, cmd.vel, cmd.acc, false, cmd.id);
+    case EMCMOT_RIGID_TAP: {
+        // the spindle as LinuxCNC has it (M3 S before the G33.1; negative: M4), the pitch from
+        // the SET_SPINDLESYNC that came with the move, the retract multiplier (I) in scale
+        const spindle_status_t &ss = emcmotStatus->spindle_status[0];
+        km->tap(end, m.spindle_pitch, ss.speed / 60.0, cmd.scale, cmd.id);
         return true;
+    }
     case EMCMOT_SET_CIRCLE: {
         double center[3] = {cmd.center.x, cmd.center.y, cmd.center.z}, normal[3] = {cmd.normal.x, cmd.normal.y, cmd.normal.z};
         return km->arc(end, center, normal, cmd.turn, cmd.vel, cmd.acc, cmd.id) == 0;
@@ -1681,7 +1696,8 @@ static void handle_command()
         break;
     }
     case EMCMOT_RIGID_TAP: {
-        log_print("RIGID_TAP to z=%.6g vel=%.6g (runs as a plain move here)\n", c->pos.tran.z, c->vel);
+        log_print("RIGID_TAP to x=%.6g y=%.6g z=%.6g scale=%.6g (pitch %.6g, spindle %.6g RPM)\n", c->pos.tran.x, c->pos.tran.y, c->pos.tran.z,
+                  c->scale, m.spindle_pitch, emcmotStatus->spindle_status[0].speed);
         if (!in_range(*c, "Rigid tap")) { refuse_move(); break; }
         if (km) {
             if (!hold(*c, atspeed_barrier(EMC_MOTION_TYPE_FEED)) && !to_planner(*c))
@@ -1841,6 +1857,7 @@ static void handle_command()
     case EMCMOT_SET_SPINDLESYNC:
         log_print("SET_SPINDLESYNC sync=%.6f, flags=0x%08x\n", c->spindlesync, c->flags);
         emcmotStatus->spindleSync = c->spindlesync != 0;
+        m.spindle_pitch = fabs(c->spindlesync);
         break;
     case EMCMOT_SPINDLE_ON:
         log_print("SPINDLE_ON spindle=%d speed=%.6g css_factor=%.6g xoffset=%.6g wait_at_speed=%d\n",
@@ -2112,6 +2129,11 @@ static bool read_kmotion_config(KmConfig &cfg)
     if (home && home[0]) snprintf(cfg.home_program, sizeof cfg.home_program, "%s", ini_relative(ini_path, home).c_str());
     cfg.home_thread = (int) ini.num(K, "HOME_THREAD", 2);
     cfg.home_timeout = ini.num(K, "HOME_TIMEOUT_S", 120);
+    const char *tapp = ini.get(K, "TAP_PROGRAM");           // rigid tapping: the program that turns and reverses the spindle
+    if (tapp && tapp[0]) snprintf(cfg.tap_program, sizeof cfg.tap_program, "%s", ini_relative(ini_path, tapp).c_str());
+    cfg.tap_thread = (int) ini.num(K, "TAP_THREAD", 4);
+    cfg.tap_timeout = ini.num(K, "TAP_TIMEOUT_S", 120);
+    cfg.tap_overshoot_revs = ini.num(K, "TAP_OVERSHOOT_REVS", 2);
     cfg.spindle_speed_axis = (int) ini.num(K, "SPINDLE_SPEED_AXIS", -1);
     cfg.spindle_counts_per_rev = ini.num(K, "SPINDLE_COUNTS_PER_REV", 0);
     cfg.spindle_speed_tau = ini.num(K, "SPINDLE_SPEED_TAU", 0.1);
@@ -2230,7 +2252,7 @@ static bool read_kmotion_config(KmConfig &cfg)
     std::vector<std::pair<int, std::string>> forever = cfg.start_programs;
     if (cfg.enable_program[0]) forever.emplace_back(cfg.enable_thread, cfg.enable_program);
     for (const auto &sp : forever) {
-        bool clash = sp.first == cfg.home_thread && cfg.home_program[0];
+        bool clash = (sp.first == cfg.home_thread && cfg.home_program[0]) || (sp.first == cfg.tap_thread && cfg.tap_program[0]);
         for (const KmAction &a : cfg.spindle)
             if (a.type >= KM_ACTION_PROGRAM && (int) a.p[0] == sp.first) clash = true;
         for (const KmAction &a : cfg.mcode)

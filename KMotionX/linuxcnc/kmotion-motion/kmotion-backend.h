@@ -99,6 +99,14 @@ struct KmConfig {
     char home_program[512] = "";  // C program that homes (see configs/kmotion-kogna/Home.c), "" = none:
                                   // joints are then declared homed where they stand
     int home_thread = 2;
+    // rigid tapping (G33.1): a C program on the board turns the spindle the revolutions for
+    // the depth, reverses and brings it back (see configs/kmotion-kogna/Tap.c), while the
+    // planner's move runs in the board's spindle-sync mode (TrigThread): every actuator
+    // follows the spindle encoder, through any kinematics. "" = G33.1 is refused
+    char tap_program[512] = "";
+    int tap_thread = 4;
+    double tap_timeout = 120;     // seconds the tap may take
+    double tap_overshoot_revs = 2;   // the planned path goes this many revolutions past the bottom: the spindle's deceleration
     double home_timeout = 120;    // seconds the program may take
     KmAction spindle[KM_SPINDLE_ACTIONS];   // LinuxCNC's spindle 0 (all NONE: the board is not told)
     // the spindle's measured speed (board mode): from the axis channel that turns it, either its
@@ -203,6 +211,9 @@ struct KmState {
     int spindle_done;             // counts spindle() calls carried out (or superseded)
     double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
+    bool tapping;                 // board: a rigid tap is in progress (the program on its thread, the move in spindle sync)
+    int tap_serial;               // counts finished rigid taps; tap_result is the last one's
+    int tap_result;               // 0 done, 1 failed (message posted), 2 aborted
     double act_fb[8];             // board: the actuators' feedback (the channels' Position), in their units
     unsigned axis_done;           // board: bit per axis, the channel has no trajectory (AxisDone) in the last read
     unsigned lines_begun;         // line() moves the planner has taken up (cf. line()'s return value)
@@ -263,6 +274,10 @@ public:
     void probe(const double end[9], double vel, double acc, int id, bool when_clears);
     void machine_on(bool on);                    // enable/disable the axes
     void jog(int axis, double vel);              // continuous jog, units/s; 0 stops
+    // rigid tapping (G33.1): from where the axes stand to `bottom` at pitch units per
+    // revolution, the spindle at rps (signed: negative CCW), the retract at retract_scale
+    // times the speed (G33.1's I). The result comes through state() (tap_serial, tap_result)
+    void tap(const double bottom[9], double pitch, double rps, double retract_scale, int id);
     void jog_to(int axis, double target, double vel);
     void jog_stop(int axis);                     // -1: all
     // the latest state (the worker keeps it current)

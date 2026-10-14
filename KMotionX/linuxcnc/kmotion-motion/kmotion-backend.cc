@@ -83,7 +83,7 @@ struct Seg {
 };
 
 struct Cmd {
-    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME, SPINDLE, MCODE, PROBE } kind = LINE;
+    enum Kind { LINE, ARC, DWELL, ABORT, FEED, SET_POS, MACHINE_ON, JOG_TO, PATH_MODE, HOME, SPINDLE, MCODE, PROBE, TAP } kind = LINE;
     double end[9] = {}, center[3] = {}, normal[3] = {};
     double vel = 0, acc = 0, seconds = 0, feed_scale = 0, rapid_scale = 0, tolerance = 0;
     bool rapid = false, on = false;
@@ -139,6 +139,8 @@ struct KmBackend::Impl {
     }
     std::atomic<int> errors{0};        // planner failures so far (each one stopped the motion)
     std::atomic<bool> homing{false};   // board: the home program is running
+    std::atomic<bool> tapping{false};  // board: a rigid tap is in progress
+    int tap_serial = 0, tap_result = 0;   // under smx
     int home_serial = 0;               // under smx
     unsigned home_ok_mask = 0, home_fail_mask = 0;
     std::atomic<int> sp_state{2};      // board: the spindle as last told (1 CW, -1 CCW, 0 off; 2 not known yet:
@@ -405,6 +407,13 @@ static void set_cm_position(KmBackend::Impl *d, const double pos[9])
 static void w_abort(KmBackend::Impl *d);
 static bool read_board_position(KmBackend::Impl *d);
 static bool read_board_position_to(KmBackend::Impl *d, double p[9]);
+static void w_line(KmBackend::Impl *d, const Cmd &c);
+static void w_flush(KmBackend::Impl *d);
+static void w_spindle(KmBackend::Impl *d, const Cmd &c);
+static int start_program(KmBackend::Impl *d, const char *path, int thread);
+static int set_persist(KmBackend::Impl *d, int index, long value);
+static void board_stop(KmBackend::Impl *d);
+static int board_query(KmBackend::Impl *d, const char *cmd, char *reply);
 
 // the planner refused a move or a flush. Our own abort (a probe trip's as well) makes it
 // return failures too (that is how the worker gets out of a blocking download): those are
@@ -1060,6 +1069,9 @@ static void publish(KmBackend::Impl *d)
     s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting;
     s.errors = d->errors;
     s.homing = d->homing;
+    s.tapping = d->tapping;
+    s.tap_serial = d->tap_serial;
+    s.tap_result = d->tap_result;
     s.home_serial = d->home_serial;
     s.home_ok_mask = d->home_ok_mask;
     s.home_fail_mask = d->home_fail_mask;
@@ -1216,6 +1228,135 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
         }
         if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return; }
     }
+}
+
+// rigid tapping (G33.1), KMotionCNC's threading mode with a program on the board: the move
+// from where the axes stand through the bottom (and on by the overshoot allowance, the
+// spindle's deceleration) is planned at pitch x speed and launched with TrigThread, so the
+// board slaves the whole coordinated motion's time base to the spindle encoder - every
+// actuator follows, through any kinematics, and a reversal runs the path backwards. The
+// program (TAP_PROGRAM, Tap.c) waits for the launch, lets the spindle turn the revolutions
+// for the depth, reverses it at the retract speed, stops it once back at the start and
+// reports. Then the buffer is cleared, the planner set to where the board stands, and the
+// spindle told what LinuxCNC has for it (M3 S, as before the tap). Persist 192-196 carry
+// the parameters and the result
+static void w_tap(KmBackend::Impl *d, const Cmd &c)
+{
+    enum { P_STATE = 192, P_REVS = 193, P_RPS = 194, P_RETRACT = 195, P_OVERSHOOT = 196 };
+    auto finish = [&](int result, const char *why) {
+        if (why) d->message(why);
+        std::lock_guard<std::mutex> lock(d->smx);
+        d->tap_result = result;
+        d->tap_serial++;
+        d->tapping = false;
+    };
+    double start[9];
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        memcpy(start, d->pos, sizeof start);
+        if (d->run_active || d->unflushed) { finish(1, "a rigid tap needs the planner idle"); return; }
+    }
+    double pitch = c.vel, rps = c.p, scale = c.q > 0 ? c.q : 1;
+    if (pitch <= 0 || fabs(rps) < 1e-9) { finish(1, "a rigid tap needs the spindle turning (M3 S) and a pitch (K)"); return; }
+    double dir[9], len = 0;
+    for (int i = 0; i < 9; i++) { dir[i] = c.end[i] - start[i]; len += dir[i] * dir[i]; }
+    len = sqrt(len);
+    if (len < 1e-9) { finish(1, "a rigid tap of no depth"); return; }
+    double revs = len / pitch;
+    if (d->cfg.simulate) {
+        // the replay: down to the bottom and back, as two moves
+        Cmd m = c;
+        m.kind = Cmd::LINE; m.vel = pitch * fabs(rps); m.rapid = false;
+        w_line(d, m);
+        memcpy(m.end, start, sizeof m.end);
+        w_line(d, m);
+        finish(0, nullptr);
+        return;
+    }
+    if (!d->cfg.tap_program[0]) { finish(1, "rigid tapping needs [KMOTION] TAP_PROGRAM (a program that turns and reverses the spindle)"); return; }
+    double end[9];
+    for (int i = 0; i < 9; i++) end[i] = start[i] + dir[i] * (1 + d->cfg.tap_overshoot_revs * pitch / len);
+    if (set_persist(d, P_STATE, 0) || set_persist(d, P_REVS, lround(revs * 1e6)) || set_persist(d, P_RPS, lround(rps * 1e6)) ||
+        set_persist(d, P_RETRACT, lround(scale * 1e6)) || set_persist(d, P_OVERSHOOT, lround(d->cfg.tap_overshoot_revs * 1e6))) {
+        finish(1, "the rigid tap's parameters could not be written to the board");
+        return;
+    }
+    d->tapping = true;
+    int thread = d->cfg.tap_thread;
+    if (start_program(d, d->cfg.tap_program, thread)) { finish(1, nullptr); return; }
+    char t[200];
+    snprintf(t, sizeof t, "rigid tap: %.4f revolutions at %.3f rev/s, pitch %.5f, retract x%.2f, the path to %.5f past the bottom",
+             revs, rps, pitch, scale, d->cfg.tap_overshoot_revs * pitch);
+    d->trace(t);
+    // the move, launched in spindle sync
+    CCoordMotion *cm = d->cm;
+    int seq = begin_move(d, c.id);
+    d->lines_begun++;
+    cm->m_ThreadingMode = true;
+    cm->m_ThreadingBaseSpeedRPS = rps;
+    int r = cm->StraightFeedAccelRapid(pitch * fabs(rps), c.acc, false, true, end[0], end[1], end[2], end[3], end[4], end[5], end[6], end[7], seq, 0);
+    if (!r) memcpy(d->cmd_end, end, sizeof d->cmd_end);
+    harvest(d);
+    if (!r) w_flush(d);                 // FlushSegments finishes the plan, downloads it and sends TrigThread
+    cm->m_ThreadingMode = false;
+    char cmd[64], reply[MAX_LINE + 1];
+    bool killed = false;
+    if (r || cm->GetAbort()) {
+        snprintf(cmd, sizeof cmd, "Kill%d", thread);
+        d->km->WriteLine(cmd);
+        killed = true;
+        d->message("the planner refused the rigid tap move");
+    }
+    // the program runs the spindle; the motion follows. Watched like the home program
+    snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
+    double t0 = now_s();
+    while (!killed) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (d->aborting || d->stop) { killed = true; d->message("rigid tap aborted"); }
+        else if (now_s() - t0 > d->cfg.tap_timeout) { killed = true; d->message("the rigid tap program did not finish in time"); }
+        if (killed) {
+            snprintf(cmd, sizeof cmd, "Kill%d", thread);
+            d->km->WriteLine(cmd);
+            break;
+        }
+        if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); killed = true; break; }
+        if (strcmp(reply, "0") == 0) break;
+    }
+    int state = -1;
+    if (!killed) {
+        snprintf(cmd, sizeof cmd, "GetPersistDec %d", (int) P_STATE);
+        if (board_query(d, cmd, reply) == 0) state = (int) strtol(reply, NULL, 10);
+    }
+    // the motion: stopped and cleared (the tool is back at the start, the spindle stopped by
+    // the program), the planner where the board stands
+    board_stop(d);
+    cm->SetAbort();
+    cm->ClearAbort();
+    cm->ClearHalt();
+    cm->RearmCoordLaunch();
+    d->replay.clear();
+    d->have_cur = false;
+    d->harvested = 0;
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        d->unflushed = false;
+        d->run_active = false;
+        d->ids.clear();
+        d->done_upto = d->serial;
+    }
+    if (!read_board_position(d)) cm->ClearAbort();
+    set_cm_position(d, d->pos);
+    int result = killed ? (d->aborting || d->stop ? 2 : 1) : (state == 1 ? 0 : 1);
+    if (killed) {
+        // the spindle: off, as the program is gone (an aborted tap is not a running spindle)
+        if (d->sp_state == 1 || d->sp_state == -1) { Cmd sc{}; sc.kind = Cmd::SPINDLE; sc.sp_state = 0; sc.sp_rpm = 0; w_spindle(d, sc); }
+    } else if (d->sp_state == 1 || d->sp_state == -1) {
+        // the spindle back as LinuxCNC has it: the program left it stopped at the top
+        Cmd sc{};
+        sc.kind = Cmd::SPINDLE; sc.sp_state = d->sp_state; sc.sp_rpm = d->sp_rpm; sc.sp_css = d->sp_css_mode == 2;
+        w_spindle(d, sc);
+    }
+    finish(result, result == 1 && state != -1 ? "the rigid tap program reported a failure" : nullptr);
 }
 
 static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
@@ -1639,6 +1780,7 @@ static void worker_main(KmBackend::Impl *d)
                 break;
             case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
             case Cmd::HOME: if (!d->cfg.simulate) w_home(d, c.home); break;
+            case Cmd::TAP: w_tap(d, c); break;
             case Cmd::SPINDLE: w_spindle(d, c); d->spindle_done++; break;
             case Cmd::PROBE: w_probe(d, c); break;
             case Cmd::MCODE: {
@@ -2032,6 +2174,16 @@ void KmBackend::set_position(const double pos[9])
     Cmd c{};
     c.kind = Cmd::SET_POS;
     memcpy(c.end, pos, sizeof c.end);
+    d->post(c);
+}
+
+void KmBackend::tap(const double bottom[9], double pitch, double rps, double retract_scale, int id)
+{
+    Cmd c{};
+    c.kind = Cmd::TAP;
+    memcpy(c.end, bottom, sizeof c.end);
+    c.vel = pitch; c.p = rps; c.q = retract_scale; c.id = id;
+    c.acc = 1e9;                  // the acceleration the planner may plan with: the axes' own limits apply
     d->post(c);
 }
 

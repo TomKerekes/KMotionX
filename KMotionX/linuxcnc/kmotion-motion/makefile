@@ -65,6 +65,7 @@ test: build/backend-test
 	./build/backend-test abort 2>/dev/null | tail -14
 	./build/backend-test joglimit 2>/dev/null | tail -24
 	./build/backend-test measure 2>/dev/null | tail -12
+	./build/backend-test tap 2>/dev/null | tail -8
 
 build/backend-test: backend-test.cc build/kmotion-backend.o kmotion-backend.h kmotion-joglimit.h | build
 	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) -I. $(KM_INC) -Wno-unknown-pragmas -Wno-overloaded-virtual -o $@ backend-test.cc build/kmotion-backend.o $(KM_LIBS) -lpthread

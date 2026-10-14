@@ -1,0 +1,89 @@
+#include "KMotionDef.h"
+
+// Rigid tapping (LinuxCNC's G33.1) on the board, with kmotion-motion: the PC plans the tap
+// move through the bottom (plus an overshoot allowance for the spindle's deceleration) and
+// launches it in the board's spindle-sync mode (TrigThread), so the coordinated motion's
+// time base follows the spindle encoder - every actuator, through any kinematics, and a
+// reversal runs the path backwards. This program handles the spindle: it waits for the
+// launch, lets the spindle turn the revolutions for the depth, reverses it at the retract
+// speed, and stops it once the encoder is back at the start. kmotion-motion then clears the
+// motion, sets the planner to where the board stands, and tells the spindle to run again
+// as LinuxCNC has it (M3 S). The spindle turns at speed when this starts (M3 S came first).
+//
+// Parameters from kmotion-motion through persist (all x 1e6 as integers):
+//   persist.UserData[192]  state: 0 running (set by the PC), 1 done (set here), 2 failed
+//   persist.UserData[193]  revolutions for the depth
+//   persist.UserData[194]  spindle speed in rev/s, signed (negative: M4, counterclockwise)
+//   persist.UserData[195]  retract speed as a multiple of the spindle speed (G33.1's I)
+//   persist.UserData[196]  the overshoot allowance the path has past the bottom, revolutions
+//
+// What this program knows about the machine - EDIT FOR YOURS: the axis that reads the
+// spindle encoder (its Position, counts) and the counts per revolution, and how the spindle
+// is driven. Bench (kmotion-kogna): the spindle is axis 3, a step/dir axis jogged by the
+// Spindle Using Jogs programs, whose quadrature is looped into encoder 4 = axis 3's input
+// (spindle/SpindleAxis.c), so axis 3's Position is the encoder and Jog(3, ...) drives it.
+#define ENCODER_AXIS 3
+#define COUNTS_PER_REV 1000.0
+#define SPINDLE_AXIS 3          // Jog() drives it; a VFD spindle needs its own run/reverse lines below
+#define UPDATE_TIME 0.01        // the firmware's spindle speed measurement: update interval, s
+#define TAU 0.02                // ... and its filter time constant, s
+
+#define P_STATE 192
+#define P_REVS 193
+#define P_RPS 194
+#define P_RETRACT 195
+#define P_OVERSHOOT 196
+
+static void spindle_run(double rps)       // EDIT FOR YOURS: the spindle at rps (signed), 0 = stop
+{
+	Jog(SPINDLE_AXIS, rps * COUNTS_PER_REV);
+}
+
+int main()
+{
+	double revs = persist.UserData[P_REVS] * 1e-6;
+	double rps = persist.UserData[P_RPS] * 1e-6;
+	double retract = persist.UserData[P_RETRACT] * 1e-6;
+	double overshoot = persist.UserData[P_OVERSHOOT] * 1e-6;
+	double dir = rps >= 0 ? 1.0 : -1.0;
+	double start, pos, turned;
+
+	printf("Tap: %.3f revs at %.3f rev/s, retract x%.2f, path %.2f revs past the bottom\n", revs, rps, retract, overshoot);
+	persist.UserData[P_STATE] = 0;
+
+	// the firmware's spindle measurement, which the sync mode runs on
+	ConfigureSpindle(1, ENCODER_AXIS, UPDATE_TIME, TAU, COUNTS_PER_REV);
+
+	// the launch (TrigThread from the PC) starts the motion: count from there
+	while (!Spindle.ThreadingActive) WaitNextTimeSlice();
+	start = chan[ENCODER_AXIS].Position;
+
+	// down: the spindle turns the revolutions for the depth
+	for (;;)
+	{
+		pos = chan[ENCODER_AXIS].Position;
+		turned = dir * (pos - start) / COUNTS_PER_REV;
+		if (turned >= revs) break;
+		WaitNextTimeSlice();
+	}
+	printf("Tap: at the bottom after %.3f revs, reversing\n", turned);
+
+	// back: the spindle reversed at the retract speed; the motion follows the encoder up.
+	// The spindle's deceleration past the bottom is the overshoot the path allows for
+	spindle_run(-dir * fabs(rps) * retract);
+	for (;;)
+	{
+		pos = chan[ENCODER_AXIS].Position;
+		turned = dir * (pos - start) / COUNTS_PER_REV;
+		if (turned <= 0.0) break;
+		WaitNextTimeSlice();
+	}
+
+	// at the top: the spindle stopped (its deceleration past the start finds the motion at
+	// its beginning, where it stays). The PC restarts the spindle as LinuxCNC has it
+	spindle_run(0);
+	while (!CheckDone(SPINDLE_AXIS)) WaitNextTimeSlice();
+	printf("Tap: back at the start, the spindle stopped\n");
+	persist.UserData[P_STATE] = 1;
+	return 0;
+}

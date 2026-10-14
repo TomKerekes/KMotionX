@@ -84,6 +84,20 @@ through the same shared memory block.
     again. Each press answers with a message. The panel's handler (`kmotion-panel.py`)
     greys Back/Forward unless `kmotion.hold-allowed` says a hold jog is possible, hides Geo
     reload without a `GEO_FILE`, and shows Measure only with `[KMOTION] MEASURE_BUTTON = 1`.
+  - **Rigid tapping** (G33.1, board mode): the planner's move from the start through the
+    bottom, and on by `[KMOTION] TAP_OVERSHOOT_REVS` revolutions for the spindle's
+    deceleration, at pitch x spindle speed, launched in the board's spindle-sync mode
+    (`TrigThread`, KMotionCNC's threading mode): the board slaves the coordinated motion's
+    time base to the spindle encoder, so every actuator follows through any kinematics and
+    the spindle's reversal runs the path backwards. `TAP_PROGRAM` (`configs/kmotion-kogna/
+    Tap.c`, on `TAP_THREAD`) drives the spindle: it waits for the launch, lets the spindle
+    turn the revolutions for the depth, reverses it at G33.1's I times the speed, stops it
+    once the encoder is back at the start and reports through persist 192-196; the module
+    then clears the motion, sets the planner to where the board stands and restarts the
+    spindle as LinuxCNC has it. The program holds what the machine is: the encoder axis,
+    counts per revolution, how the spindle runs. The interpreter wants the spindle turning
+    (M3 S) before a G33.1; an aborted tap stops the spindle. In simulate mode the tap is
+    replayed as a move down and back.
   - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
     Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
     each one of KMotion's M-code actions, carried out as the G-code interpreter's

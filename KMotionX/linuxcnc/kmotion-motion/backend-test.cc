@@ -29,6 +29,9 @@
 //                         SimulateHomes.c (started on thread 7) makes channel 0's positive
 //                         switch, bit 52, above +2000 counts and its negative one, bit 49,
 //                         below -1500; jogs to X1, X0, X-0.7 and back show them in the state
+//   backend-test tap      rigid tapping: simulate - replayed as a move down and back; board
+//                         (KM_BOARD=1) - Tap.c on thread 4 runs the bench's spindle (axis 3,
+//                         its looped encoder) while the move runs in spindle-sync mode
 //   backend-test measure  KMotionCNC's Measure: points appended to a geo measurement file
 //   backend-test holdjog  (KM_BOARD=1 only) KMotionCNC's forward/reverse in feed hold: a move
 //                         paused half way runs backwards and forwards while "held"
@@ -752,6 +755,48 @@ static void scenario_holdjog(KmBackend &km)
     check(f.messages.empty(), "no messages");
 }
 
+// rigid tapping: simulate - the tap replayed as a move down and back, the result reported;
+// board (KM_BOARD=1, the bench's spindle on axis 3 with its looped encoder, Tap.c on thread
+// 4) - M3 S600, a tap of 0.5 in at 0.05 in/rev (10 revolutions), the position back at the
+// start, the spindle running again
+static void scenario_tap(KmBackend &km)
+{
+    Follower f(km);
+    f.km.state(f.st);
+    double start[9]; memcpy(start, f.st.pos, sizeof start);
+    double bottom[9]; memcpy(bottom, start, sizeof bottom);
+    bottom[2] = start[2] - 0.5;
+    int serial0 = f.st.tap_serial;
+    if (km.is_board()) {
+        km.spindle(1, 600);
+        for (int i = 0; i < 600; i++) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); km.state(f.st); if (f.st.spindle_done >= 1 && f.st.spindle_at_speed) break; }
+        check(f.st.spindle_state == 1, "M3 S600: the spindle turns");
+        std::this_thread::sleep_for(std::chrono::seconds(2));    // up to speed (OnCWJog ramps)
+    }
+    printf("  tap from Z%.4f to Z%.4f at 0.05 in/rev, 10 rev/s\n", start[2], bottom[2]);
+    km.tap(bottom, 0.05, 10.0, 1.0, 7);
+    double zmin = start[2];
+    for (;;) {
+        f.run(f.t + 0.05, true);
+        if (f.st.pos[2] < zmin) zmin = f.st.pos[2];
+        if (f.st.tap_serial != serial0 && !f.st.running && !f.st.tapping) break;
+        if (f.t > 60) { printf("  no end within 60 s\n"); break; }
+    }
+    printf("  t=%.2f: result %d, deepest Z%.4f, at rest at Z%.4f, spindle state %d\n", f.t, f.st.tap_result, zmin, f.st.pos[2], f.st.spindle_state);
+    check(f.st.tap_serial != serial0 && f.st.tap_result == 0, "the tap reports done");
+    check(zmin <= bottom[2] + 1e-3, "it reached the bottom");
+    check(f.at(start[0], start[1], start[2], km.is_board() ? 0.02 : 1e-3), "and came back to the start");
+    if (km.is_board()) {
+        check(f.st.spindle_state == 1, "the spindle runs again as before (M3)");
+        km.spindle(0, 0);
+        for (int i = 0; i < 300; i++) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); km.state(f.st); if (f.st.spindle_state == 0) break; }
+    }
+    std::string other = f.messages;
+    size_t w = other.find("Warning Controller configuration takes longer to stop");
+    if (w != std::string::npos) other.erase(w, other.find('\n', w) == std::string::npos ? std::string::npos : other.find('\n', w) - w + 1);
+    check(other.empty(), "no messages but the bench's stop-time warning");
+}
+
 static void scenario_io(KmBackend &km)
 {
     if (!km.is_board()) { printf("  io: board mode only (KM_BOARD=1)\n"); return; }
@@ -1127,7 +1172,12 @@ int main(int argc, char **argv)
         cfg.init_programs.push_back(kogna + "/MinirouterInit.c");   // the bench's copy, as kmotion-kogna.ini runs it
         cfg.init_thread = 1;
         snprintf(cfg.home_program, sizeof cfg.home_program, "%s", (kogna + "/Home.c").c_str());
-        if (strcmp(scenario, "spindle") == 0) {           // as kmotion-kogna.ini sets it up
+        if (strcmp(scenario, "tap") == 0) {               // Tap.c on thread 4, the bench's spindle below
+            snprintf(cfg.tap_program, sizeof cfg.tap_program, "%s", (kogna + "/Tap.c").c_str());
+            cfg.tap_thread = 4;
+            cfg.tap_overshoot_revs = 6;
+        }
+        if (strcmp(scenario, "spindle") == 0 || strcmp(scenario, "tap") == 0) {   // as kmotion-kogna.ini sets it up
             cfg.init_programs.push_back(kogna + "/spindle/SpindleAxis.c");
             cfg.start_programs.emplace_back(1, kogna + "/BenchLoop.c");   // ServiceCSS() in thread 1
             cfg.spindle_css = true;
@@ -1192,6 +1242,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "limits") == 0) scenario_limits(*km);
     else if (strcmp(scenario, "offon") == 0) scenario_offon(*km);
     else if (strcmp(scenario, "measure") == 0) scenario_measure(*km);
+    else if (strcmp(scenario, "tap") == 0) scenario_tap(*km);
     else if (strcmp(scenario, "holdjog") == 0) scenario_holdjog(*km);
     else if (strcmp(scenario, "probe") == 0) scenario_probe(*km);
     else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
