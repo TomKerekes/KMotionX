@@ -151,6 +151,8 @@ struct KmBackend::Impl {
     std::atomic<bool> sp_at_speed{true};   // poller: the spindle at speed (SPINDLE_AT_SPEED) ...
     std::atomic<int> sp_at_speed_done{0};  // ... in a status read made once this many spindle commands were done
     double at_prev_dest = 0, at_prev_stamp = 0;   // poller, AXIS: the spindle channel's last Dest and its time
+    double at_v_filt = 0;                  // ... its speed, low-pass filtered (counts/s)
+    int tap_trace_left = 0;                // poller: status reads still to trace during a tap
     bool at_have_prev = false;
     // G96 as last written to the board (w_css), for the AXIS target: the X counts of radius 0,
     // X's counts per inch, the surface speed in in/s and the maximum RPM
@@ -934,7 +936,15 @@ static void w_poll_board(KmBackend::Impl *d)
             double p = status.Dest[ch], dt = status.TimeStamp - d->at_prev_stamp;
             if (d->at_have_prev && dt > 0.001 && dt < 1.0) {
                 double rpm = spindle_target_rpm(d, status);
-                double v = fabs(p - d->at_prev_dest) / dt, target = fabs(rpm) * cpr / 60.0;
+                // the status record's time stamp is taken before its Dests are copied, and
+                // servo ticks (90 us) fall in between: one read's speed is off by up to a tick
+                // or two of motion - 0.5-1% at 20 ms between reads. Filtered with the
+                // display's time constant, that averages out
+                double v_raw = fabs(p - d->at_prev_dest) / dt, target = fabs(rpm) * cpr / 60.0;
+                double tau = d->cfg.spindle_speed_tau;
+                double a = tau > 0 ? 1.0 - exp(-dt / tau) : 1.0;
+                d->at_v_filt += (v_raw - d->at_v_filt) * a;
+                double v = d->at_v_filt;
                 // within the tolerance to get there, twice it to leave: the Dest's speed
                 // between two reads jitters with the read timing, and a LED that follows
                 // every read flickers
@@ -1005,6 +1015,14 @@ static void w_poll_board(KmBackend::Impl *d)
         }
         d->sp_prev = p;
         d->sp_have_prev = true;
+        if (d->tapping && d->tap_trace_left > 0) {
+            // what the measurement sees during a tap, for the log
+            d->tap_trace_left--;
+            char t[200];
+            snprintf(t, sizeof t, "tap: status at %.4f s: spindle channel %d Position %.1f Dest %.1f, measured %.1f RPM, dt %.4f",
+                     status.TimeStamp, ch, status.Position[ch], status.Dest[ch], d->sp_measured.load(), dt);
+            d->trace(t);
+        }
     }
 
     bool active, flushed;
@@ -1295,6 +1313,7 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
         return;
     }
     d->tapping = true;
+    d->tap_trace_left = 400;             // the measurement during the tap, to the log (8 s at 20 ms)
     int thread = d->cfg.tap_thread;
     if (start_program(d, d->cfg.tap_program, thread)) { finish(1, nullptr); return; }
     char t[200];
