@@ -11,7 +11,8 @@
 // as LinuxCNC has it (M3 S). The spindle turns at speed when this starts (M3 S came first).
 //
 // Parameters from kmotion-motion through persist (all x 1e6 as integers):
-//   persist.UserData[192]  state: 0 running (set by the PC), 1 done (set here), 2 failed
+//   persist.UserData[192]  state: 0 running (set by the PC), 1 done (set here), 2 failed (the
+//                          sync ended before the spindle was back: the path ran out)
 //   persist.UserData[193]  revolutions for the depth
 //   persist.UserData[194]  spindle speed in rev/s, signed (negative: M4, counterclockwise)
 //   persist.UserData[195]  retract speed as a multiple of the spindle speed (G33.1's I)
@@ -46,7 +47,8 @@ int main()
 	double retract = persist.UserData[P_RETRACT] * 1e-6;
 	double overshoot = persist.UserData[P_OVERSHOOT] * 1e-6;
 	double dir = rps >= 0 ? 1.0 : -1.0;
-	double start, pos, turned;
+	double speed = rps >= 0 ? rps : -rps;      // the firmware's library has no fabs
+	double start, turned;
 
 	printf("Tap: %.3f revs at %.3f rev/s, retract x%.2f, path %.2f revs past the bottom\n", revs, rps, retract, overshoot);
 	persist.UserData[P_STATE] = 0;
@@ -54,28 +56,34 @@ int main()
 	// the firmware's spindle measurement, which the sync mode runs on
 	ConfigureSpindle(1, ENCODER_AXIS, UPDATE_TIME, TAU, COUNTS_PER_REV);
 
-	// the launch (TrigThread from the PC) starts the motion: count from there
+	// the launch (TrigThread from the PC): the firmware begins the motion not at the trigger
+	// but when the spindle reaches Spindle.StartPosition, two whole revolutions on (so every
+	// pass starts at the same spindle angle, as lathe threading needs); the time base is
+	// held at zero until then. Count the revolutions from there, in the firmware's own
+	// units (Spindle.Position, revolutions)
 	while (!Spindle.ThreadingActive) WaitNextTimeSlice();
-	start = chan[ENCODER_AXIS].Position;
+	start = Spindle.StartPosition;
 
-	// down: the spindle turns the revolutions for the depth
+	// down: the spindle turns the revolutions for the depth. The sync ending before that
+	// means the path ran out (the overshoot allowance too small): the motion is stranded
 	for (;;)
 	{
-		pos = chan[ENCODER_AXIS].Position;
-		turned = dir * (pos - start) / COUNTS_PER_REV;
+		turned = dir * (Spindle.Position - start);
 		if (turned >= revs) break;
+		if (!Spindle.ThreadingActive) { printf("Tap: the sync ended on the way down after %.3f revs\n", turned); spindle_run(0); persist.UserData[P_STATE] = 2; return 0; }
 		WaitNextTimeSlice();
 	}
 	printf("Tap: at the bottom after %.3f revs, reversing\n", turned);
 
-	// back: the spindle reversed at the retract speed; the motion follows the encoder up.
-	// The spindle's deceleration past the bottom is the overshoot the path allows for
-	spindle_run(-dir * fabs(rps) * retract);
+	// back: the spindle reversed at the retract speed; the motion follows the spindle up,
+	// the time base running backwards. The spindle's deceleration past the bottom is the
+	// overshoot the path allows for: past the path's end the sync ends and the tool stays
+	spindle_run(-dir * speed * retract);
 	for (;;)
 	{
-		pos = chan[ENCODER_AXIS].Position;
-		turned = dir * (pos - start) / COUNTS_PER_REV;
+		turned = dir * (Spindle.Position - start);
 		if (turned <= 0.0) break;
+		if (!Spindle.ThreadingActive) { printf("Tap: the sync ended on the way back at %.3f revs: the path ran out past the bottom\n", turned); spindle_run(0); persist.UserData[P_STATE] = 2; return 0; }
 		WaitNextTimeSlice();
 	}
 

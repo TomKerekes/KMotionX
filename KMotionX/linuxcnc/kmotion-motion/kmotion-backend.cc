@@ -141,6 +141,7 @@ struct KmBackend::Impl {
     std::atomic<bool> homing{false};   // board: the home program is running
     std::atomic<bool> tapping{false};  // board: a rigid tap is in progress
     int tap_serial = 0, tap_result = 0;   // under smx
+    bool tap_sim = false;              // simulate: the tap's replay (down and back) is running; done when it ends
     int home_serial = 0;               // under smx
     unsigned home_ok_mask = 0, home_fail_mask = 0;
     std::atomic<int> sp_state{2};      // board: the spindle as last told (1 CW, -1 CCW, 0 off; 2 not known yet:
@@ -1239,7 +1240,12 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
 // for the depth, reverses it at the retract speed, stops it once back at the start and
 // reports. Then the buffer is cleared, the planner set to where the board stands, and the
 // spindle told what LinuxCNC has for it (M3 S, as before the tap). Persist 192-196 carry
-// the parameters and the result
+// the parameters and the result. The firmware (DSP_KOGNA/fast.c, TrigThreading/DoSpindle):
+// the motion begins when the spindle reaches a start position two revolutions past the
+// trigger, the time base held at zero until then; it is the real time scaled by the
+// spindle's progress, negative when the spindle reverses, floored at the path's start;
+// the path's end ends the sync, so the overshoot allowance must cover the spindle's
+// deceleration; a feed hold ramps the time base to zero whatever the spindle does
 static void w_tap(KmBackend::Impl *d, const Cmd &c)
 {
     enum { P_STATE = 192, P_REVS = 193, P_RPS = 194, P_RETRACT = 195, P_OVERSHOOT = 196 };
@@ -1264,13 +1270,14 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     if (len < 1e-9) { finish(1, "a rigid tap of no depth"); return; }
     double revs = len / pitch;
     if (d->cfg.simulate) {
-        // the replay: down to the bottom and back, as two moves
+        // the replay: down to the bottom and back, as two moves; done once they have run
         Cmd m = c;
         m.kind = Cmd::LINE; m.vel = pitch * fabs(rps); m.rapid = false;
         w_line(d, m);
         memcpy(m.end, start, sizeof m.end);
         w_line(d, m);
-        finish(0, nullptr);
+        d->tapping = true;
+        d->tap_sim = true;
         return;
     }
     if (!d->cfg.tap_program[0]) { finish(1, "rigid tapping needs [KMOTION] TAP_PROGRAM (a program that turns and reverses the spindle)"); return; }
@@ -1288,8 +1295,11 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     snprintf(t, sizeof t, "rigid tap: %.4f revolutions at %.3f rev/s, pitch %.5f, retract x%.2f, the path to %.5f past the bottom",
              revs, rps, pitch, scale, d->cfg.tap_overshoot_revs * pitch);
     d->trace(t);
-    // the move, launched in spindle sync
+    // the move, launched in spindle sync. The feed override multiplies the sync factor on
+    // the board (and a software override would scale the planned speed, which the sync maps
+    // revolutions to): 1 for the tap, as motmod ignores the override on synchronized moves
     CCoordMotion *cm = d->cm;
+    cm->SetFeedRateOverride(1.0);
     int seq = begin_move(d, c.id);
     d->lines_begun++;
     cm->m_ThreadingMode = true;
@@ -1346,6 +1356,7 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     }
     if (!read_board_position(d)) cm->ClearAbort();
     set_cm_position(d, d->pos);
+    cm->SetFeedRateOverride(d->feed_scale);       // the operator's override again
     int result = killed ? (d->aborting || d->stop ? 2 : 1) : (state == 1 ? 0 : 1);
     if (killed) {
         // the spindle: off, as the program is gone (an aborted tap is not a running spindle)
@@ -1842,6 +1853,13 @@ static void worker_main(KmBackend::Impl *d)
             if (dt > 0.1) dt = 0.1;
             w_replay(d, dt);
             d->last_tick = t;
+            if (d->tap_sim && !d->have_cur && d->replay.empty() && !d->unflushed && !d->aborting) {
+                d->tap_sim = false;             // the simulated tap's replay is over
+                std::lock_guard<std::mutex> lock(d->smx);
+                d->tap_result = 0;
+                d->tap_serial++;
+                d->tapping = false;
+            }
             publish(d);
         }
         std::unique_lock<std::mutex> lock(d->qmx);

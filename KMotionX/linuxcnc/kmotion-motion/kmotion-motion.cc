@@ -1456,6 +1456,12 @@ static void handle_command()
         break;
     case EMCMOT_PAUSE:
         log_print("PAUSE\n");
+        if (km && m.ks.tapping) {
+            // the board's feed hold stops the motion whatever the spindle does: a thread cut
+            // through. motmod defers a pause on a synchronized move too; an abort ends a tap
+            report_error("a rigid tap cannot be paused (abort stops it)");
+            break;
+        }
         m.paused = true;
         if (km) km->pause(true);
         break;

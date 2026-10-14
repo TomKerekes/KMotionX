@@ -96,8 +96,12 @@ through the same shared memory block.
     then clears the motion, sets the planner to where the board stands and restarts the
     spindle as LinuxCNC has it. The program holds what the machine is: the encoder axis,
     counts per revolution, how the spindle runs. The interpreter wants the spindle turning
-    (M3 S) before a G33.1; an aborted tap stops the spindle. In simulate mode the tap is
-    replayed as a move down and back.
+    (M3 S) before a G33.1; an aborted tap stops the spindle, a pause is refused (the board's
+    feed hold stops the motion whatever the spindle does), the feed override is 1 for the
+    tap. The firmware starts the sync when the spindle reaches a start position two
+    revolutions past the trigger, and the path's end ends it, so `TAP_OVERSHOOT_REVS` must
+    cover the spindle's deceleration. In simulate mode the tap is replayed as a move down
+    and back.
   - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
     Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
     each one of KMotion's M-code actions, carried out as the G-code interpreter's
