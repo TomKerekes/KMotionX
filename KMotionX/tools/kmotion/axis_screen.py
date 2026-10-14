@@ -14,13 +14,15 @@ RESOLVER_MODE = 3
 
 
 def input_mode(st, i):
+    """the firmware packs four axes per word: axes 0-3 in InputModes, 4-7 in InputModes2,
+    8-11 in InputModes3, 12-15 in InputModes4, a nibble each (PC.c, the status record)"""
     words = (st.InputModes, st.InputModes2, st.InputModes3, st.InputModes4)
-    return (words[i // 8] >> (4 * (i % 8))) & 0xf
+    return (words[i // 4] >> (4 * (i % 4))) & 0xf
 
 
 def output_mode(st, i):
     words = (st.OutputModes, st.OutputModes2, st.OutputModes3, st.OutputModes4)
-    return (words[i // 8] >> (4 * (i % 8))) & 0xf
+    return (words[i // 4] >> (4 * (i % 4))) & 0xf
 
 
 def dest_text(d):
