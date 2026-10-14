@@ -404,6 +404,7 @@ static void set_cm_position(KmBackend::Impl *d, const double pos[9])
 
 static void w_abort(KmBackend::Impl *d);
 static bool read_board_position(KmBackend::Impl *d);
+static bool read_board_position_to(KmBackend::Impl *d, double p[9]);
 
 // the planner refused a move or a flush. Our own abort (a probe trip's as well) makes it
 // return failures too (that is how the worker gets out of a blocking download): those are
@@ -430,22 +431,31 @@ static void fail(KmBackend::Impl *d, const char *what, int id = 0)
 // ---- worker: planning ----------------------------------------------------------------
 static int begin_move(KmBackend::Impl *d, int id)
 {
-    std::lock_guard<std::mutex> lk(d->wmx);
     // the first move of a run starts where the board stands, as KMotionCNC re-reads the
     // position before every run: the axes may have been moved behind the planner's back
-    // (the KMotion console, a program on the board) since the last one
-    if (!d->cfg.simulate && !d->run_active && !d->unflushed) {
+    // (the KMotion console, a program on the board) since the last one. The board is read
+    // before the lock is taken: with it held, the poller, the model and task all waited
+    // for the round trips (task cycles of 100-190 ms seen)
+    bool first;
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        first = !d->cfg.simulate && !d->run_active && !d->unflushed;
+    }
+    CCoordMotion *cm = d->cm;
+    double was[8] = {cm->current_x, cm->current_y, cm->current_z, cm->current_a,
+                     cm->current_b, cm->current_c, cm->current_u, cm->current_v};
+    double p[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    bool read = first && read_board_position_to(d, p);
+    std::lock_guard<std::mutex> lk(d->wmx);
+    if (first) {
         // compared with the planner's own position, not d->pos: the status poller keeps
         // d->pos current, so after joint jogs (the board moved behind the planner's back)
         // d->pos already matched the board and the planner was left at the last move's end -
         // the next move then started there and the board jumped (Left and Z tripped their
         // following error on the 3 Link robot)
-        CCoordMotion *cm = d->cm;
-        double was[8] = {cm->current_x, cm->current_y, cm->current_z, cm->current_a,
-                         cm->current_b, cm->current_c, cm->current_u, cm->current_v};
-        bool read = read_board_position(d);
         double moved = 0;
         if (read) {
+            memcpy(d->pos, p, sizeof p);
             for (int i = 0; i < 8; i++) moved = std::max(moved, fabs(d->pos[i] - was[i]));
             if (moved > 1e-6) set_cm_position(d, d->pos);    // cmd_end too
         }
@@ -752,7 +762,10 @@ static void sim_act_pos(KmBackend::Impl *d);   // the actuators where the positi
 // the board's position into d->pos - once every axis has been enabled at least once since the
 // board came (d->ever_enabled); a board fresh from power-up reads 0 on channels nothing has
 // set up, which through a kinematics is some far-away point. false: not read
-static bool read_board_position(KmBackend::Impl *d)
+// the board's position (its destinations through the kinematics), board round trips: not
+// to be called with wmx held - the poller's publish() waits for wmx, the model's state()
+// for publish(), and task for the model
+static bool read_board_position_to(KmBackend::Impl *d, double p[9])
 {
     for (int i = 0; i < 8; i++) {
         int ch = d->cfg.channel[i];
@@ -760,7 +773,15 @@ static bool read_board_position(KmBackend::Impl *d)
     }
     double x, y, z, a, b, c, u, v;
     if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) != 0) return false;
-    double p[9] = {x, y, z, a, b, c, u, v, 0};
+    double q[9] = {x, y, z, a, b, c, u, v, 0};
+    memcpy(p, q, sizeof q);
+    return true;
+}
+
+static bool read_board_position(KmBackend::Impl *d)
+{
+    double p[9];
+    if (!read_board_position_to(d, p)) return false;
     memcpy(d->pos, p, sizeof p);
     return true;
 }

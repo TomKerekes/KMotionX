@@ -119,6 +119,15 @@ static std::string geo_file_name;       // [KMOTION] GEO_FILE as given, for mess
 static double hold_fro = 0;             // the temporary override the board has for the hold jog (0: none)
 static bool measure_was = false, geo_reload_was = false;   // the buttons' last state (edges)
 static void hold_jog_release();        // the hold jog's override back to 0 (defined with the buttons)
+
+static void log_print(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
+// the motion enable flag, task's "machine on": every change logged with its reason
+static void motion_enable(bool on, const char *why)
+{
+    if (GET_MOTION_ENABLE_FLAG() != (on ? 1 : 0)) log_print("motion enable -> %d (%s)\n", on ? 1 : 0, why);
+    SET_MOTION_ENABLE_FLAG(on ? 1 : 0);
+}
 static bool overriding = false;         // a jog is running under OVERRIDE_LIMITS (motmod's emcmotInternal->overriding)
 static std::string mode = "kmotion";        // -m kmotion | standin
 static double now_s();
@@ -140,6 +149,12 @@ static void log_print(const char *fmt, ...)
             return;
         }
     }
+    // wall-clock time to the ms, to line the log up with the autostart's and task's
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+    fprintf(logfile, "%02d:%02d:%02d.%03d ", tm.tm_hour, tm.tm_min, tm.tm_sec, (int) (ts.tv_nsec / 1000000));
     va_list ap;
     va_start(ap, fmt);
     vfprintf(logfile, fmt, ap);
@@ -522,11 +537,11 @@ static void model_step(double dt)
                 std::string which;
                 for (int i = 0; i < 8; i++) if (off & (1u << i)) which += std::string(which.empty() ? "" : ", ") + "XYZABCUV"[i];
                 report_error("axis %s disabled on the board: machine off, the joint unhomed", which.c_str());
+                motion_enable(false, "an axis disabled on the board");
                 log_print("  at the disable (status %u): X%.5f Y%.5f Z%.5f; joints cmd %s fb %s; running %d world_jog %d "
                           "done 0x%x jog_busy 0x%x\n", m.ks.status_count, m.ks.pos[0], m.ks.pos[1], m.ks.pos[2],
                           joints_text(m.ks.act_pos).c_str(), joints_text(m.ks.act_fb).c_str(), (int) m.ks.running,
                           (int) m.world_jog, m.ks.axis_done, m.ks.jog_busy);
-                SET_MOTION_ENABLE_FLAG(0);
                 m.queue.clear();
                 m.held.clear();
                 m.active = m.paused = m.stepping = false;
@@ -541,7 +556,7 @@ static void model_step(double dt)
             // homed any more, as task will show
             board_lost = true;
             report_error("the board stopped answering: machine off, joints unhomed");
-            SET_MOTION_ENABLE_FLAG(0);
+            motion_enable(false, "the board lost");
             m.queue.clear();
             m.held.clear();
             m.active = m.paused = m.stepping = false;
@@ -692,9 +707,9 @@ static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires
 // machine off from inside (a limit switch made, as motmod's amp-fault path): what the DISABLE
 // command does - the motion stopped, the board's axes disabled - and nothing unhomed, as
 // motmod keeps a faulted joint homed
-static void machine_off(bool disable_board)
+static void machine_off(bool disable_board, const char *why)
 {
-    SET_MOTION_ENABLE_FLAG(0);
+    motion_enable(false, why);
     hold_jog_release();
     if (km) km->abort();
     if (km && km->is_board() && disable_board) km->machine_on(false);
@@ -739,7 +754,7 @@ static void limit_switches()
     }
     if (trip) {
         log_print("limit switch made: machine off\n");
-        machine_off(true);
+        machine_off(true, "a limit switch made");
         // the error flag served as the once-only latch for the message; with the machine
         // off the limits are not looked at until the next ENABLE, which clears the flags
         // anyway. Left set, task would see the joint in error and abort every cycle, each
@@ -1403,7 +1418,7 @@ static void handle_command()
         axes_seen_enabled = false;
         if (always_homed) for (int j = 0; j < num_joints; j++) mark_joint_homed(j, true, false);
         for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) SET_JOINT_ERROR_FLAG(&joints[j], 0);   // a limit switch trip, cleared as motmod does
-        SET_MOTION_ENABLE_FLAG(1);
+        motion_enable(true, "ENABLE from task");
         SET_MOTION_ERROR_FLAG(0);
         if (km && km->is_board()) km->machine_on(true);
         update_motion_state();
@@ -1412,7 +1427,7 @@ static void handle_command()
         log_print("DISABLE\n");
         if (km && km->is_board() && keep_enabled_on_exit && !enabled_once)
             log_print("task's startup DISABLE: the board's axes are left as they are (KEEP_ENABLED_ON_EXIT)\n");
-        machine_off(!(keep_enabled_on_exit && !enabled_once));
+        machine_off(!(keep_enabled_on_exit && !enabled_once), "DISABLE from task");
         break;
     case EMCMOT_JOINT_ACTIVATE:
         log_print("JOINT_ACTIVATE joint=%d\n", c->joint);
@@ -2565,8 +2580,11 @@ int main(int argc, char *argv[])
         if (dt > 0.1) dt = 0.1;              // after a stall: don't jump the model
 
         rtapi_mutex_get(&emcmotStruct->command_mutex);
+        double t_lock = now_s();
         emcmotStatus->head++;
+        int cmd_now = 0;
         if (c->commandNum != emcmotStatus->commandNumEcho) {
+            cmd_now = c->command;
             handle_command();
             emcmotStatus->commandEcho = c->command;
             emcmotStatus->commandNumEcho = c->commandNum;
@@ -2575,6 +2593,10 @@ int main(int argc, char *argv[])
         update_status();
         emcmotStatus->tail = emcmotStatus->head;
         rtapi_mutex_give(&emcmotStruct->command_mutex);
+        // task reads and writes the shared memory under this lock: a long hold stalls its
+        // cycle (and the GUI's view of a state change lags). Logged when it is long
+        double held = now_s() - t_lock;
+        if (held > 0.02) log_print("the command lock was held %.0f ms (command %d)\n", held * 1e3, cmd_now);
         update_pins();
         update_io();
         next += period_s;

@@ -4,9 +4,9 @@ last session ([EMC] KEEP_ENABLED_ON_EXIT leaves them so, as KMotionCNC does): E-
 Machine on, nothing else - no init program, no homing (homing is the operator's or the
 board's business, as in KMotionCNC; [TRAJ] NO_FORCE_HOMING lets moves run unhomed). With any
 axis disabled, LinuxCNC is left in E-stop as it normally starts. Run by LinuxCNC right after
-the display program starts ([APPLICATIONS] APP, DELAY 1): task is up by then, the GUI is not
-yet, and a GUI patched for KEEP_ENABLED_ON_EXIT (linuxcnc/patches/) leaves a machine it finds
-on alone. Logs to /tmp/kmotion-autostart.log, since a desktop launch shows nothing."""
+the display program starts ([APPLICATIONS] APP, DELAY 1): task is up by then; the GUI's
+start-up is waited for (the gui-ready signal its POSTGUI_HALFILE sets), since a machine
+turned on in the middle of it was turned off again by its half-initialized power button. Logs to /tmp/kmotion-autostart.log, since a desktop launch shows nothing."""
 import linuxcnc, subprocess, sys, time
 
 LOG = "/tmp/kmotion-autostart.log"
@@ -41,6 +41,18 @@ except Exception as e:
 if not enabled:
     say("autostart: an axis is disabled on the board: LinuxCNC starts in E-stop")
     sys.exit(0)
+# the GUI first: its POSTGUI_HALFILE sets the signal gui-ready at the end of its start-up
+# (an embedded panel makes that start-up long). A machine turned on while the GUI is still
+# initializing met its own power-button logic half set up: it turned it off again
+def gui_ready():
+    try:
+        return subprocess.run(["halcmd", "gets", "gui-ready"], capture_output=True, text=True, timeout=5).stdout.strip() == "TRUE"
+    except Exception:
+        return False
+t0 = time.time()
+while not gui_ready() and time.time() - t0 < 120:
+    time.sleep(0.2)
+say("autostart: the GUI is %s (%.1f s)" % ("up" if gui_ready() else "not reporting ready: going on anyway", time.time() - t0))
 s.poll()
 say("autostart: kmotion.all-enabled TRUE, task_state %d" % s.task_state)
 c.state(linuxcnc.STATE_ESTOP_RESET); c.wait_complete()

@@ -5,3 +5,6 @@
 net spindle-rpm-measured kmotion.spindle-rpm-abs => gmoccapy.spindle_feedback_bar
 # gmoccapy's at-speed light: the spindle at speed as motion uses it ([KMOTION] SPINDLE_AT_SPEED)
 net spindle-at-speed kmotion.spindle-at-speed => gmoccapy.spindle_at_speed_led
+# the end of the GUI's start-up, for a start-up script that turns the machine on (kmotion-3link's autostart.py)
+newsig gui-ready bit
+sets gui-ready 1

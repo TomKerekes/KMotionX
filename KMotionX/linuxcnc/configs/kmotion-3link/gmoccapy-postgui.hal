@@ -1,0 +1,5 @@
+# kmotion-3link: HAL after gmoccapy is up ([HAL] POSTGUI_HALFILE). The signal gui-ready marks
+# the end of the GUI's start-up for autostart.py, which turns the machine on only then (the
+# panel's own nets are in panels/kmotion-panel.hal, run by gladevcp itself)
+newsig gui-ready bit
+sets gui-ready 1
