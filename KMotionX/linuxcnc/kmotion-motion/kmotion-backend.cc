@@ -142,6 +142,10 @@ struct KmBackend::Impl {
     std::atomic<bool> tapping{false};  // board: a rigid tap is in progress
     int tap_serial = 0, tap_result = 0;   // under smx
     bool tap_sim = false;              // simulate: the tap's replay (down and back) is running; done when it ends
+    std::atomic<bool> tap_pending{false}; // a tap the worker holds until the moves before it have finished (a
+                                       // G84's rapid to the retract plane); nothing passes it. Worker-owned,
+                                       // read by the poller (running) and cleared by abort()
+    Cmd tap_cmd;
     int home_serial = 0;               // under smx
     unsigned home_ok_mask = 0, home_fail_mask = 0;
     std::atomic<int> sp_state{2};      // board: the spindle as last told (1 CW, -1 CCW, 0 off; 2 not known yet:
@@ -1088,7 +1092,7 @@ static void publish(KmBackend::Impl *d)
     for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
     s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
-    s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting;
+    s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting || d->tap_pending;
     s.errors = d->errors;
     s.homing = d->homing;
     s.tapping = d->tapping;
@@ -1786,6 +1790,17 @@ static void w_probe(KmBackend::Impl *d, const Cmd &c)
     }
 }
 
+// nothing handed to the planner is left to run: no moves since the last flush, no run on
+// the board, no replay (simulate). A rigid tap starts from where the axes stand, so it
+// waits for this
+static bool planner_idle(KmBackend::Impl *d)
+{
+    std::lock_guard<std::mutex> lk(d->wmx);
+    if (d->unflushed || d->run_active) return false;
+    if (d->cfg.simulate && (d->have_cur || !d->replay.empty())) return false;
+    return true;
+}
+
 static void worker_main(KmBackend::Impl *d)
 {
     d->last_tick = d->last_poll = now_s();
@@ -1793,7 +1808,13 @@ static void worker_main(KmBackend::Impl *d)
         // commands
         for (;;) {
             Cmd c;
-            {
+            if (d->tap_pending) {
+                // the held tap goes first, once the moves before it are done; an abort drops it
+                if (d->aborting) { d->tap_pending = false; continue; }
+                if (!planner_idle(d)) break;
+                c = d->tap_cmd;
+                d->tap_pending = false;
+            } else {
                 std::unique_lock<std::mutex> lock(d->qmx);
                 if (d->q.empty()) break;
                 c = d->q.front();
@@ -1820,7 +1841,17 @@ static void worker_main(KmBackend::Impl *d)
                 break;
             case Cmd::MACHINE_ON: if (!d->cfg.simulate) w_machine_on(d, c.on); break;
             case Cmd::HOME: if (!d->cfg.simulate) w_home(d, c.home); break;
-            case Cmd::TAP: w_tap(d, c); break;
+            case Cmd::TAP:
+                if (planner_idle(d)) w_tap(d, c);
+                else {
+                    // the moves before it (a G84's rapid to the retract plane, in the same
+                    // block) must finish first: they go to the board now and the tap, with
+                    // everything after it, waits until the planner is idle
+                    w_flush(d);
+                    d->tap_cmd = c;
+                    d->tap_pending = true;
+                }
+                break;
             case Cmd::SPINDLE: w_spindle(d, c); d->spindle_done++; break;
             case Cmd::PROBE: w_probe(d, c); break;
             case Cmd::MCODE: {
@@ -2291,6 +2322,7 @@ void KmBackend::abort()
     // to rest, clears the stop state, resets the planner) and the state reads
     // "running" until then
     d->aborting = true;
+    d->tap_pending = false;           // a tap still waiting for its turn belongs to the program too
     {
         std::lock_guard<std::mutex> lock(d->qmx);
         std::deque<Cmd> keep;

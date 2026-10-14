@@ -786,6 +786,45 @@ static void scenario_tap(KmBackend &km)
     check(f.st.tap_serial != serial0 && f.st.tap_result == 0, "the tap reports done");
     check(zmin <= bottom[2] + 1e-3, "it reached the bottom");
     check(f.at(start[0], start[1], start[2], km.is_board() ? 0.02 : 1e-3), "and came back to the start");
+    // a G84: the rapid to the retract plane and the tap come in one block. The tap must wait
+    // for the rapid (the worker holds it until the planner is idle) and start from there
+    {
+        double plane[9]; memcpy(plane, start, sizeof plane); plane[2] = start[2] + 0.3;
+        double bottom2[9]; memcpy(bottom2, plane, sizeof bottom2); bottom2[2] = plane[2] - 0.5;
+        int serial1 = f.st.tap_serial;
+        printf("  a rapid to Z%.4f and, in the same breath, a tap to Z%.4f\n", plane[2], bottom2[2]);
+        km.line(plane, 50.0, 1e9, true, 8);
+        km.tap(bottom2, 0.05, 10.0, 1.0, 9);
+        bool waited = false, early = false;
+        zmin = plane[2];
+        for (;;) {
+            f.run(f.t + 0.05, true);
+            if (f.st.running && !f.st.tapping && f.st.tap_serial == serial1) waited = true;
+            if (f.st.tapping && f.st.pos[2] < plane[2] - 1e-3 && zmin == plane[2] && f.st.pos[2] < start[2] + 0.3 - 0.01 && !waited) early = true;
+            if (f.st.tapping || f.st.tap_serial != serial1) { if (f.st.pos[2] < zmin) zmin = f.st.pos[2]; }
+            if (f.st.tap_serial != serial1 && !f.st.running && !f.st.tapping) break;
+            if (f.t > 120) { printf("  no end within 120 s\n"); break; }
+        }
+        printf("  t=%.2f: result %d, deepest Z%.4f, at rest at Z%.4f\n", f.t, f.st.tap_result, zmin, f.st.pos[2]);
+        check(waited && !early, "the tap waited for the rapid before it");
+        check(f.st.tap_serial != serial1 && f.st.tap_result == 0, "then reported done");
+        check(zmin <= bottom2[2] + 1e-3, "it reached its bottom, measured from the retract plane");
+        check(f.at(plane[0], plane[1], plane[2], km.is_board() ? 0.02 : 1e-3), "and came back to the retract plane");
+        // an abort while the tap still waits drops it: the rapid stops, no tap runs
+        if (!km.is_board()) {
+            double far[9]; memcpy(far, plane, sizeof far); far[2] = plane[2] + 2.0;
+            int serial2 = f.st.tap_serial;
+            km.line(far, 2.0, 1e9, true, 10);
+            km.tap(bottom2, 0.05, 10.0, 1.0, 11);
+            f.run(f.t + 0.3, true);
+            km.abort();
+            for (int i = 0; i < 200 && f.st.running; i++) f.run(f.t + 0.05, true);
+            f.run(f.t + 0.5, true);
+            check(f.st.tap_serial == serial2 && !f.st.tapping && !f.st.running, "an abort while the tap waits drops it: no tap ran");
+            km.line(plane, 50.0, 1e9, true, 12);           // back to the retract plane
+            for (int i = 0; i < 200; i++) { f.run(f.t + 0.05, true); if (!f.st.running && f.t > 1) break; }
+        }
+    }
     if (km.is_board()) {
         check(f.st.spindle_state == 1, "the spindle runs again as before (M3)");
         km.spindle(0, 0);

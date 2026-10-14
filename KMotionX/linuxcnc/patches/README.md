@@ -1,4 +1,6 @@
-# Patches to LinuxCNC for `[EMC] KEEP_ENABLED_ON_EXIT`
+# Patches to LinuxCNC
+
+## For `[EMC] KEEP_ENABLED_ON_EXIT`
 
 LinuxCNC ends every session by disabling the machine: task's shutdown sends a motion
 DISABLE, and gmoccapy's quit sends Machine off and E-stop before that. On a machine whose
@@ -31,6 +33,18 @@ same flaw: it does nothing until the tool has moved). With the patch the buffer 
 recognises the trail by its first point, and gremlin redraws once the logger's trail is not
 the one it had before the clear. No timing is involved.
 
+## For `[RS274NGC] RIGID_TAP_CYCLES`
+
+`interp-rigid-tap-cycles.patch` (`src/emc/rs274ngc/`): with the key set, the interpreter's
+G84 and G74 cycles are rigid taps - the cycle's rapid to the retract plane, then the same
+synchronized tap as G33.1 (`START_SPEED_FEED_SYNCH` with the pitch, `RIGID_TAP` to the
+bottom), which the controller runs to the bottom, reverses and brings back to the retract
+plane. The pitch is F / S in G94 (F = S x pitch, exactly what the stock floating-chuck cycle
+expects) and F in G95; G93 and G96 are refused; P is ignored. Without the key (the default),
+or on a stock LinuxCNC, G84 is the floating-chuck sequence as documented (feed down, M5, M4,
+dwell, feed up, M5, M3). LinuxCNC's remapping cannot do this: only codes that do not exist
+can be remapped, and G84 exists.
+
 Other GUIs decide for themselves what they send at init and at quit: AXIS sends nothing at
 either and needs no patch; another one would need its own.
 
@@ -44,4 +58,4 @@ Apply, in the LinuxCNC run-in-place tree (the pinned commit of `linuxcnc/README.
     git apply ~/KMotionX/KMotionX/linuxcnc/patches/*.patch
     cd src && make
 
-(`milltask` is rebuilt; `bin/gmoccapy` is regenerated from the patched source.)
+(`milltask`, the interpreter library and its python module are rebuilt; `bin/gmoccapy` is regenerated from the patched source.)

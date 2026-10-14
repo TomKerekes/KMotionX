@@ -1,0 +1,95 @@
+diff --git a/src/emc/rs274ngc/interp_cycles.cc b/src/emc/rs274ngc/interp_cycles.cc
+index bbebc0d6ed..94fcb319c9 100644
+--- a/src/emc/rs274ngc/interp_cycles.cc
++++ b/src/emc/rs274ngc/interp_cycles.cc
+@@ -297,6 +297,53 @@ int Interp::convert_cycle_g74_g84(block_pointer block,
+     save_feed_override_enable = GET_EXTERNAL_FEED_OVERRIDE_ENABLE();
+     save_spindle_override_enable = GET_EXTERNAL_SPINDLE_OVERRIDE_ENABLE(spindle);
+ 
++    if (_setup.rigid_tap_cycles) {
++        // [RS274NGC] RIGID_TAP_CYCLES: the cycle is a rigid tap, as G33.1 - the controller
++        // synchronizes the feed to the spindle encoder, reverses the spindle at the bottom
++        // and brings the tool back to the retract plane. The pitch is the feed per
++        // revolution: F in G95, F / S in G94 (F = S x pitch, as the floating cycle wants it).
++        // P (the dwell at the bottom) has no meaning here and is ignored.
++        CHKS((_setup.feed_mode == FEED_MODE::INVERSE_TIME),
++             _("Cannot use inverse time feed (G93) with a rigid %s"), toString((GCodes)motion).c_str());
++        CHKS((_setup.spindle_mode[spindle] == SPINDLE_MODE::CONSTANT_SURFACE),
++             _("Cannot use constant surface speed (G96) with a rigid %s"), toString((GCodes)motion).c_str());
++        double pitch = _setup.feed_rate;
++        if (_setup.feed_mode == FEED_MODE::UNITS_PER_MINUTE) {
++            CHKS((_setup.speed[spindle] <= 0.0), _("Spindle speed is zero in %s"), toString((GCodes)motion).c_str());
++            pitch = _setup.feed_rate / _setup.speed[spindle];
++        }
++        CHKS((pitch <= 0.0), _("%s needs a feed rate (F = S x pitch, or F = pitch in G95)"), toString((GCodes)motion).c_str());
++        double end_x, end_y, end_z;
++        switch (plane) {                  // the bottom, as cycle_feed maps the cycle's coordinates
++        case CANON_PLANE::XY: end_x = x; end_y = y; end_z = bottom_z; break;
++        case CANON_PLANE::YZ: end_x = y; end_y = bottom_z; end_z = x; break;
++        case CANON_PLANE::XZ: end_x = bottom_z; end_y = x; end_z = y; break;
++        default:
++            ERS("%s for plane %s not implemented", toString((GCodes)motion).c_str(), plane_name(plane));
++        }
++        double delta[9] = {end_x - _setup.current_x, end_y - _setup.current_y, end_z - _setup.current_z, 0, 0, 0, 0, 0, 0};
++        CHP(check_spindle_sync_feed(&_setup, pitch, toString((GCodes)motion).c_str(), delta, fabs(_setup.current_x)));
++        DISABLE_FEED_OVERRIDE();
++        DISABLE_SPEED_OVERRIDE(spindle);
++        START_SPEED_FEED_SYNCH(spindle, pitch, 0);
++        RIGID_TAP(block->line_number, end_x, end_y, end_z, 1);
++        STOP_SPEED_FEED_SYNCH();
++        // the tap ends where it began, at the retract plane; with G98 the cycle ends at the
++        // initial level instead (clear_z, where the floating cycle feeds up to): a traverse
++        // there (the interpreter's position is stale here: the macro's traverse to R did
++        // not update it, so clear_z is compared with nothing; a zero move when R is the level)
++        if (_setup.retract_mode == RETRACT_MODE::OLD_Z) {
++            if (plane == CANON_PLANE::XY) cycle_traverse(block, plane, x, y, clear_z);
++            else if (plane == CANON_PLANE::YZ) cycle_traverse(block, plane, clear_z, x, y);
++            else cycle_traverse(block, plane, y, clear_z, x);
++        }
++        if (save_feed_override_enable)
++            ENABLE_FEED_OVERRIDE();
++        if (save_spindle_override_enable)
++            ENABLE_SPEED_OVERRIDE(spindle);
++        return INTERP_OK;
++    }
++
+    switch (plane) {
+ 
+     case CANON_PLANE::XY:
+diff --git a/src/emc/rs274ngc/interp_internal.hh b/src/emc/rs274ngc/interp_internal.hh
+index 06f3e3e889..7d56fbed88 100644
+--- a/src/emc/rs274ngc/interp_internal.hh
++++ b/src/emc/rs274ngc/interp_internal.hh
+@@ -846,6 +846,7 @@ struct setup
+   int tool_change_with_spindle_on;
+   double parameter_g73_peck_clearance;
+   double parameter_g83_peck_clearance;
++  int rigid_tap_cycles;        // [RS274NGC] RIGID_TAP_CYCLES: G74/G84 as spindle-synchronized (rigid) taps
+   int a_axis_wrapped;
+   int b_axis_wrapped;
+   int c_axis_wrapped;
+diff --git a/src/emc/rs274ngc/interp_setup.cc b/src/emc/rs274ngc/interp_setup.cc
+index 2d165aabe8..fe0baacdeb 100644
+--- a/src/emc/rs274ngc/interp_setup.cc
++++ b/src/emc/rs274ngc/interp_setup.cc
+@@ -180,6 +180,7 @@ setup::setup() :
+     tool_change_with_spindle_on(0),
+     parameter_g73_peck_clearance(0.0),
+     parameter_g83_peck_clearance(0.0),
++    rigid_tap_cycles(0),
+     a_axis_wrapped(0),
+     b_axis_wrapped(0),
+     c_axis_wrapped(0),
+diff --git a/src/emc/rs274ngc/rs274ngc_pre.cc b/src/emc/rs274ngc/rs274ngc_pre.cc
+index d5744e27bf..8a913223b9 100644
+--- a/src/emc/rs274ngc/rs274ngc_pre.cc
++++ b/src/emc/rs274ngc/rs274ngc_pre.cc
+@@ -921,6 +921,8 @@ int Interp::init()
+           double clr = _setup.length_units == CANON_UNITS_INCHES ? 0.050 : 1.0;
+           _setup.parameter_g73_peck_clearance = inifile.findRealV("G73_PECK_CLEARANCE", "RS274NGC", clr);
+           _setup.parameter_g83_peck_clearance = inifile.findRealV("G83_PECK_CLEARANCE", "RS274NGC", clr);
++          // G74/G84 as rigid taps (the controller synchronizes the feed to the spindle, as G33.1)
++          _setup.rigid_tap_cycles = inifile.findBoolV("RIGID_TAP_CYCLES", "RS274NGC", false);
+ 
+           _setup.debugmask = inifile.findUIntV("DEBUG", "EMC", 0);
+ 

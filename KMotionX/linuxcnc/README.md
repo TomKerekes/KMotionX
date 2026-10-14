@@ -103,7 +103,16 @@ through the same shared memory block.
     tap. The firmware starts the sync when the spindle reaches a start position two
     revolutions past the trigger, and the path's end ends it, so `TAP_OVERSHOOT_REVS` must
     cover the spindle's deceleration. In simulate mode the tap is replayed as a move down
-    and back.
+    and back. **G84 and G74** (the tapping cycles, right- and left-hand) are rigid taps too
+    with `[RS274NGC] RIGID_TAP_CYCLES = 1` and the interpreter patch
+    `patches/interp-rigid-tap-cycles.patch`: the cycle's rapid to the retract plane, then the
+    tap to Z at the pitch F / S (G94: F = S x pitch, as the stock cycle wants it) or F in G95,
+    back at the retract plane (G98 then returns to the initial level); L repeats and the next
+    holes' sticky words as in any canned cycle; P (the dwell at the bottom) is ignored; G93
+    and G96 are refused. Stock LinuxCNC's G84 is a floating-chuck cycle (feed down, M5, M4,
+    dwell, feed up, M5, M3), which it stays without the key. Because the cycle's rapid and
+    the tap come in one block, the module holds a tap until the moves before it have
+    finished (the tap starts from where the axes stand), and an abort meanwhile drops it.
   - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
     Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
     each one of KMotion's M-code actions, carried out as the G-code interpreter's
