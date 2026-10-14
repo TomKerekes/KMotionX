@@ -81,7 +81,9 @@ through the same shared memory block.
     grid point of a geo correction table (KMotionCNC's Measure: the header - rows,cols,
     spacing, offset - by hand, then one press per grid point, columns first; the next point
     is read from the file, so it survives a restart); `kmotion.geo-reload` reads `GEO_FILE`
-    again. Each press answers with a message.
+    again. Each press answers with a message. The panel's handler (`kmotion-panel.py`)
+    greys Back/Forward unless `kmotion.hold-allowed` says a hold jog is possible, hides Geo
+    reload without a `GEO_FILE`, and shows Measure only with `[KMOTION] MEASURE_BUTTON = 1`.
   - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
     Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
     each one of KMotion's M-code actions, carried out as the G-code interpreter's

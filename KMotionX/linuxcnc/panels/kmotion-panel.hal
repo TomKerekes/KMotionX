@@ -1,4 +1,5 @@
-# kmotion-panel.hal: run by gladevcp itself (its -H option, see a config's EMBED_TAB_COMMAND)
+# kmotion-panel.hal: run by gladevcp itself (its -H option, see a config's EMBED_TAB_COMMAND;
+# kmotion-panel.py, its -u handler, makes the hold-allowed pin and greys Back/Forward by it)
 # once the panel's pins exist - gmoccapy's POSTGUI_HALFILE runs before the embedded panel is
 # up. Nets the panel's buttons (kmotion-panel.ui) to kmotion-motion: KMotionCNC's Back/Forward
 # in feed hold (while held, at hold-rate of the programmed speed), Measure (the geo correction
@@ -7,4 +8,5 @@ net hold-reverse kmotion-panel.hold-reverse => kmotion.hold-reverse
 net hold-forward kmotion-panel.hold-forward => kmotion.hold-forward
 net measure kmotion-panel.measure => kmotion.measure
 net geo-reload kmotion-panel.geo-reload => kmotion.geo-reload
+net hold-allowed kmotion.hold-allowed => kmotion-panel.hold-allowed
 setp kmotion.hold-rate 0.2

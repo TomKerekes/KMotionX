@@ -701,6 +701,7 @@ struct Pins {
     // position to the geo measurement file; geo-reload reads GEO_FILE again
     hal_bool_t hold_forward, hold_reverse, measure, geo_reload;
     hal_real_t hold_rate;
+    hal_bool_t hold_allowed;         // out: a hold jog is possible now (paused, board mode, machine on): the panel greys its buttons by it
 };
 static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires that
 
@@ -822,6 +823,7 @@ static int create_pins()
     PIN(hal_pin_new_real(comp_id, HAL_IN, &pins->hold_rate, 0, "kmotion.hold-rate"));
     PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->measure, 0, "kmotion.measure"));
     PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->geo_reload, 0, "kmotion.geo-reload"));
+    PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->hold_allowed, 0, "kmotion.hold-allowed"));
     return 0;
 }
 
@@ -2341,6 +2343,7 @@ static void hold_jog_release()
 static void hold_jog_buttons()
 {
     bool allowed = km && km->is_board() && m.paused && GET_MOTION_ENABLE_FLAG();
+    hal_set_bool(pins->hold_allowed, allowed);
     double want = 0;
     if (allowed) {
         double rate = hal_get_real(pins->hold_rate);

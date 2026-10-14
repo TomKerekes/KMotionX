@@ -9,6 +9,8 @@
     Measure         measure: appends the current position to [KMOTION] MEASURE_FILE as the
                     next grid point of a geo correction table (KMotionCNC's Measure)
     Geo reload      geo-reload: reads [KMOTION] GEO_FILE again
+  kmotion-panel.py (gladevcp's -u handler) hides Geo reload without a GEO_FILE, shows Measure
+  only with [KMOTION] MEASURE_BUTTON = 1, and greys Back/Forward unless kmotion.hold-allowed
 -->
 <interface>
   <requires lib="gtk+" version="3.20"/>
