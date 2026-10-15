@@ -2272,11 +2272,11 @@ static bool board_connect(KmBackend::Impl *d)
     // coordinate system is still enabled; otherwise cleared here and now
     if (cfg.homed_persist >= 0) {
         char cmd[64], reply[MAX_LINE + 1];
-        snprintf(cmd, sizeof cmd, "GetPersistDec %d", cfg.homed_persist);
-        if (all && board_query(d, cmd, reply) == 0) d->still_homed = (unsigned) atoi(reply) & 0xff;
+        snprintf(cmd, sizeof cmd, "GetPersistHex %d", cfg.homed_persist);
+        if (all && board_query(d, cmd, reply) == 0) d->still_homed = (unsigned) strtoul(reply, NULL, 16) & 0xff;
         else {
             d->still_homed = 0;
-            snprintf(cmd, sizeof cmd, "SetPersistDec %d 0", cfg.homed_persist);
+            snprintf(cmd, sizeof cmd, "SetPersistHex %d 0", cfg.homed_persist);
             d->km->WriteLine(cmd);
         }
         fprintf(stderr, "kmotion-motion: HOMED_PERSIST %d: %s, homed mask 0x%02x\n", cfg.homed_persist,
