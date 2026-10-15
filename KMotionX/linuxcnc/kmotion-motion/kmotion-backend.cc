@@ -541,7 +541,16 @@ static void w_line(KmBackend::Impl *d, const Cmd &c)
 {
     double vel = c.vel;
     if (c.sync_pitch > 0) {
-        if (!d->sync_run) begin_sync_run(d, c.sync_rps);
+        if (!d->sync_run) {
+            // the run begins with the synchronized line itself: whatever the planner still
+            // holds (G76's rapids to the pass depth, in the same burst from task) is
+            // launched as a normal run first. Otherwise the rapids went into the
+            // synchronized run, the board waited for the spindle before them and the
+            // thread began at whatever angle they ended on (seen on the robot from the
+            // second pass on; the first pass was saved by the at-speed wait)
+            if (d->unflushed) w_flush(d);
+            begin_sync_run(d, c.sync_rps);
+        }
         vel = c.sync_pitch * fabs(c.sync_rps);          // the feed the sync maps revolutions to
     }
     int seq = begin_move(d, c.id);

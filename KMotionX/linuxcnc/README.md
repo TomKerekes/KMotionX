@@ -126,7 +126,10 @@ through the same shared memory block.
     entry, thread and exit), launched together in the board's spindle-sync mode like the
     tap: the board slaves the run's time base to the spindle encoder and starts it when the
     spindle crosses a whole revolution, so every pass starts at the same spindle angle and
-    the passes line up. The first unsynchronized move after the synchronized lines - G76's
+    the passes line up. The run begins with the first synchronized line: moves the planner
+    still holds before it (G76's rapids to the pass depth) are launched as a normal run
+    first, so the wait for the spindle is at the thread's start, where LinuxCNC's is.
+    The first unsynchronized move after the synchronized lines - G76's
     pull-out to the drive line, a rapid right behind the cut in LinuxCNC - joins the run
     (under the spindle's time base, real time at the base speed) and ends it, so the tool
     never stands at the thread's end with the spindle turning; any other command, or the
