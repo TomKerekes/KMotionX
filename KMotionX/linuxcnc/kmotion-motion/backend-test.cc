@@ -1236,6 +1236,7 @@ int main(int argc, char **argv)
     if (getenv("KM_JERK")) for (int i = 0; i < 3; i++) cfg.axis[i].max_jerk = atof(getenv("KM_JERK"));
     if (getenv("KM_BREAK_ANGLE")) cfg.break_angle = atof(getenv("KM_BREAK_ANGLE"));
     if (getenv("KM_LOOKAHEAD")) cfg.lookahead = atof(getenv("KM_LOOKAHEAD"));
+    const bool exact = getenv("KM_EXACT") != NULL;      // the path mode G61 for the scenario (default G64)
     if (strcmp(scenario, "gated") == 0) cfg.queue_limit = 20;     // the backend must know task's limit
     if (strcmp(scenario, "kins3link") == 0 || strcmp(scenario, "tapsegs") == 0) {                      // the kmotion-3link settings, simulate mode
         snprintf(cfg.kinematics, sizeof cfg.kinematics, "3Link");
@@ -1304,6 +1305,7 @@ int main(int argc, char **argv)
     double pos[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
     KmBackend *km = new KmBackend;
     if (!km->init(cfg, pos)) { printf("init failed\n"); return 1; }
+    if (exact) km->set_path_mode(1, 0);                 // G61: exact path, as LinuxCNC's canned cycles run
     printf("mode: %s, scenario: %s\n", km->mode_name(), scenario);
     if (getenv("KM_PATH_TOL")) km->set_path_mode(2, atof(getenv("KM_PATH_TOL")));   // as G64 P<tol> would
     if (strcmp(scenario, "arcs") == 0) scenario_arcs(*km);

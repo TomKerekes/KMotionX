@@ -119,6 +119,11 @@ struct Waypoint {
                             // ANCHOR - the inverse-kinematics seed that
                             // guarantees drawing inversions start in the
                             // right solution branch
+    bool   interior = false; // an interior point of one programmed move's
+                            // subdivision (the kinematics' pieces), not a
+                            // programmed vertex: exact path modes do not
+                            // stop there, the pieces blend at the machine's
+                            // corner tolerance
     bool   nocb = false;    // no-callback attribution (jogs stream through
                             // the planner but must not appear in the G-view)
     VecN   wgt{{1,1,1,1,1,1,1,1}};

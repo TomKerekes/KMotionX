@@ -51,6 +51,8 @@ public:
 	CKinematics *Kinematics;
 	class CTP3FeedRun *m_TP3Feed = NULL;  // pending 3rd Order feed run (lazily allocated)
 	bool m_TP3Flushing = false;           // TP3FlushRun reentry guard
+	bool m_TP3Splitting = false;          // StraightFeedAccelRapid is subdividing one move: its
+	double m_TP3SplitEnd[8];              // programmed end; the other points added are interior
 
 	// G61/G61.1/G64 path control (interpreter modal state, set via the
 	// SET_MOTION_CONTROL_MODE canon call; separate from the Tool Setup

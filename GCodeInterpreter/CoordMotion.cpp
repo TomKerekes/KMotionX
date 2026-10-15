@@ -2412,6 +2412,24 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 	double tol = EffectiveCornerTol();
 	if (tol < 1e-5) tol = 1e-5;
 	w.tol = tol;
+	// an interior point of the chord being committed - the subdivision of one programmed
+	// move into the kinematics' pieces (MaxLinearLength) - is no programmed vertex: the
+	// forced stop of the exact path modes belongs to the move's ends, and the pieces
+	// blend at the machine's corner tolerance, the order of the chord error itself.
+	// Otherwise a G61 line through a nonlinear kinematics stopped at every piece (the
+	// 3 Link: 0.13 s every 2 mm, a rigid tap short of its depth)
+	w.interior = false;
+	if (m_TP3Splitting)
+	{
+		double Pw[8] = {x, y, z, a, b, c, u, v}, dd = 0.0;
+		for (i = 0; i < 8; i++) if (fabs(Pw[i] - m_TP3SplitEnd[i]) > dd) dd = fabs(Pw[i] - m_TP3SplitEnd[i]);
+		w.interior = dd > 1e-9;
+		if (w.interior && PathExact())
+		{
+			w.tol = MP->CornerTol;
+			if (w.tol < 1e-5) w.tol = 1e-5;
+		}
+	}
 	w.seq = sequence_number;
 	w.id  = ID;
 	w.cmd = r->cmdIssued;   // buffered commands issued before this move
@@ -2453,7 +2471,9 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 			else
 			{
 				double dDn, vcrawl, vseg;
-				if (TP3CornerNeedsStop(r, w, PathExact(), &dDn, &vcrawl, &vseg))
+				// the vertex is raw1: a programmed one stops in the exact modes, an
+				// interior one (a piece boundary) is judged as in G64
+				if (TP3CornerNeedsStop(r, w, PathExact() && !r->raw1.interior, &dDn, &vcrawl, &vseg))
 				{
 					stopHere = true;
 					TP3Log("CORNER_STOP    seq=%d dDn=%.3f vcrawl=%.4g vseg=%.4g",
@@ -2793,11 +2813,22 @@ int CCoordMotion::StraightFeedAccelRapid(double DesiredFeedRate_in_per_sec, doub
 		(MP->DegreesB && fabs(db) > MP->MaxAngularChange) || 
 		(MP->DegreesC && fabs(dc) > MP->MaxAngularChange)))
 	{
+		// the subdivision of ONE move: the end of the outermost call is its programmed
+		// vertex, every point the recursion adds before it is an interior point
+		// (TP3AddFeedWaypoint marks them so; the exact path modes do not stop there)
+		bool outer = !m_TP3Splitting;
+		if (outer)
+		{
+			double E[8] = {x, y, z, a, b, c, u, v};
+			memcpy(m_TP3SplitEnd, E, sizeof E);
+			m_TP3Splitting = true;
+		}
 		int result = StraightFeedAccelRapid(DesiredFeedRate_in_per_sec, DesiredAccel, RapidMode, NoCallback,current_x+dx/2.0, current_y+dy/2.0, current_z+dz/2.0, 
 														current_a+da/2.0, current_b+db/2.0, current_c+dc/2.0, current_u+du/2.0, current_v+dv/2.0, sequence_number, ID);
-		if (result) return result;
-		
-		return StraightFeedAccelRapid(DesiredFeedRate_in_per_sec, DesiredAccel, RapidMode, NoCallback, x, y, z, a, b, c, u, v, sequence_number, ID);
+		if (!result)
+			result = StraightFeedAccelRapid(DesiredFeedRate_in_per_sec, DesiredAccel, RapidMode, NoCallback, x, y, z, a, b, c, u, v, sequence_number, ID);
+		if (outer) m_TP3Splitting = false;
+		return result;
 	}
 
 
