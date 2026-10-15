@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..57b9b1b7c5 100644
+index cae34386ee..08af086e6c 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -524,6 +524,10 @@ class gmoccapy(object):
@@ -13,7 +13,7 @@ index cae34386ee..57b9b1b7c5 100644
          GLib.timeout_add( cycle_time, self._periodic )  # time between calls to the function, in milliseconds
          GLib.timeout_add(1000, self._periodic_1s)       # 1 s timer for elapsed time display
          self.elapsed_time_run = 0
-@@ -2756,6 +2760,27 @@ class gmoccapy(object):
+@@ -2756,6 +2760,42 @@ class gmoccapy(object):
          except:
              raise SystemExit("gmoccapy can not poll linuxcnc status any more")
  
@@ -30,6 +30,21 @@ index cae34386ee..57b9b1b7c5 100644
 +            if not self.widgets.tbtn_estop.get_active():
 +                self.on_hal_status_state_estop()
 +
++        # the homed state likewise: the DROs' colour (Combi_DRO, which with a non-identity
++        # kinematics follows only the watcher's all-homed / not-all-homed edges) and the
++        # buttons homing enables; a machine homed from the start gets no edge
++        all_homed = all(self.stat.homed[j] for j in range(self.stat.joints))
++        if all_homed != self.all_homed:
++            if all_homed:
++                self.on_hal_status_all_homed(None)
++            else:
++                self.on_hal_status_not_all_homed(None, ",".join(str(j) for j in range(self.stat.joints) if not self.stat.homed[j]))
++        for dro in self.dro_dic.values():
++            if all_homed and not dro.homed:
++                dro._all_homed(None)
++            elif not all_homed and dro.homed:
++                dro._not_all_homed(None)
++
 +        # [DISPLAY] CLEAR_PLOT_AT_FIRST_MACHINE_ON: the first position change after the
 +        # session's first Machine on is the real position arriving (a machine whose position
 +        # is unknown until its axes are enabled); the line the plot drew to it goes
@@ -41,7 +56,7 @@ index cae34386ee..57b9b1b7c5 100644
          error = self.error_channel.poll()
          if error:
              self._show_error(error)
-@@ -2828,6 +2853,9 @@ class gmoccapy(object):
+@@ -2828,6 +2868,9 @@ class gmoccapy(object):
              if self.stat.task_state == linuxcnc.STATE_ESTOP_RESET:
                  widget.set_active(False)
          else:  # estop circuit is fine
@@ -51,7 +66,7 @@ index cae34386ee..57b9b1b7c5 100644
              self.command.state(linuxcnc.STATE_ESTOP_RESET)
              self.command.wait_complete()
              self.stat.poll()
-@@ -2837,6 +2865,10 @@ class gmoccapy(object):
+@@ -2837,6 +2880,10 @@ class gmoccapy(object):
  
      # toggle machine on / off button
      def on_tbtn_on_toggled(self, widget, data=None):
@@ -62,7 +77,7 @@ index cae34386ee..57b9b1b7c5 100644
          if widget.get_active():
              if self.stat.task_state == linuxcnc.STATE_ESTOP:
                  widget.set_active(False)
-@@ -3039,6 +3071,7 @@ class gmoccapy(object):
+@@ -3039,6 +3086,7 @@ class gmoccapy(object):
          self.command.mode(linuxcnc.MODE_MANUAL)
  
      def on_hal_status_state_estop_reset(self, widget=None):
@@ -70,7 +85,7 @@ index cae34386ee..57b9b1b7c5 100644
          self.widgets.tbtn_estop.set_active(False)
          self.widgets.tbtn_estop.set_image(self.widgets.img_emergency_off)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_off)
-@@ -3071,7 +3104,21 @@ class gmoccapy(object):
+@@ -3071,7 +3119,21 @@ class gmoccapy(object):
          self.widgets.ntb_info.set_current_page(0)
          self.widgets.ntb_jog.set_current_page(0)
  
@@ -92,7 +107,7 @@ index cae34386ee..57b9b1b7c5 100644
          widgetlist = ["rbt_manual", "btn_homing", "btn_touch", "btn_tool",
                        "ntb_jog", "spc_feed", "btn_feed_100", "rbt_forward",
                        "rbt_reverse", "rbt_stop", "tbtn_flood", "tbtn_mist",
-@@ -3081,7 +3128,9 @@ class gmoccapy(object):
+@@ -3081,7 +3143,9 @@ class gmoccapy(object):
          if not self.widgets.tbtn_on.get_active():
              self.widgets.tbtn_on.set_active(True)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_on)
@@ -103,7 +118,7 @@ index cae34386ee..57b9b1b7c5 100644
          if self.widgets.ntb_main.get_current_page() != 0:
              self.command.mode(linuxcnc.MODE_MANUAL)
              self.command.wait_complete()
-@@ -3364,14 +3413,33 @@ class gmoccapy(object):
+@@ -3364,14 +3428,33 @@ class gmoccapy(object):
          self.initialized = True
  
      # kill keyboard and estop machine before closing

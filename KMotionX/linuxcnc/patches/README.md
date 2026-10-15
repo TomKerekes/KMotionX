@@ -59,3 +59,5 @@ Apply, in the LinuxCNC run-in-place tree (the pinned commit of `linuxcnc/README.
     cd src && make
 
 (`milltask`, the interpreter library and its python module are rebuilt; `bin/gmoccapy` is regenerated from the patched source.)
+
+The gmoccapy patch also makes `_periodic` reconcile, every poll, the E-stop and power buttons with the task state and the homed state (gmoccapy's own flag and buttons, and the Combi_DROs' homed colour) with the status: those follow the status watcher's edge signals, which a machine turned on or homed from outside before the GUI's first poll never produces (E-stop shown with the power on; red DROs on a homed machine).
