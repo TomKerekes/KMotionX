@@ -213,6 +213,7 @@ struct KmState {
     double spindle_rpm_measured;  // board: the spindle axis's speed, signed RPM (0 when not measured)
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
     bool tapping;                 // board: a rigid tap is in progress (the program on its thread, the move in spindle sync)
+    bool threading;         // a synchronized run (G33 lines) is being collected or runs on the board
     int tap_serial;               // counts finished rigid taps; tap_result is the last one's
     int tap_result;               // 0 done, 1 failed (message posted), 2 aborted
     double act_fb[8];             // board: the actuators' feedback (the channels' Position), in their units
@@ -245,6 +246,9 @@ public:
     // returns the move's serial: once state().lines_begun reaches it the planner has taken
     // it up, and `running` then says whether it is still executing
     int line(const double end[9], double vel, double acc, bool rapid, int id);
+    // a feed under spindle sync (G33, G76's passes): the pitch in units per revolution and the
+    // spindle's rev/s (signed, M4 negative). Consecutive synchronized lines form one run
+    int sync_line(const double end[9], double pitch, double rps, double acc, int id);
     int arc(const double end[9], const double center[3], const double normal[3], int turn, double vel, double acc, int id);
     int dwell(double seconds, int id);
     // LinuxCNC's SET_TERM_COND (G61/G61.1/G64 P): 1 = exact stop at block ends, 2 = blend;

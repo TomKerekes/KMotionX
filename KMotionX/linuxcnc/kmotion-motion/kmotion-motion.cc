@@ -1341,7 +1341,12 @@ static bool to_planner(const emcmot_command_t &cmd)
     // line() and arc() queue the move and return its serial (not a status): a planner
     // refusal comes later, through the state's error count
     case EMCMOT_SET_LINE:
-        km->line(end, cmd.vel, cmd.acc, cmd.motion_type == EMC_MOTION_TYPE_TRAVERSE, cmd.id);
+        if (cmd.spindlesync > 0) {
+            const spindle_status_t &ss = emcmotStatus->spindle_status[0];
+            if (fabs(ss.speed) < 1e-9) { report_error("a synchronized move (G33) needs the spindle turning"); return false; }
+            km->sync_line(end, cmd.spindlesync, ss.speed / 60.0, cmd.acc, cmd.id);
+        } else
+            km->line(end, cmd.vel, cmd.acc, cmd.motion_type == EMC_MOTION_TYPE_TRAVERSE, cmd.id);
         return true;
     case EMCMOT_PROBE:
         if (km->has_probe()) {
@@ -1652,7 +1657,13 @@ static void handle_command()
         if (!GET_MOTION_COORD_FLAG()) { emcmotStatus->commandStatus = EMCMOT_COMMAND_INVALID_COMMAND; report_error("SET_LINE outside coordinated mode"); break; }
         if (!in_range(*c, c->motion_type == EMC_MOTION_TYPE_TRAVERSE ? "Rapid" : "Linear")) { refuse_move(); break; }
         if (km) {
-            if (!hold(*c, atspeed_barrier(c->motion_type)) && !to_planner(*c))
+            // a feed under spindle sync (G33, G76's passes): the pitch travels with the
+            // command, as with a RIGID_TAP (a held move sees it after SET_SPINDLESYNC 0)
+            emcmot_command_t tc = *c;
+            tc.spindlesync = c->motion_type == EMC_MOTION_TYPE_TRAVERSE ? 0 : m.spindle_pitch;
+            if (tc.spindlesync > 0)
+                log_print("  synchronized: pitch %.6g, spindle %.6g RPM\n", tc.spindlesync, emcmotStatus->spindle_status[0].speed);
+            if (!hold(tc, atspeed_barrier(c->motion_type)) && !to_planner(tc))
                 emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
             m.last_move_time = now_s(); m.last_type = c->motion_type; m.last_tag = c->tag;
             break;

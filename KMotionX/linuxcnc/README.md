@@ -121,6 +121,17 @@ through the same shared memory block.
     dwell, feed up, M5, M3), which it stays without the key. Because the cycle's rapid and
     the tap come in one block, the module holds a tap until the moves before it have
     finished (the tap starts from where the axes stand), and an abort meanwhile drops it.
+  - **Threading** (G33, and G76's passes; board mode): a feed under spindle sync is planned
+    at pitch x the spindle's rev/s, consecutive synchronized lines in one run (a G76 pass's
+    entry, thread and exit), launched together in the board's spindle-sync mode like the
+    tap: the board slaves the run's time base to the spindle encoder and starts it when the
+    spindle crosses a whole revolution, so every pass starts at the same spindle angle and
+    the passes line up. The run ends with its last synchronized line: the first
+    unsynchronized command (G76's retract, the next rapid) launches it, as does the quiet
+    flush; the whole path is on the board before the launch, the feed override is 1 for the
+    run (as motmod ignores it on synchronized moves) and the operator's again after. The
+    interpreter wants the spindle turning (M3 S) before a G33. Needs `SPINDLE_SPEED_AXIS`
+    and the encoder as the tap does; in simulate mode the run is replayed like any other.
   - **Spindle** (board mode) as KMotionCNC drives one (Dynomotion's help page "KMotionCNC
     Spindle Control"): `[KMOTION] SPINDLE_M3`, `SPINDLE_M4`, `SPINDLE_M5` and `SPINDLE_S` are
     each one of KMotion's M-code actions, carried out as the G-code interpreter's

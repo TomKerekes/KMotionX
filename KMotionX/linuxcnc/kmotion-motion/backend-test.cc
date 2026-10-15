@@ -1202,6 +1202,26 @@ static void scenario_tapsegs(KmBackend &km)
     printf("  the planner's knots are in /tmp/TPSegLog.csv\n");
 }
 
+// threading (G33): lines under spindle sync form one run, planned at pitch x rev/s (here
+// 0.05 x 10 = 0.5 in/s) and launched together; the first unsynchronized move ends it and
+// runs after it. Simulate: the run is replayed like any other
+static void scenario_thread(KmBackend &km)
+{
+    Follower f(km);
+    double a[9] = {0, 0, -0.5, 0, 0, 0, 0, 0, 0}, b[9] = {0.1, 0, -0.6, 0, 0, 0, 0, 0, 0}, c[9] = {0.1, 0, 0, 0, 0, 0, 0, 0, 0};
+    km.sync_line(a, 0.05, 10.0, 1e9, 1);
+    km.sync_line(b, 0.05, 10.0, 1e9, 2);
+    bool seen = false;
+    for (int i = 0; i < 6; i++) { f.run(f.t + 0.01, true); if (f.st.threading) seen = true; }
+    check(seen, "two synchronized lines open a threading run");
+    km.line(c, 5.0, 100.0, true, 3);
+    f.run();
+    check(!f.st.threading, "the rapid ended it");
+    check(f.extent.count(1) && f.extent.count(2) && f.extent.count(3), "all three lines ran");
+    check(f.extent[2].lo[2] < -0.59 && f.at(0.1, 0, 0), "the thread reached Z-0.6 and the rapid came back to Z0");
+    check(f.messages.empty(), "no messages");
+}
+
 int main(int argc, char **argv)
 {
     const char *scenario = argc > 1 ? argv[1] : "program";
@@ -1307,6 +1327,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "kins3link") == 0) scenario_kins3link(*km);
     else if (strcmp(scenario, "joglimit") == 0) scenario_joglimit(*km);
     else if (strcmp(scenario, "tapsegs") == 0) scenario_tapsegs(*km);
+    else if (strcmp(scenario, "thread") == 0) scenario_thread(*km);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();

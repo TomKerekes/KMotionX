@@ -96,6 +96,7 @@ struct Cmd {
     int mc = 0, ticket = 0;       // MCODE: the M code, its ticket, P and Q
     double p = 0, q = 0;
     bool away = false;            // PROBE: stop when the probe loses contact (G38.4/.5)
+    double sync_pitch = 0, sync_rps = 0;   // LINE under spindle sync (G33): units per revolution, the spindle's rev/s (signed)
 };
 
 struct KmBackend::Impl {
@@ -146,6 +147,9 @@ struct KmBackend::Impl {
                                        // G84's rapid to the retract plane); nothing passes it. Worker-owned,
                                        // read by the poller (running) and cleared by abort()
     Cmd tap_cmd;
+    bool sync_run = false;              // a threading run (G33 lines) is being collected: planned in
+                                        // spindle-sync mode, launched as a unit (see begin_sync_run)
+    double sync_lookahead = 0;          // the lookahead to put back after it
     int home_serial = 0;               // under smx
     unsigned home_ok_mask = 0, home_fail_mask = 0;
     std::atomic<int> sp_state{2};      // board: the spindle as last told (1 CW, -1 CCW, 0 off; 2 not known yet:
@@ -498,12 +502,52 @@ static int begin_move(KmBackend::Impl *d, int id)
     return seq;
 }
 
+// Threading (G33, and G76's passes): the lines that come under spindle sync are planned
+// at pitch x the spindle's rev/s, in one run, and launched together in the board's
+// spindle-sync mode (TrigThread, as the rigid tap): the board slaves the run's time base
+// to the spindle encoder and starts it when the spindle crosses a whole revolution, so
+// every pass of a G76 starts at the same spindle angle. The run ends with its last
+// synchronized line - the first unsynchronized command flushes and launches it (the
+// worker), as does the quiet flush. The whole path goes to the board before the launch
+// (the lookahead unbounded, as for the tap: the board's executed time runs with the
+// spindle), and the feed override is 1 for the run (motmod ignores it on synchronized
+// moves), the operator's again after
+static void begin_sync_run(KmBackend::Impl *d, double rps)
+{
+    CCoordMotion *cm = d->cm;
+    MOTION_PARAMS *MP = cm->GetMotionParams();
+    d->sync_lookahead = MP->TPLookahead;
+    MP->TPLookahead = 1e9;
+    cm->SetFeedRateOverride(1.0);
+    cm->m_ThreadingMode = true;
+    cm->m_ThreadingBaseSpeedRPS = rps;
+    d->sync_run = true;
+    char t[120];
+    snprintf(t, sizeof t, "threading run: synchronized lines at %.3f rev/s", rps);
+    d->trace(t);
+}
+
+static void end_sync_run(KmBackend::Impl *d)
+{
+    CCoordMotion *cm = d->cm;
+    cm->m_ThreadingMode = false;
+    cm->GetMotionParams()->TPLookahead = d->sync_lookahead;
+    cm->SetFeedRateOverride(d->feed_scale);
+    d->sync_run = false;
+    d->trace("threading run launched");
+}
+
 static void w_line(KmBackend::Impl *d, const Cmd &c)
 {
+    double vel = c.vel;
+    if (c.sync_pitch > 0) {
+        if (!d->sync_run) begin_sync_run(d, c.sync_rps);
+        vel = c.sync_pitch * fabs(c.sync_rps);          // the feed the sync maps revolutions to
+    }
     int seq = begin_move(d, c.id);
     d->lines_begun++;
     // the planner's ID argument is its cutter-compensation hint (1/2/3), not a line number
-    int r = d->cm->StraightFeedAccelRapid(c.vel, c.acc, c.rapid, true, c.end[0], c.end[1], c.end[2], c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, 0);
+    int r = d->cm->StraightFeedAccelRapid(vel, c.acc, c.rapid, true, c.end[0], c.end[1], c.end[2], c.end[3], c.end[4], c.end[5], c.end[6], c.end[7], seq, 0);
     if (!r) memcpy(d->cmd_end, c.end, sizeof d->cmd_end);
     if (r) {
         char t[400];
@@ -602,6 +646,7 @@ static void w_flush(KmBackend::Impl *d)
         if (getenv("KM_DEBUG_STOP")) fprintf(stderr, "kmotion-motion: FlushSegments begins (%d segments planned)\n", nsegs);
         int fr = cm->FlushSegments();
         if (getenv("KM_DEBUG_STOP")) fprintf(stderr, "kmotion-motion: FlushSegments returned %d after %.3f s\n", fr, now_s() - t0);
+        if (d->sync_run) end_sync_run(d);   // launched with TrigThread: the run follows the spindle
         if (fr) {
             if (cm->m_AxisDisabled) { d->message("an axis of the coordinate system is disabled: motion refused"); cm->m_AxisDisabled = false; }
             fail(d, "FlushSegments");   // stops the run; the moves are lost and LinuxCNC's queue drains
@@ -617,6 +662,7 @@ static void w_flush(KmBackend::Impl *d)
         if (cm->OutputSegment(iseg)) { fail(d, "OutputSegment"); return; }
     harvest(d);
     tp_init();
+    if (d->sync_run) end_sync_run(d);
     cm->TP3ClearRun();
     cm->DownloadInit();
     d->harvested = 0;
@@ -1108,6 +1154,7 @@ static void publish(KmBackend::Impl *d)
     s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
     s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting || d->tap_pending;
+    s.threading = d->sync_run;
     s.errors = d->errors;
     s.homing = d->homing;
     s.tapping = d->tapping;
@@ -1878,6 +1925,11 @@ static void worker_main(KmBackend::Impl *d)
                 c = d->q.front();
                 d->q.pop_front();
             }
+            // a threading run ends with its last synchronized line: anything else that would
+            // join the planner's buffer launches it first (the settings pass through)
+            if (d->sync_run && !(c.kind == Cmd::LINE && c.sync_pitch > 0) && c.kind != Cmd::FEED && c.kind != Cmd::SET_POS &&
+                c.kind != Cmd::PATH_MODE && c.kind != Cmd::MACHINE_ON)
+                w_flush(d);
             switch (c.kind) {
             case Cmd::LINE: w_line(d, c); break;
             case Cmd::ARC: w_arc(d, c); break;
@@ -1887,7 +1939,7 @@ static void worker_main(KmBackend::Impl *d)
                 d->feed_scale = c.feed_scale;
                 d->rapid_scale = c.rapid_scale;
                 if (!d->cfg.simulate) {
-                    d->cm->SetFeedRateOverride(c.feed_scale);
+                    if (!d->sync_run) d->cm->SetFeedRateOverride(c.feed_scale);   // 1 during a threading run
                     d->cm->SetFeedRateRapidOverride(c.rapid_scale);
                 }
                 break;
@@ -2322,6 +2374,17 @@ void KmBackend::tap(const double bottom[9], double pitch, double rps, double ret
     c.vel = pitch; c.p = rps; c.q = retract_scale; c.id = id;
     c.acc = 1e9;                  // the acceleration the planner may plan with: the axes' own limits apply
     d->post(c);
+}
+
+int KmBackend::sync_line(const double end[9], double pitch, double rps, double acc, int id)
+{
+    Cmd c{};
+    c.kind = Cmd::LINE;
+    memcpy(c.end, end, sizeof c.end);
+    c.sync_pitch = pitch; c.sync_rps = rps; c.acc = acc; c.id = id;
+    int serial = (int) ++d->lines_posted;
+    d->post(c);
+    return serial;
 }
 
 int KmBackend::line(const double end[9], double vel, double acc, bool rapid, int id)
