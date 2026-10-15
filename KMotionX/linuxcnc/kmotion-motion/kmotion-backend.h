@@ -192,6 +192,8 @@ struct KmState {
     bool running;                 // something is executing or still being planned
     bool paused;
     bool connected;               // board mode: status is coming from the board
+    int connect_serial;           // board mode: counts the attempts to connect (the start, each Machine on while not connected)
+    char board_problem[512];      // board mode: why the board cannot be used (no board, a firmware mismatch); empty when connected
     int errors;                   // planner failures so far; each one stopped the motion
     bool homing;                  // board: the home program is running
     int home_serial;              // counts finished homing runs; the masks below belong to the last

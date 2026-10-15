@@ -221,6 +221,9 @@ struct KmBackend::Impl {
     bool run_active = false;        // a run is downloaded/executing on the board
     double last_poll = 0;
     bool connected = false;
+    int connect_serial = 0;         // attempts to connect: the start, then each Machine on while not connected
+    std::string board_problem;      // why the board cannot be used (under smx); empty when connected
+    bool board_init_done = false;   // the init programs and the start programs have run (the session's first Machine on)
     std::atomic<unsigned> ever_enabled{0};   // poller: axes seen enabled since the board came (bit = axis). A
                                     // board fresh from power-up reads Dest 0 on channels nothing has
                                     // set up, which through a kinematics is some far-away point: its
@@ -429,6 +432,8 @@ static int start_program(KmBackend::Impl *d, const char *path, int thread);
 static int set_persist(KmBackend::Impl *d, int index, long value);
 static void board_stop(KmBackend::Impl *d);
 static int board_query(KmBackend::Impl *d, const char *cmd, char *reply);
+static bool board_connect(KmBackend::Impl *d);
+static bool board_init_programs(KmBackend::Impl *d);
 
 // the planner refused a move or a flush. Our own abort (a probe trip's as well) makes it
 // return failures too (that is how the worker gets out of a blocking download): those are
@@ -911,6 +916,7 @@ static void w_poll_board(KmBackend::Impl *d)
     unsigned jog_written[8];                 // jogs this status read comes after
     for (int i = 0; i < 8; i++) jog_written[i] = d->jog_written[i];
     const int spindle_done = d->spindle_done;    // ... and spindle commands
+    if (!d->connected && !d->lost) return;       // never connected (no board, other firmware): Machine on tries
     int tok = d->km->WaitToken(false, 100, "kmotion-motion");
     if (tok == KMOTION_IN_USE) return;      // another client holds the board (a download, say): no loss
     if (tok != KMOTION_LOCKED) {
@@ -1164,6 +1170,7 @@ static void publish(KmBackend::Impl *d)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
     s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting || d->tap_pending;
     s.threading = d->sync_run;
+    s.connect_serial = d->connect_serial;
     s.errors = d->errors;
     s.homing = d->homing;
     s.tapping = d->tapping;
@@ -1180,6 +1187,7 @@ static void publish(KmBackend::Impl *d)
     s.active_id = s.depth > 0 ? d->id_of(d->done_upto + 1) : 0;
     s.paused = d->paused;
     s.connected = d->cfg.simulate ? true : d->connected;
+    snprintf(s.board_problem, sizeof s.board_problem, "%s", d->board_problem.c_str());
     s.current_vel = d->current_vel;
     s.distance_to_go = (d->cfg.simulate && d->have_cur && d->cur.kind != 'K' && d->cur.total > 0)
                        ? d->cur.dx * (1 - d->t_in_seg / d->cur.total) : 0;
@@ -1274,6 +1282,12 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
     MAIN_STATUS status;
     memset(&status, 0, sizeof status);
     if (d->lost) return;
+    if (on && !d->connected) {
+        // not connected since the start (no board, other firmware): try again now - the
+        // operator may have flashed or plugged it meanwhile; the problem text is published
+        if (!board_connect(d)) return;
+    }
+    if (on && !d->board_init_done && !board_init_programs(d)) return;
     if (on && d->cfg.enable_program[0]) {
         // the config's program enables the axes (a serial servo setup turns the torque on and
         // enables at the measured position): run it, wait until every axis of the coordinate
@@ -2188,6 +2202,107 @@ static CKinematics *kinematics_by_name(const char *name)
     return nullptr;
 }
 
+// The board, at the start and again at a Machine on while not connected: connect afresh
+// (the server outlives LinuxCNC and may still hold the tail of a reply the last client never
+// finished reading), check that the board's firmware is the build this installation's image
+// is (the library's structures must match the board's), define the coordinate system and
+// read where the axes stand. Nothing is compiled or run here. A failure is kept in
+// board_problem, in plain words, for the operator
+static bool board_connect(KmBackend::Impl *d)
+{
+    const KmConfig &cfg = d->cfg;
+    CCoordMotion *cm = d->cm;
+    auto problem = [&](const std::string &why) {
+        { std::lock_guard<std::mutex> lock(d->smx); d->board_problem = why; }
+        fprintf(stderr, "kmotion-motion: %s\n", why.c_str());
+        d->connect_serial++;
+        return false;
+    };
+    d->km->Disconnect();
+    int type = 0;
+    if (d->km->CheckKMotionVersion(&type)) {
+        std::string lib;
+        { std::lock_guard<std::mutex> lock(g_msg_mutex); lib = g_message; g_message.clear(); }
+        char board[MAX_LINE + 1] = "";
+        if (d->km->WriteLineReadLine("Version", board) || !board[0]) {
+            std::string why = "no KFLOP or Kogna answers: is the board powered, and on the network (a Kogna) or on USB (a KFLOP)?";
+            size_t nl = lib.find_first_of("\r\n");
+            if (!lib.empty()) why += " (" + lib.substr(0, nl) + ")";
+            return problem(why);
+        }
+        int bt = strstr(board, "KOGNA") ? BOARD_TYPE_KOGNA : BOARD_TYPE_KFLOP;
+        char path[1024] = "";
+        kmx::getDspFile(path, bt);
+        char file[128] = "";
+        if (d->km->ExtractCoffVersionString(path, file)) snprintf(file, sizeof file, "unreadable");
+        for (char *q = file; *q; q++) if (*q == '\r' || *q == '\n') { *q = 0; break; }
+        return problem(std::string("the board runs firmware \"") + board + "\" but this installation's firmware image is \"" + file +
+                       "\" (" + path + "): they must match. Flash the board with this image (the KMotion tool: Config & Flash, "
+                       "re-flash from the .out image), or put the board's own build of that file there");
+    }
+    fprintf(stderr, "kmotion-motion: connected to a %s\n", type == BOARD_TYPE_KOGNA ? "Kogna" : "KFLOP");
+    d->board_type = type;
+    d->km->SetConsoleCallback(console_handler);     // registers with the server: board mode only
+    if (cm->SetAxisDefinitions(cfg.channel[0], cfg.channel[1], cfg.channel[2], cfg.channel[3],
+                               cfg.channel[4], cfg.channel[5], cfg.channel[6], cfg.channel[7]))
+        return problem("the board refused the coordinate system (DefineCS failed)");
+    // the position, when the axes are enabled (set up by an earlier session or the init
+    // programs); a board fresh from power-up reads 0 on channels nothing has set up
+    MAIN_STATUS st;
+    memset(&st, 0, sizeof st);
+    bool all = d->km->GetStatus(st, true) == 0;
+    for (int i = 0; all && i < 8; i++) {
+        int ch = cfg.channel[i];
+        if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((st.Enables >> ch) & 1)) all = false;
+    }
+    if (all) {
+        double x, y, z, a, b, c, u, v;
+        if (cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v)) {
+            cm->ClearAbort();
+            return problem("reading the board's position failed");
+        }
+        double p[9] = {x, y, z, a, b, c, u, v, 0};
+        memcpy(d->pos, p, sizeof p);
+        set_cm_position(d, d->pos);
+        d->ever_enabled = 0xff;
+    } else {
+        fprintf(stderr, "kmotion-motion: an axis is disabled at the start: positions are taken once every axis has been enabled\n");
+    }
+    // the homed mask the last session left on the board, valid while every axis of the
+    // coordinate system is still enabled; otherwise cleared here and now
+    if (cfg.homed_persist >= 0) {
+        char cmd[64], reply[MAX_LINE + 1];
+        snprintf(cmd, sizeof cmd, "GetPersistDec %d", cfg.homed_persist);
+        if (all && board_query(d, cmd, reply) == 0) d->still_homed = (unsigned) atoi(reply) & 0xff;
+        else {
+            d->still_homed = 0;
+            snprintf(cmd, sizeof cmd, "SetPersistDec %d 0", cfg.homed_persist);
+            d->km->WriteLine(cmd);
+        }
+        fprintf(stderr, "kmotion-motion: HOMED_PERSIST %d: %s, homed mask 0x%02x\n", cfg.homed_persist,
+                all ? "every axis enabled" : "an axis is disabled, cleared", d->still_homed);
+    }
+    { std::lock_guard<std::mutex> lock(d->smx); d->board_problem.clear(); }
+    d->connected = true;
+    d->lost = false;
+    d->connect_serial++;
+    return true;
+}
+
+// The session's first Machine on: the init programs (the axes' set-up, in order, each
+// waited for) and then the programs that keep running (the board's service loops). As
+// KMotionCNC's init, this runs when the machine is turned on, not when LinuxCNC starts
+static bool board_init_programs(KmBackend::Impl *d)
+{
+    const KmConfig &cfg = d->cfg;
+    for (const std::string &prog : cfg.init_programs)
+        if (run_program(d, prog.c_str(), cfg.init_thread)) return false;
+    for (const auto &sp : cfg.start_programs)
+        if (start_program(d, sp.second.c_str(), sp.first)) return false;
+    d->board_init_done = true;
+    return true;
+}
+
 bool KmBackend::init(const KmConfig &cfg, const double pos[9])
 {
     d->cfg = cfg;
@@ -2276,83 +2391,12 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         cm->RapidParamsDirty = false;
         set_cm_position(d, pos);
     } else {
-        // the server outlives LinuxCNC and may still hold the tail of a reply the last client
-        // never finished reading: connect afresh, with the buffers flushed on both ends
-        d->km->Disconnect();
-        int type = 0;
-        if (d->km->CheckKMotionVersion(&type)) {
-            std::string m;
-            { std::lock_guard<std::mutex> lock(g_msg_mutex); m = g_message; g_message.clear(); }
-            fprintf(stderr, "kmotion-motion: no board, or firmware mismatch: %s\n", m.c_str());
-            return false;
-        }
-        fprintf(stderr, "kmotion-motion: connected to a %s\n", type == BOARD_TYPE_KOGNA ? "Kogna" : "KFLOP");
-        d->board_type = type;
-        d->km->SetConsoleCallback(console_handler);     // registers with the server: board mode only
-        for (const std::string &prog : cfg.init_programs) {
-            if (run_program(d, prog.c_str(), cfg.init_thread)) {
-                std::string m;
-                { std::lock_guard<std::mutex> lock(d->smx); m = d->messages; }
-                fprintf(stderr, "kmotion-motion: %s\n", m.c_str());
-                return false;
-            }
-        }
-        if (cm->SetAxisDefinitions(cfg.channel[0], cfg.channel[1], cfg.channel[2], cfg.channel[3],
-                                   cfg.channel[4], cfg.channel[5], cfg.channel[6], cfg.channel[7])) {
-            fprintf(stderr, "kmotion-motion: DefineCS failed\n");
-            return false;
-        }
-        // the position, when the axes are enabled (set up by an earlier session or the init
-        // programs); a board fresh from power-up reads 0 on channels nothing has set up
-        {
-            MAIN_STATUS st;
-            memset(&st, 0, sizeof st);
-            bool all = d->km->GetStatus(st, true) == 0;
-            for (int i = 0; all && i < 8; i++) {
-                int ch = cfg.channel[i];
-                if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((st.Enables >> ch) & 1)) all = false;
-            }
-            if (all) {
-                double x, y, z, a, b, c, u, v;
-                if (cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v)) {
-                    fprintf(stderr, "kmotion-motion: reading the board position failed\n");
-                    cm->ClearAbort();
-                    return false;
-                }
-                double p[9] = {x, y, z, a, b, c, u, v, 0};
-                memcpy(d->pos, p, sizeof p);
-                d->ever_enabled = 0xff;
-            } else {
-                fprintf(stderr, "kmotion-motion: an axis is disabled at the start: positions are taken once every axis has been enabled\n");
-                sim_act_pos(d);
-            }
-        }
-        // programs that keep running (forever loops), once the axes and the coordinate system are set
-        for (const auto &sp : cfg.start_programs) {
-            if (start_program(d, sp.second.c_str(), sp.first)) {
-                std::string m;
-                { std::lock_guard<std::mutex> lock(d->smx); m = d->messages; }
-                fprintf(stderr, "kmotion-motion: %s\n", m.c_str());
-                return false;
-            }
-        }
-        d->connected = true;
-        // the homed mask the last session left on the board, valid while every axis of the
-        // coordinate system is still enabled; otherwise cleared here and now
-        if (cfg.homed_persist >= 0) {
-            MAIN_STATUS st;
-            memset(&st, 0, sizeof st);
-            bool all = d->km->GetStatus(st, true) == 0;
-            for (int i = 0; all && i < 8; i++) {
-                int ch = cfg.channel[i];
-                if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((st.Enables >> ch) & 1)) all = false;
-            }
-            int v = 0;
-            if (all && persist_get(cfg.homed_persist, v)) d->still_homed = (unsigned) v & 0xff;
-            else { d->still_homed = 0; persist_set(cfg.homed_persist, 0); }
-            fprintf(stderr, "kmotion-motion: HOMED_PERSIST %d: %s, homed mask 0x%02x\n", cfg.homed_persist,
-                    all ? "every axis enabled" : "an axis is disabled, cleared", d->still_homed);
-        }
+        // the board: connect and check its firmware, define the coordinate system and read
+        // where it stands - nothing compiled, nothing run. A board that is missing or runs
+        // other firmware does not stop LinuxCNC from starting: the problem is kept, in plain
+        // words, and shown when Machine on is pressed, which tries the board again
+        if (!board_connect(d))
+            fprintf(stderr, "kmotion-motion: LinuxCNC starts without the board; Machine on tries it again\n");
     }
     cm->ClearAbort();
     cm->ClearHalt();
@@ -2362,7 +2406,7 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         if (cfg.simulate) sim_act_pos(d);
         memcpy(d->st.act_pos, d->act_pos, sizeof d->st.act_pos);
         for (int i = 0; i < 8; i++) d->st.enabled[i] = true;
-        d->st.connected = true;
+        d->st.connected = cfg.simulate || d->connected;
     }
     memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
     d->worker = std::thread(worker_main, d);

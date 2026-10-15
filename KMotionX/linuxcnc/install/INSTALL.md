@@ -9,7 +9,7 @@ The scripts are in this folder: `vm-create.cmd` / `vm-create.sh` make the VM on 
 - A host with VirtualBox 7. The Extension Pack is not needed: the KFLOP's USB interface (FTDI 0403:6001, the FT232/FT245 family) is a USB 2.0 full-speed device, 12 Mbit/s, and VirtualBox's built-in OHCI controller (labelled USB 1.1) serves full-speed devices; the pack only adds the high-speed and USB 3 controllers, which the KFLOP cannot use. A VM that has the pack and an xHCI controller works as well.
 - The Debian 13 "netinst" ISO, `debian-13.x.x-amd64-netinst.iso`, from debian.org (about 700 MB). The VM downloads the rest during the install, so the host needs internet.
 - For the Kogna: the host's network interface that connects to it (a USB-Ethernet adapter on the laptop). The Kogna is its own DHCP server on that link (192.168.113.x) and the VM gets a bridged adapter on it. For a KFLOP: a USB port; the VM takes the board through a USB filter.
-- The board must run the firmware this tree carries (`DSP_KOGNA/DSPKOGNA.out`, `DSP_KFLOP/DSPKFLOP.out`): kmotion-motion checks the build stamp at start and refuses a mismatch. The KMotion tool's Config & Flash screen flashes it (or KMotion on Windows).
+- The board must run the firmware this tree carries (`DSP_KOGNA/DSPKOGNA.out`, `DSP_KFLOP/DSPKFLOP.out`): kmotion-motion checks the build stamp when it connects and refuses Machine on with both builds named until they match. The KMotion tool's Config & Flash screen flashes it (or KMotion on Windows).
 - Time: the Debian install takes 15 minutes, `install-vm.sh` 30 to 60 (LinuxCNC's build is most of it).
 
 ## 2. The VM
@@ -49,7 +49,7 @@ It can be run again at any time: each step skips what is already done, and after
 
 - **Kogna**: with the bridged adapter's cable connected (Devices > Network > Connect Network Adapter - the VM's virtual cable, not the physical one), the interface gets an address from the Kogna within seconds (`ip -4 addr`: 192.168.113.x). KMotionServer finds the board by itself; `printf 'Version\n' | ~/KMotionX/bin/kflopConsole` prints its firmware build. If a KMotionServer was started before the link existed, `killall KMotionServer` and let the next client start a fresh one.
 - **KFLOP**: plug it in; with the USB filter the VM takes it (Devices > USB shows it ticked) and the udev rule makes it accessible. Do not have Windows KMotion hold it at the same time.
-- **Firmware**: the build stamp the board reports must be the one in `~/.kmotionx/DSP_KOGNA/DSPKOGNA.out` (or `DSP_KFLOP/`). Otherwise kmotion-motion says "no board, or firmware mismatch" and stops; flash the board from the KMotion tool (desktop icon KMotion > Config & Flash > the .out image).
+- **Firmware**: the build stamp the board reports must be the one in `~/.kmotionx/DSP_KOGNA/DSPKOGNA.out` (or `DSP_KFLOP/`). Otherwise LinuxCNC starts but Machine on is refused with a message naming the board's build and the file's; flash the board from the KMotion tool (desktop icon KMotion > Config & Flash > the .out image), then press Machine on again - no restart needed.
 
 ## 5. First runs
 

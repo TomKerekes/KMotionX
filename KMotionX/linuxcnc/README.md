@@ -31,9 +31,14 @@ installation from scratch, with its scripts.
     accelerations, jerk limits, corner blending, 3rd order knots. `make test` runs the
     planner on the test program's moves without LinuxCNC or a board (`backend-test.cc`).
   - **Board mode** (`MODE = board`): the same planner downloads to the KFLOP/Kogna through
-    KMotionServer as KMotionCNC and kmxWeb do. At start it checks the firmware, runs the
-    `INIT_PROGRAM` (axis setup, e.g. the Minirouter init) and waits for it, sets the
-    coordinate system (`DefineCSEx`) and reads the position. Then: positions and enables
+    KMotionServer as KMotionCNC and kmxWeb do. At start it connects, checks that the board's
+    firmware is the build of this installation's image, sets the coordinate system
+    (`DefineCSEx`) and reads the position - nothing compiled or run. The session's first
+    Machine on runs the `INIT_PROGRAM`s (axis setup, e.g. the Minirouter init, each waited
+    for) and starts the `START_PROGRAM`s, then enables the axes. A board that is missing or
+    runs other firmware does not stop LinuxCNC from starting: Machine on is refused with
+    the reason in plain words (the two firmware builds and what to do), and every Machine
+    on tries the board again, so a board flashed or plugged in meanwhile is taken. Then: positions and enables
     from `GetStatus` every `STATUS_PERIOD_MS`, the executing line from `ExecTime` against
     the downloaded segments, the end of a run from `CheckDoneBuf`; machine on/off =
     `EnableAxisDest`/`DisableAxis`; pause/resume = `StopImmediate0/1` (the board's feed

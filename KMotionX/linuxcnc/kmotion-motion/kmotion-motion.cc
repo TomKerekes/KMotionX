@@ -275,6 +275,8 @@ struct Model {
     int probe_seen;         // board probing: the backend's probe_serial when the probe move was sent
     double spindle_pitch;   // SET_SPINDLESYNC: units per revolution for the next G33.1 (0: none)
     int tap_seen;           // rigid taps already taken into account (the backend's tap_serial)
+    bool connect_waiting;   // Machine on was pressed with the board not connected: the backend tries it
+    int connect_wait;       // ... and this is its connect_serial before the try
     int tap_dir0;           // the spindle's direction as commanded when the tap started (shown again after it)
 };
 static Model m;
@@ -556,12 +558,17 @@ static void model_step(double dt)
                 update_motion_state();
             }
         }
-        if (km->is_board() && !m.ks.connected && !board_lost && GET_MOTION_ENABLE_FLAG()) {
+        if (m.connect_waiting && m.ks.connect_serial != m.connect_wait) {
+            m.connect_waiting = false;            // the backend's try is over: connected, or the problem below
+            if (m.ks.connected) log_print("  the board is connected now\n");
+        }
+        if (km->is_board() && !m.ks.connected && !board_lost && GET_MOTION_ENABLE_FLAG() && !m.connect_waiting) {
             // the board is gone (its link reports it at once on USB or a direct Ethernet
-            // link, after a timeout through a router): the machine is off and nothing is
-            // homed any more, as task will show
+            // link, after a timeout through a router), or it was never there: the machine
+            // is off and nothing is homed any more, as task will show
             board_lost = true;
-            report_error("the board stopped answering: machine off, joints unhomed");
+            if (m.ks.board_problem[0]) report_error("Machine on refused: %s", m.ks.board_problem);
+            else report_error("the board stopped answering: machine off, joints unhomed");
             motion_enable(false, "the board lost");
             m.queue.clear();
             m.held.clear();
@@ -1462,7 +1469,17 @@ static void handle_command()
         for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) SET_JOINT_ERROR_FLAG(&joints[j], 0);   // a limit switch trip, cleared as motmod does
         motion_enable(true, "ENABLE from task");
         SET_MOTION_ERROR_FLAG(0);
-        if (km && km->is_board()) km->machine_on(true);
+        if (km && km->is_board()) {
+            if (!m.ks.connected) {
+                // no board, or other firmware, since the start: the backend tries the board
+                // again now; its answer (connected, or the problem in plain words) comes
+                // with the next status
+                m.connect_waiting = true;
+                m.connect_wait = m.ks.connect_serial;
+                log_print("  the board is not connected: Machine on tries it again\n");
+            }
+            km->machine_on(true);
+        }
         update_motion_state();
         break;
     case EMCMOT_DISABLE:
