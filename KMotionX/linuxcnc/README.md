@@ -6,7 +6,8 @@ the PC. LinuxCNC's motion module (`motmod`, a real-time HAL module) is replaced 
 plain userspace process, `kmotion-motion`, that speaks the same task↔motion protocol
 through the same shared memory block.
 
-`FEATURES.md` lists what is supported, with the G and M codes.
+`FEATURES.md` lists what is supported, with the G and M codes; `install/INSTALL.md` is the
+installation from scratch, with its scripts.
 
 ## Layout
 

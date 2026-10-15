@@ -1,0 +1,149 @@
+#!/bin/bash
+# install-vm.sh - LinuxCNC on KMotion, from a fresh Debian 13 (XFCE) to a working system:
+# the packages, KMotionX (Tom's fork) built and installed, LinuxCNC's run-in-place tree at
+# the pinned commit with the patches, kmotion-motion and its tests, the KMotion tool, the
+# desktop icons, the board's network profile and USB access. Everything after the OS
+# install; see INSTALL.md for the VM and the board.
+#
+# Run it as yourself in a terminal (sudo asks for your password a few times):
+#     bash install-vm.sh
+# It can be run again at any time: every step skips what is already done. Options:
+#     --dry-run        print the commands, run nothing
+#     --no-linuxcnc    skip the LinuxCNC tree (KMotionX and the tool only)
+#     --no-icons       no desktop icons
+# Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX),
+#     LINUXCNC_COMMIT (514be4f657), LINUXCNC_DIR (~/linuxcnc-dev),
+#     KOGNA_IF (the bridged interface to the Kogna, e.g. enp0s8: a DHCP profile is made for it)
+set -euo pipefail
+
+KMOTIONX_REPO=${KMOTIONX_REPO:-https://github.com/TomKerekes/KMotionX.git}
+KMOTIONX_BRANCH=${KMOTIONX_BRANCH:-master}
+KMOTIONX_DIR=${KMOTIONX_DIR:-$HOME/KMotionX}
+LINUXCNC_REPO=${LINUXCNC_REPO:-https://github.com/LinuxCNC/linuxcnc.git}
+LINUXCNC_COMMIT=${LINUXCNC_COMMIT:-514be4f657}
+LINUXCNC_DIR=${LINUXCNC_DIR:-$HOME/linuxcnc-dev}
+KOGNA_IF=${KOGNA_IF:-}
+DRY=0; DO_LINUXCNC=1; DO_ICONS=1
+for a in "$@"; do
+    case $a in
+        --dry-run) DRY=1;;
+        --no-linuxcnc) DO_LINUXCNC=0;;
+        --no-icons) DO_ICONS=0;;
+        -h|--help) sed -n '2,20p' "$0"; exit 0;;
+        *) echo "unknown option $a"; exit 2;;
+    esac
+done
+run() { echo "+ $*"; [ $DRY = 1 ] || "$@"; }
+step() { echo; echo "==== $*"; }
+note() { echo "   - $*"; }
+
+# the packages: LinuxCNC's build needs (its own apt build-dep adds the rest), KMotionX's
+# (libftdi1-dev), the KMotion tool's (PySide6), the Guest Additions' (headers, dkms)
+PACKAGES="git build-essential autoconf automake libtool pkg-config dh-python desktop-file-utils
+intltool bwidget libboost-python-dev libepoxy-dev libgl-dev libglu1-mesa-dev libgtk-3-dev
+libcap-dev libmodbus-dev libgpiod-dev libeditreadline-dev libtirpc-dev libudev-dev
+libusb-1.0-0-dev libxmu-dev libfmt-dev netcat-openbsd procps psmisc python3 python3-dev
+python3-pybind11 python3-tk python3-xlib python3-opengl python3-numpy python3-configobj
+python3-cairo python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gtksource-4 python3-pyqt5
+python3-pyqt5.qsci python3-pyqt5.qtsvg python3-pyqt5.qtopengl python3-dbus python3-qtpy
+python3-zmq tcl tcl8.6-dev tclx tk8.6-dev yapps2 libftdi1-dev python3-pyside6.qtwidgets
+python3-pyside6.qtgui python3-pyside6.qtcore network-manager linux-headers-amd64 dkms"
+
+step "Debian"
+. /etc/os-release
+if [ "${VERSION_ID:-}" != "13" ]; then
+    echo "this is $PRETTY_NAME, not Debian 13: the package list is for 13, continuing anyway"
+fi
+if [ "$(id -u)" = 0 ]; then echo "run this as yourself, not as root (it uses sudo where needed)"; exit 2; fi
+
+step "apt sources: deb-src (LinuxCNC's build dependencies come from 'apt build-dep')"
+if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+    if ! grep -q '^Types:.*deb-src' /etc/apt/sources.list.d/debian.sources; then
+        run sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+    else note "already on"; fi
+elif [ -f /etc/apt/sources.list ] && ! grep -q '^deb-src' /etc/apt/sources.list; then
+    run sudo sh -c "grep '^deb ' /etc/apt/sources.list | sed 's/^deb /deb-src /' >> /etc/apt/sources.list"
+else note "already on"; fi
+run sudo apt-get update -q
+
+step "packages"
+# shellcheck disable=SC2086
+run sudo apt-get install -y -q $PACKAGES
+
+step "KMotionX: $KMOTIONX_REPO ($KMOTIONX_BRANCH) in $KMOTIONX_DIR"
+if [ ! -d "$KMOTIONX_DIR/.git" ]; then
+    run git clone -b "$KMOTIONX_BRANCH" "$KMOTIONX_REPO" "$KMOTIONX_DIR"
+else note "already cloned ($(git -C "$KMOTIONX_DIR" log -1 --format=%h 2>/dev/null)); not pulled - git pull yourself when you want the latest"; fi
+if [ $DRY = 0 ]; then cd "$KMOTIONX_DIR"; fi
+[ -f "$KMOTIONX_DIR/config.mak" ] || run bash -c "cd '$KMOTIONX_DIR' && ./configure"
+# plain make, never -j: the subdirectory builds race (see the build notes)
+run make -C "$KMOTIONX_DIR"
+run sudo make -C "$KMOTIONX_DIR" install
+# the install relinks bin/ as root: one more make as yourself makes the files yours again
+run make -C "$KMOTIONX_DIR"
+run sudo chown -R "$USER:" "$HOME/.kmotionx"
+if [ ! -f /etc/udev/rules.d/10.kflop.rules ]; then
+    run sudo cp "$KMOTIONX_DIR/KMotionX/usb/etc/udev/rules.d/10.kflop.rules" /etc/udev/rules.d/
+    run sudo udevadm control --reload-rules
+    run sudo udevadm trigger
+else note "KFLOP udev rule already installed"; fi
+for g in plugdev dialout vboxsf; do
+    if getent group $g > /dev/null && ! id -nG | grep -qw $g; then run sudo usermod -aG $g "$USER"; GROUPS_CHANGED=1; fi
+done
+
+if [ $DO_LINUXCNC = 1 ]; then
+    step "LinuxCNC run-in-place: $LINUXCNC_REPO at $LINUXCNC_COMMIT in $LINUXCNC_DIR"
+    if [ ! -d "$LINUXCNC_DIR/.git" ]; then
+        run git clone "$LINUXCNC_REPO" "$LINUXCNC_DIR"
+    else note "already cloned"; fi
+    run git -C "$LINUXCNC_DIR" checkout -q "$LINUXCNC_COMMIT"
+    step "LinuxCNC patches ($KMOTIONX_DIR/KMotionX/linuxcnc/patches)"
+    for p in "$KMOTIONX_DIR"/KMotionX/linuxcnc/patches/*.patch; do
+        if git -C "$LINUXCNC_DIR" apply --reverse --check "$p" 2>/dev/null; then note "$(basename "$p"): already applied"
+        else run git -C "$LINUXCNC_DIR" apply "$p"; fi
+    done
+    step "LinuxCNC build dependencies (apt build-dep; the documentation tools come along)"
+    run sudo apt-get build-dep -y -q "$LINUXCNC_DIR"
+    step "LinuxCNC build (--with-realtime=uspace, no documentation; a while)"
+    if [ ! -f "$LINUXCNC_DIR/src/Makefile.inc" ]; then
+        run bash -c "cd '$LINUXCNC_DIR/src' && ./autogen.sh && ./configure --with-realtime=uspace --disable-build-documentation"
+    else note "already configured"; fi
+    run make -C "$LINUXCNC_DIR/src" -j"$(nproc)"
+    note "no 'make setuid': kmotion-motion needs no real-time priority (the board does the real time)"
+
+    step "kmotion-motion (LinuxCNC's motion module replacement) and its tests"
+    run make -C "$KMOTIONX_DIR/KMotionX/linuxcnc/kmotion-motion" LINUXCNC_DIR="$LINUXCNC_DIR"
+    run make -C "$KMOTIONX_DIR/KMotionX/linuxcnc/kmotion-motion" LINUXCNC_DIR="$LINUXCNC_DIR" test
+fi
+
+step "the KMotion tool (tools/kmotion)"
+run make -C "$KMOTIONX_DIR/KMotionX/tools/kmotion/shim"
+
+if [ $DO_ICONS = 1 ]; then
+    step "desktop icons"
+    run env LINUXCNC_DIR="$LINUXCNC_DIR" "$KMOTIONX_DIR/KMotionX/desktop/install-desktop-icons.sh"
+fi
+
+step "the Kogna's network"
+if [ -n "$KOGNA_IF" ]; then
+    if nmcli -t -f NAME connection show 2>/dev/null | grep -qx Kogna; then note "profile 'Kogna' exists"
+    else
+        run nmcli connection add type ethernet ifname "$KOGNA_IF" con-name Kogna ipv4.method auto ipv6.method disabled autoconnect yes
+        run nmcli connection up Kogna
+    fi
+else
+    note "KOGNA_IF not set: no profile made. The Kogna hands out 192.168.113.x on its own link;"
+    note "give the bridged interface a DHCP profile: nmcli connection add type ethernet ifname <IF> con-name Kogna ipv4.method auto autoconnect yes"
+fi
+
+step "done"
+cat <<END
+Next:
+  - log out and in once if groups were added (${GROUPS_CHANGED:-no change}: plugdev/dialout/vboxsf)
+  - the board must run the firmware this tree carries (DSP_KOGNA/DSPKOGNA.out, DSP_KFLOP/DSPKFLOP.out):
+    kmotion-motion refuses a mismatch at start; the KMotion tool's Config & Flash screen flashes it
+  - first run: the desktop icon "LinuxCNC (KMotion simulate)" (no board), then "LinuxCNC (Kogna)"
+    or from a terminal:  source $LINUXCNC_DIR/scripts/rip-environment
+                         linuxcnc $KMOTIONX_DIR/KMotionX/linuxcnc/configs/kmotion-sim/kmotion-sim.ini
+  - later updates: git -C $KMOTIONX_DIR pull, then run this script again (it rebuilds what changed)
+END
