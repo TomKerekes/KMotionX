@@ -1215,6 +1215,7 @@ int main(int argc, char **argv)
     if (getenv("KM_COLLINEAR_TOL")) cfg.collinear_tol = atof(getenv("KM_COLLINEAR_TOL"));
     if (getenv("KM_JERK")) for (int i = 0; i < 3; i++) cfg.axis[i].max_jerk = atof(getenv("KM_JERK"));
     if (getenv("KM_BREAK_ANGLE")) cfg.break_angle = atof(getenv("KM_BREAK_ANGLE"));
+    if (getenv("KM_LOOKAHEAD")) cfg.lookahead = atof(getenv("KM_LOOKAHEAD"));
     if (strcmp(scenario, "gated") == 0) cfg.queue_limit = 20;     // the backend must know task's limit
     if (strcmp(scenario, "kins3link") == 0 || strcmp(scenario, "tapsegs") == 0) {                      // the kmotion-3link settings, simulate mode
         snprintf(cfg.kinematics, sizeof cfg.kinematics, "3Link");

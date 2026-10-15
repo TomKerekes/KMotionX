@@ -157,6 +157,8 @@ struct KmBackend::Impl {
     double at_prev_dest = 0, at_prev_stamp = 0;   // poller, AXIS: the spindle channel's last Dest and its time
     double at_v_filt = 0;                  // ... its speed, low-pass filtered (counts/s)
     int tap_trace_left = 0;                // poller: status reads still to trace during a tap
+    int path_term_cond = 2;             // the path mode in force (G61 / G61.1 / G64), as last told the planner
+    double path_tolerance = -1;         // ... and G64's tolerance (-1: the planner's default)
     std::atomic<bool> tap_flush_watch{false}; // the worker downloads the tap's path: the poller watches the program
     std::atomic<bool> tap_flush_cut{false};   // ... and cut the download because the program had finished
     bool at_have_prev = false;
@@ -1358,6 +1360,14 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     MOTION_PARAMS *MP = cm->GetMotionParams();
     const double lookahead = MP->TPLookahead;
     MP->TPLookahead = 1e9;
+    // The tap is one straight line, which the planner cuts into pieces for a nonlinear
+    // kinematics (the 3 Link: 2 mm) - and LinuxCNC's canned cycles run in exact path mode
+    // (G61), under which the planner ends every piece in a corner stop: on the robot the
+    // tap stopped for 0.13 s every 2 mm (the timeline: CORNER_STOP, tol 0) and fell short of
+    // the bottom by the time lost, the spindle counting on. The pieces are collinear, so
+    // the tap is planned in continuous mode with the configured tolerance; the program's
+    // own mode is put back after
+    cm->SetPathMode(CANON_CONTINUOUS, -1.0);
     d->tap_flush_cut = false;
     d->tap_flush_watch = !d->cfg.simulate;    // the safety net: the poller cuts a download that
                                               // still waits once the program has ended
@@ -1379,6 +1389,7 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     }
     d->tap_flush_watch = false;
     MP->TPLookahead = lookahead;
+    cm->SetPathMode(d->path_term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP, d->path_tolerance);
     if (d->tap_flush_cut) {
         cm->ClearAbort();
         r = 0;
@@ -1914,8 +1925,9 @@ static void worker_main(KmBackend::Impl *d)
             }
             case Cmd::PATH_MODE:
                 // in program order with the moves; the planner applies it per waypoint
-                d->cm->SetPathMode(c.term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP,
-                                   (c.term_cond == 2 && c.tolerance > 0) ? c.tolerance : -1.0);
+                d->path_term_cond = c.term_cond;
+                d->path_tolerance = (c.term_cond == 2 && c.tolerance > 0) ? c.tolerance : -1.0;
+                d->cm->SetPathMode(c.term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP, d->path_tolerance);
                 break;
             case Cmd::JOG_TO: if (!d->cfg.simulate) w_jog_to(d, c); d->jog_written[c.axis]++; break;
             }
