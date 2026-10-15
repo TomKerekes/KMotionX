@@ -126,9 +126,11 @@ through the same shared memory block.
     entry, thread and exit), launched together in the board's spindle-sync mode like the
     tap: the board slaves the run's time base to the spindle encoder and starts it when the
     spindle crosses a whole revolution, so every pass starts at the same spindle angle and
-    the passes line up. The run ends with its last synchronized line: the first
-    unsynchronized command (G76's retract, the next rapid) launches it, as does the quiet
-    flush; the whole path is on the board before the launch, the feed override is 1 for the
+    the passes line up. The first unsynchronized move after the synchronized lines - G76's
+    pull-out to the drive line, a rapid right behind the cut in LinuxCNC - joins the run
+    (under the spindle's time base, real time at the base speed) and ends it, so the tool
+    never stands at the thread's end with the spindle turning; any other command, or the
+    quiet flush, launches the run as it is; the whole path is on the board before the launch, the feed override is 1 for the
     run (as motmod ignores it on synchronized moves) and the operator's again after. The
     interpreter wants the spindle turning (M3 S) before a G33. Needs `SPINDLE_SPEED_AXIS`
     and the encoder as the tap does; in simulate mode the run is replayed like any other.

@@ -1925,14 +1925,20 @@ static void worker_main(KmBackend::Impl *d)
                 c = d->q.front();
                 d->q.pop_front();
             }
-            // a threading run ends with its last synchronized line: anything else that would
-            // join the planner's buffer launches it first (the settings pass through)
-            if (d->sync_run && !(c.kind == Cmd::LINE && c.sync_pitch > 0) && c.kind != Cmd::FEED && c.kind != Cmd::SET_POS &&
+            // a threading run ends with the first unsynchronized move after its synchronized
+            // lines - G76's pull-out to the drive line, which LinuxCNC runs as a rapid right
+            // behind the cut: it joins the run (under the spindle's time base, real time at
+            // the base speed), so the tool never stands at the thread's end with the spindle
+            // turning, and the run is launched right after it. Anything else that would
+            // join the planner's buffer launches the run first (the settings pass through)
+            bool synced = c.kind == Cmd::LINE && c.sync_pitch > 0;
+            bool joins = d->sync_run && !synced && (c.kind == Cmd::LINE || c.kind == Cmd::ARC);
+            if (d->sync_run && !synced && !joins && c.kind != Cmd::FEED && c.kind != Cmd::SET_POS &&
                 c.kind != Cmd::PATH_MODE && c.kind != Cmd::MACHINE_ON)
                 w_flush(d);
             switch (c.kind) {
-            case Cmd::LINE: w_line(d, c); break;
-            case Cmd::ARC: w_arc(d, c); break;
+            case Cmd::LINE: w_line(d, c); if (joins) w_flush(d); break;
+            case Cmd::ARC: w_arc(d, c); if (joins) w_flush(d); break;
             case Cmd::DWELL: w_dwell(d, c); break;
             case Cmd::ABORT: w_abort(d); break;
             case Cmd::FEED:

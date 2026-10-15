@@ -1214,7 +1214,7 @@ static void scenario_thread(KmBackend &km)
     bool seen = false;
     for (int i = 0; i < 6; i++) { f.run(f.t + 0.01, true); if (f.st.threading) seen = true; }
     check(seen, "two synchronized lines open a threading run");
-    km.line(c, 5.0, 100.0, true, 3);
+    km.line(c, 5.0, 100.0, true, 3);           // the pull-out: joins the run and ends it
     f.run();
     check(!f.st.threading, "the rapid ended it");
     check(f.extent.count(1) && f.extent.count(2) && f.extent.count(3), "all three lines ran");
