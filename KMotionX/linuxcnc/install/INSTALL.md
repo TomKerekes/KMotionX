@@ -6,7 +6,7 @@ The scripts are in this folder: `vm-create.cmd` / `vm-create.sh` make the VM on 
 
 ## 1. What you need
 
-- A host with VirtualBox 7 (the Extension Pack is not needed: a KFLOP is a USB 1.1 device).
+- A host with VirtualBox 7. The Extension Pack is not needed: the KFLOP's USB interface (FTDI 0403:6001, the FT232/FT245 family) is a USB 2.0 full-speed device, 12 Mbit/s, and VirtualBox's built-in OHCI controller (labelled USB 1.1) serves full-speed devices; the pack only adds the high-speed and USB 3 controllers, which the KFLOP cannot use. A VM that has the pack and an xHCI controller works as well.
 - The Debian 13 "netinst" ISO, `debian-13.x.x-amd64-netinst.iso`, from debian.org (about 700 MB). The VM downloads the rest during the install, so the host needs internet.
 - For the Kogna: the host's network interface that connects to it (a USB-Ethernet adapter on the laptop). The Kogna is its own DHCP server on that link (192.168.113.x) and the VM gets a bridged adapter on it. For a KFLOP: a USB port; the VM takes the board through a USB filter.
 - The board must run the firmware this tree carries (`DSP_KOGNA/DSPKOGNA.out`, `DSP_KFLOP/DSPKFLOP.out`): kmotion-motion checks the build stamp at start and refuses a mismatch. The KMotion tool's Config & Flash screen flashes it (or KMotion on Windows).
@@ -21,7 +21,7 @@ With the script, on the host, from this folder (a checkout, or just the one file
 
 Run it without the adapter name once to see the host's adapters as VirtualBox names them (`VBoxManage list bridgedifs`). The optional third argument is a shared folder, mounted at `/mnt/kmotion` in the VM once the Guest Additions are in.
 
-By hand instead: New VM, type Linux / Debian (64-bit), 4 GB memory, 2 CPUs, a 40 GB disk; Display: VMSVGA, 64 MB; Network: adapter 1 NAT (internet), adapter 2 bridged to the host's interface to the Kogna, cable connected; USB: enabled, a filter with vendor 0403 and product 6001 (the KFLOP); Storage: the ISO in the optical drive. The script does exactly this.
+By hand instead: New VM, type Linux / Debian (64-bit), 4 GB memory, 2 CPUs, a 40 GB disk; Display: VMSVGA, 64 MB; Network: adapter 1 NAT (internet), adapter 2 bridged to the host's interface to the Kogna, cable connected; USB: enabled, the OHCI (USB 1.1) controller is enough, a filter with vendor 0403 and product 6001 (the KFLOP); Storage: the ISO in the optical drive. The script does exactly this.
 
 Then install Debian: start the VM, "Graphical install", your language and keyboard, hostname of your choice, a user (the scripts assume you work as that user, in its home), no root password (then the user gets sudo, which the scripts need), guided partitioning on the whole disk, and in the software selection tick "Debian desktop environment" and "Xfce" (the desktop icons support Xfce and GNOME; Xfce is what the existing VM runs), plus "standard system utilities". Reboot into the desktop. `UNATTENDED=1 bash vm-create.sh ...` lets VirtualBox do the install by itself instead (user `tk`, password `kmotion`, Debian's default desktop).
 
