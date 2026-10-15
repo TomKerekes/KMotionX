@@ -6,6 +6,8 @@ the PC. LinuxCNC's motion module (`motmod`, a real-time HAL module) is replaced 
 plain userspace process, `kmotion-motion`, that speaks the same task↔motion protocol
 through the same shared memory block.
 
+`FEATURES.md` lists what is supported, with the G and M codes.
+
 ## Layout
 
 - `kmotion-motion/` – the process. `kmotion-motion.cc` (LinuxCNC side) decodes every emcmot
@@ -465,7 +467,5 @@ program zeroes the positions and the test moves the axes.
 
 1. Homing on a real machine (the switch bits in Home.c); in-position from the board's
    `AxisDone` for moves as well as jogs; jogging while paused.
-2. Spindle: spindle-synchronized motion (G33/G76) would need the board's threading.
-3. Kinematics on the KMotion side (TP3 plans in actuator space); LinuxCNC's kinematics
-   module is bypassed and only gets joint positions to display.
-4. mm configs (LinuxCNC machine units vs KMotion's inches).
+2. mm configs (LinuxCNC machine units vs KMotion's inches).
+3. M62/M63 (outputs in step with motion), M19 spindle orient.
