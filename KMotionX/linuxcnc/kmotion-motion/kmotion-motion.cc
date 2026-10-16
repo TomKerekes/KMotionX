@@ -1662,7 +1662,10 @@ static void handle_command()
         if (i >= 0 && i < NAXES) {
             double cur = joint_kins && !GET_MOTION_TELEOP_FLAG() ? m.act[i] : m.pos[i];
             double from = jog_running(i) && m.jog[i].to_target ? m.jog[i].target : cur;
-            start_jog(i, true, from + c->offset, c->vel);
+            // the increment is a distance; the sign of the velocity is the direction, as
+            // motion's axis_jog_incr / joint jog read it (a minus step went plus before)
+            double step = c->vel < 0 ? -fabs(c->offset) : fabs(c->offset);
+            start_jog(i, true, from + step, c->vel);
         }
         break;
     }
