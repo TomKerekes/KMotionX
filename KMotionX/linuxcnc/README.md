@@ -91,7 +91,9 @@ installation from scratch, with its scripts.
     is read from the file, so it survives a restart); `kmotion.geo-reload` reads `GEO_FILE`
     again. Each press answers with a message. The panel's handler (`kmotion-panel.py`)
     greys Back/Forward unless `kmotion.hold-allowed` says a hold jog is possible, hides Geo
-    reload without a `GEO_FILE`, and shows Measure only with `[KMOTION] MEASURE_BUTTON = 1`.
+    reload without a `GEO_FILE`, shows Measure only with `[KMOTION] MEASURE_BUTTON = 1`, and
+    takes gmoccapy's GTK theme from its preference file at start (the panel is its own
+    process and would follow the desktop's theme otherwise).
   - **Rigid tapping** (G33.1, board mode): the planner's move from the start through the
     bottom, and on by `[KMOTION] TAP_OVERSHOOT_REVS` revolutions for the spindle's
     deceleration, at pitch x spindle speed, launched in the board's spindle-sync mode
