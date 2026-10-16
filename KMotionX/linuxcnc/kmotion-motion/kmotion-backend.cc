@@ -691,7 +691,7 @@ static int board_query(KmBackend::Impl *d, const char *cmd, char *reply);
 // on its own does nothing to a moving board.
 static void board_stop(KmBackend::Impl *d)
 {
-    if (d->lost) return;                  // nothing answers: the planner's reset is all there is
+    if (d->lost || !d->connected) return; // nothing answers (lost, or never connected): the planner's reset is all there is
     char reply[MAX_LINE + 1];
     unsigned c0 = d->status_count;
     if (d->km->WriteLine("StopImmediate0")) d->message("StopImmediate0 failed");   // abort() has queued one too: harmless twice
@@ -1192,7 +1192,7 @@ static void publish(KmBackend::Impl *d)
     s.distance_to_go = (d->cfg.simulate && d->have_cur && d->cur.kind != 'K' && d->cur.total > 0)
                        ? d->cur.dx * (1 - d->t_in_seg / d->cur.total) : 0;
     std::lock_guard<std::mutex> lock2(g_msg_mutex);
-    if (d->lost) g_message.clear();
+    if (d->lost || (!d->cfg.simulate && !d->connected)) g_message.clear();   // the library's own words about a board that is not there: ours are published instead
     if (!g_message.empty()) {
         if (!d->messages.empty()) d->messages += " | ";
         d->messages += g_message;
@@ -1282,6 +1282,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
     MAIN_STATUS status;
     memset(&status, 0, sizeof status);
     if (d->lost) return;
+    if (!on && !d->connected) return;      // nothing to turn off on a board that was never connected
     if (on && !d->connected) {
         // not connected since the start (no board, other firmware): try again now - the
         // operator may have flashed or plugged it meanwhile; the problem text is published
@@ -1954,6 +1955,15 @@ static void worker_main(KmBackend::Impl *d)
             // the base speed), so the tool never stands at the thread's end with the spindle
             // turning, and the run is launched right after it. Anything else that would
             // join the planner's buffer launches the run first (the settings pass through)
+            // no board (never connected: missing, or other firmware): nothing to do and
+            // nothing to say - Machine on says it. The bookkeeping the waiting side needs
+            if (!d->cfg.simulate && !d->connected && !d->lost && c.kind != Cmd::MACHINE_ON && c.kind != Cmd::FEED &&
+                c.kind != Cmd::SET_POS && c.kind != Cmd::PATH_MODE && c.kind != Cmd::ABORT) {
+                if (c.kind == Cmd::SPINDLE) d->spindle_done++;
+                else if (c.kind == Cmd::JOG_TO) d->jog_written[c.axis]++;
+                else if (c.kind == Cmd::MCODE) { d->mcode_result = 1; d->mcode_done = c.ticket; }
+                continue;
+            }
             bool synced = c.kind == Cmd::LINE && c.sync_pitch > 0;
             bool joins = d->sync_run && !synced && (c.kind == Cmd::LINE || c.kind == Cmd::ARC);
             if (d->sync_run && !synced && !joins && c.kind != Cmd::FEED && c.kind != Cmd::SET_POS &&
