@@ -2415,7 +2415,7 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
         memcpy(d->st.pos, d->pos, sizeof d->st.pos);
         if (cfg.simulate) sim_act_pos(d);
         memcpy(d->st.act_pos, d->act_pos, sizeof d->st.act_pos);
-        for (int i = 0; i < 8; i++) d->st.enabled[i] = true;
+        for (int i = 0; i < 8; i++) d->st.enabled[i] = cfg.simulate || d->connected;   // nothing is known enabled without the board
         d->st.connected = cfg.simulate || d->connected;
     }
     memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);

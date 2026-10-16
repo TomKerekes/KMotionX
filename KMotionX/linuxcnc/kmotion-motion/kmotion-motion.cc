@@ -1094,7 +1094,10 @@ static void update_pins()
     hal_set_bool(pins->coord_mode, GET_MOTION_COORD_FLAG());
     hal_set_bool(pins->teleop_mode, GET_MOTION_TELEOP_FLAG());
     {
-        bool all = km && km->is_board();
+        // every coordinate-system axis enabled on a board that is connected: with no board
+        // (none found, other firmware) nothing is known to be enabled, and the autostart must
+        // leave the machine in E-stop for the operator
+        bool all = km && km->is_board() && m.ks.connected;
         for (int i = 0; all && i < 8; i++) all = m.ks.enabled[i];
         hal_set_bool(pins->all_enabled, all);
         hal_set_ui32(pins->homed_mask, homed_mask | still_homed);   // still_homed is consumed as joints home from it
