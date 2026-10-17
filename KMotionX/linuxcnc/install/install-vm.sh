@@ -87,6 +87,12 @@ if [ ! -f /etc/udev/rules.d/10.kflop.rules ]; then
     run sudo udevadm control --reload-rules
     run sudo udevadm trigger
 else note "KFLOP udev rule already installed"; fi
+if [ ! -f /etc/udev/rules.d/11.joystick.rules ]; then
+    # a game pad readable by the logged-in user, for the configs' gamepad.hal
+    run sudo cp "$KMOTIONX_DIR/KMotionX/usb/etc/udev/rules.d/11.joystick.rules" /etc/udev/rules.d/
+    run sudo udevadm control --reload-rules
+    run sudo udevadm trigger
+else note "joystick udev rule already installed"; fi
 for g in plugdev dialout vboxsf; do
     if getent group $g > /dev/null && ! id -nG | grep -qw $g; then run sudo usermod -aG $g "$USER"; GROUPS_CHANGED=1; fi
 done

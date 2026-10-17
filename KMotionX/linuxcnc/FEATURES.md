@@ -56,6 +56,7 @@ What LinuxCNC can do with `kmotion-motion` in place of its real-time motion modu
 
 - **GUIs**: gmoccapy (the configurations; two small patches for the enabled-on-exit session and the start-up state of its buttons and DROs) and AXIS (no patch); any LinuxCNC GUI should work, as the task-motion protocol is unchanged.
 - **The KMotion panel** on gmoccapy's main screen (gladevcp, `panels/`): Back / Forward in feed hold, Measure, Geo reload, Continue (run again from the line after a halt, as KMotionCNC's Go).
+- **A USB game pad for jogging** (`configs/kmotion-3link/gamepad.hal`, the ini's `[GAMEPAD]` section): LinuxCNC's hal_input and halui, as KMotionCNC's joystick jog - two sticks for X, Y and Z, proportional, a dead-man button, slow and fast speeds; with the udev rule `usb/etc/udev/rules.d/11.joystick.rules`.
 - **HAL pins** of LinuxCNC's motion that GUIs use (`motion.*`, `joint.N.*`, `axis.L.*`, `spindle.N.*`), plus `kmotion.*` (the panel's, the spindle's measured speed and at-speed, the board bits, `all-enabled`, `homed-mask`).
 - **Simulate mode** (`[KMOTION] MODE = simulate`): the same planner without a board, the plan replayed in time - LinuxCNC shows the controller's motion.
 

@@ -1,0 +1,4 @@
+# A joystick or game pad readable by the logged-in user, for LinuxCNC's hal_input (the
+# kmotion configs' gamepad.hal). The kernel's joystick nodes are world-readable already;
+# hal_input reads the event node, which is root:input by default.
+SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="1", MODE="0660", GROUP="input", TAG+="uaccess"

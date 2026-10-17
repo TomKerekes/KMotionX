@@ -98,6 +98,18 @@ installation from scratch, with its scripts.
     measurement goes M0, Halt, jog, Measure, Continue - the program runs again from the
     line after the one it stopped on (run-from-line without the dialog), from wherever the
     pen stands; the panel watches the stop line while the program runs.
+  - **A USB game pad for jogging** (`configs/kmotion-3link/gamepad.hal`, a second
+    `POSTGUI_HALFILE`, the pad in the ini's `[GAMEPAD]` section): KMotionCNC's joystick jog
+    through LinuxCNC's own pieces - `hal_input` reads the pad, `halui`'s analog jog pins turn
+    the sticks into proportional jogs of the CAD axes (`halui.axis.L.analog` x
+    `halui.axis.jog-speed`, a dead band at the centre); a `scale` per axis for sign and gain,
+    `mux2`s for the dead-man button (nothing moves unless it is held) and the slow/fast
+    speed, in a thread the file creates (the kmotion configs have no realtime thread
+    otherwise). The pad's axis and button names are hal_input's (`halcmd show pin input`),
+    its name from /proc/bus/input/devices; the event device is made readable by the udev
+    rule `usb/etc/udev/rules.d/11.joystick.rules`. In the VM the pad needs a USB filter or
+    Devices > USB, like the KFLOP. The jog is LinuxCNC's: machine on, manual mode, world
+    mode through the kinematics; a stick's velocity change restarts a running world jog.
   - **Rigid tapping** (G33.1, board mode): the planner's move from the start through the
     bottom, and on by `[KMOTION] TAP_OVERSHOOT_REVS` revolutions for the spindle's
     deceleration, at pitch x spindle speed, launched in the board's spindle-sync mode
