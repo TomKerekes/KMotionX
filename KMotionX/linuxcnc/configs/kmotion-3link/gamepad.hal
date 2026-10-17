@@ -8,7 +8,7 @@
 #
 # The pad's axis and button names are hal_input's: once the pad is plugged in,
 #   halcmd show pin input          (with LinuxCNC running)
-# lists them (abs-x, abs-y, abs-rx, abs-ry, abs-z, abs-rz, abs-hat0x, abs-hat0y;
+# lists them (abs-x-position, abs-y-position, abs-rx-..., abs-ry-..., abs-z-..., abs-rz-..., abs-hat0x-...;
 # btn-a, btn-b, btn-x, btn-y, btn-tl, btn-tr, btn-start, btn-select ...), and
 #   cat /proc/bus/input/devices    (the N: Name= line) gives the name for [GAMEPAD] NAME.
 # The user must be allowed to read the pad's /dev/input/event device: the udev rule
@@ -57,9 +57,11 @@ addf mux2.3 pad-thread
 setp scale.0.gain [GAMEPAD]X_GAIN
 setp scale.1.gain [GAMEPAD]Y_GAIN
 setp scale.2.gain [GAMEPAD]Z_GAIN
-net pad-x-raw input.0.[GAMEPAD]X_AXIS-position => scale.0.in
-net pad-y-raw input.0.[GAMEPAD]Y_AXIS-position => scale.1.in
-net pad-z-raw input.0.[GAMEPAD]Z_AXIS-position => scale.2.in
+# (an ini value stands for the rest of a word: halcmd takes everything up to the next
+# space as the key's name, so the keys hold the whole pin suffix, abs-x-position)
+net pad-x-raw input.0.[GAMEPAD]X_AXIS => scale.0.in
+net pad-y-raw input.0.[GAMEPAD]Y_AXIS => scale.1.in
+net pad-z-raw input.0.[GAMEPAD]Z_AXIS => scale.2.in
 
 # armed: the stick has been inside the centre band at least once (comp: in1 > in0, with
 # in0 = |stick| and in1 = the band); the flipflop keeps it
