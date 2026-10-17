@@ -43,7 +43,7 @@ PACKAGES="git build-essential autoconf automake libtool pkg-config dh-python des
 intltool bwidget libboost-python-dev libepoxy-dev libgl-dev libglu1-mesa-dev libgtk-3-dev
 libcap-dev libmodbus-dev libgpiod-dev libeditreadline-dev libtirpc-dev libudev-dev
 libusb-1.0-0-dev libxmu-dev libfmt-dev netcat-openbsd procps psmisc python3 python3-dev
-python3-pybind11 python3-tk python3-xlib python3-opengl python3-numpy python3-configobj
+python3-pybind11 python3-tk python3-xlib python3-opengl python3-numpy python3-matplotlib python3-configobj
 python3-cairo python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gtksource-4 python3-pyqt5
 python3-pyqt5.qsci python3-pyqt5.qtsvg python3-pyqt5.qtopengl python3-dbus python3-qtpy
 python3-zmq tcl tcl8.6-dev tclx tk8.6-dev yapps2 libftdi1-dev python3-pyside6.qtwidgets

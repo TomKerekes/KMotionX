@@ -36,7 +36,7 @@ In the VM, in a terminal:
 
 (`curl` is on a fresh Debian; or copy the file in through the shared folder.) It asks for your password at its `sudo` steps and does, in order:
 
-1. Turns on the `deb-src` sources (LinuxCNC's build dependencies come from `apt build-dep`) and installs the packages (LinuxCNC's, `libftdi1-dev` for KMotionX, PySide6 for the KMotion tool, the kernel headers for the Guest Additions).
+1. Turns on the `deb-src` sources (LinuxCNC's build dependencies come from `apt build-dep`) and installs the packages (LinuxCNC's, `libftdi1-dev` for KMotionX, PySide6 for the KMotion tool, matplotlib for the MotionLogPlotter, the kernel headers for the Guest Additions).
 2. Clones KMotionX (`TomKerekes/KMotionX`, `master`) to `~/KMotionX`, `./configure`, `make` (plain, never `-j`), `sudo make install` (the libraries to `/usr/local/lib/kmx`, KMotionServer, tcc67 and the firmware images to `~/.kmotionx`), `make` once more as yourself (the install leaves `bin/` root-owned), `chown` of `~/.kmotionx`, the KFLOP udev rule, and adds you to `plugdev`, `dialout` and `vboxsf`.
 3. Clones LinuxCNC to `~/linuxcnc-dev`, checks out the pinned commit `514be4f657`, applies the patches, `apt build-dep`, `./autogen.sh && ./configure --with-realtime=uspace --disable-build-documentation`, `make -j$(nproc)`. No `make setuid`: not needed.
 4. Builds `kmotion-motion` and runs its tests (`make test`: the planner in simulate mode, every check prints ok or FAIL).
