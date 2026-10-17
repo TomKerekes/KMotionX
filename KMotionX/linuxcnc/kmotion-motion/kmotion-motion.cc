@@ -246,16 +246,13 @@ struct Model {
     double jog_min[NAXES], jog_max[NAXES];
     double axis_acc[NAXES];     // the axes' acceleration limits (SET_AXIS_ACC_LIMIT): world jogs
     double axis_vel[NAXES];     // ... and their velocity limits (SET_AXIS_VEL_LIMIT)
-    // a world jog under a kinematics, composed (see world_jog_request): the axes' requested
-    // velocities, the direction and planned speed of the move that runs, a move waiting for
-    // the board to come to rest, and whether the feed override is the jog's
-    double wj_vel[NAXES], wj_dir[NAXES], wj_plan_speed;
-    bool wj_pending, wj_fro_set;
+    // a world jog under a kinematics (see world_jog_request): the axes' requested velocities
+    // (halui's analog jogs, the GUI's buttons), composed and streamed by the backend
+    double wj_vel[NAXES];
     double act[NAXES];          // joint_kins: the joints (the actuators) as last known
-    bool world_jog;             // board, joint_kins: a world jog runs as a planner move, until its release
-    // the board's world jog cut where a joint reaches its soft limit (kmotion-joglimit.h): the
-    // joint (-1: not cut) and which limit, the planner move's serial (line()), and its log
-    int wj_limit_joint, wj_limit_dir, wj_line;
+    bool world_jog;             // board, joint_kins: some axis asks to move (the backend streams until the release)
+    int wj_serial_seen;         // the backend's world_jog_serial as last reported here
+    int wj_refusal_end, wj_refusal_joint, wj_refusal_dir;   // the refusal last reported (KM_WJ_*): the same one is not repeated until the release
     unsigned wj_status_seen;    // the status read last logged for it
     int wj_logged;              // status reads logged since it started
     double joint_home[EMCMOT_MAX_JOINTS];
@@ -305,7 +302,7 @@ static void model_init()
         m.jog_max[i] = 1e9;
         m.axis_acc[i] = 0;
         m.axis_vel[i] = 0;
-        m.wj_vel[i] = m.wj_dir[i] = 0;
+        m.wj_vel[i] = 0;
         m.act[i] = 0;
     }
     for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) { m.joint_home[j] = 0; m.hp[j] = Model::HomingParams(); }
@@ -316,11 +313,10 @@ static void model_init()
     m.spindle_pitch = 0;
     m.tap_seen = 0;
     m.tap_dir0 = 0;
-    m.wj_limit_joint = -1;
-    m.wj_limit_dir = 0;
-    m.wj_line = 0;
-    m.wj_plan_speed = 0;
-    m.wj_pending = m.wj_fro_set = false;
+    m.wj_serial_seen = 0;
+    m.wj_refusal_end = 0;
+    m.wj_refusal_joint = -1;
+    m.wj_refusal_dir = 0;
     m.wj_status_seen = 0;
     m.wj_logged = 0;
     memset(&m.ks, 0, sizeof m.ks);
@@ -338,18 +334,14 @@ static bool any_jog_running()
 }
 
 static void world_jog_request(int axis, double vel);
-static void world_jog_start_vector();
-static void world_jog_abort_move();
-static void world_jog_restore_override();
+static void world_jog_send();
 
-// a world jog on the board runs as a planner move: its release, and a mode change, stop it
-// like an abort. This is the full end: the requested velocities forgotten too
+// a world jog on the board streams until its release; a mode change or an abort releases it
+// too. This is the full end: the requested velocities forgotten
 static void end_world_jog()
 {
     for (int i = 0; i < NAXES; i++) m.wj_vel[i] = 0;
-    m.wj_pending = false;
-    world_jog_abort_move();
-    world_jog_restore_override();
+    if (m.world_jog) world_jog_send();
 }
 
 static void stop_jogs(int which)       // -1: all
@@ -539,10 +531,10 @@ static void log_world_jog_status()
     if (!km || !km->is_board() || !m.world_jog || m.wj_logged >= 25 || m.ks.status_count == m.wj_status_seen) return;
     m.wj_status_seen = m.ks.status_count;
     m.wj_logged++;
-    log_print("  world jog status %u: X%.5f Y%.5f Z%.5f; joints cmd %s fb %s; running %d lines_begun %u/%d; "
+    log_print("  world jog status %u: X%.5f Y%.5f Z%.5f; joints cmd %s fb %s; running %d streaming %d; "
               "enabled %d%d%d done 0x%x jog_busy 0x%x\n",
               m.ks.status_count, m.ks.pos[0], m.ks.pos[1], m.ks.pos[2], joints_text(m.ks.act_pos).c_str(),
-              joints_text(m.ks.act_fb).c_str(), (int) m.ks.running, m.ks.lines_begun, m.wj_line,
+              joints_text(m.ks.act_fb).c_str(), (int) m.ks.running, (int) m.ks.world_jog,
               (int) m.ks.enabled[0], (int) m.ks.enabled[1], (int) m.ks.enabled[2], m.ks.axis_done, m.ks.jog_busy);
 }
 
@@ -723,14 +715,29 @@ static void model_step(double dt)
         Jog &j = m.jog[i];
         if (!j.active && j.limit_joint >= 0) { report_joint_limit(j.limit_joint, j.limit_dir, "stopped"); j.limit_joint = -1; }
     }
-    // a composed world jog waiting for the board to come to rest after the previous one's stop
-    if (km && m.wj_pending && !m.ks.running && GET_MOTION_ENABLE_FLAG() && GET_MOTION_TELEOP_FLAG()) world_jog_start_vector();
-    if (km && m.world_jog && m.wj_limit_joint >= 0 && (int) m.ks.lines_begun >= m.wj_line && !m.ks.running) {
-        log_print("world jog arrived at joint %d's limit: X%.5f Y%.5f Z%.5f, joints %s\n", m.wj_limit_joint,
-                  m.ks.pos[0], m.ks.pos[1], m.ks.pos[2], joints_text(m.ks.act_pos).c_str());
-        report_joint_limit(m.wj_limit_joint, m.wj_limit_dir, "stopped");
-        m.wj_limit_joint = -1;
+    // how a world jog on the board ended (KmBackend::world_jog), reported once. A stick held
+    // into a limit changes its vector all the time and every try is refused: the same refusal
+    // is not repeated until the sticks are released
+    if (km && m.ks.world_jog_serial != m.wj_serial_seen) {
+        m.wj_serial_seen = m.ks.world_jog_serial;
+        int e = m.ks.world_jog_end, j = m.ks.world_jog_joint, dir = m.ks.world_jog_dir;
+        bool same = e == m.wj_refusal_end && j == m.wj_refusal_joint && dir == m.wj_refusal_dir;
+        log_print("world jog ended: %d (joint %d dir %d) at X%.5f Y%.5f Z%.5f, joints %s\n", e, j, dir,
+                  m.pos[0], m.pos[1], m.pos[2], joints_text(m.ks.act_pos).c_str());
+        switch (e) {
+        case KM_WJ_JOINT_LIMIT: report_joint_limit(j, dir, "stopped"); break;
+        case KM_WJ_REFUSED_JOINT: if (!same) report_joint_limit(j, dir, "refused"); break;
+        case KM_WJ_REFUSED_AXIS: if (!same) report_error("jog refused: at the axis limit"); break;
+        case KM_WJ_REACH: if (!same) report_error("jog refused: the kinematics' reach ends here"); break;
+        default: break;
+        }
+        if (e == KM_WJ_REFUSED_JOINT || e == KM_WJ_REFUSED_AXIS || e == KM_WJ_REACH) {
+            m.wj_refusal_end = e;
+            m.wj_refusal_joint = j;
+            m.wj_refusal_dir = dir;
+        }
     }
+    if (!m.world_jog) m.wj_refusal_end = 0;
     if (km && stepped) km->set_position(m.pos);   // the planner continues from here (the jog's last step too)
 }
 
@@ -1189,125 +1196,50 @@ static void queue_segment(Segment &s)
     m.queue.push_back(s);
 }
 
-// ---- a world jog under a kinematics, composed --------------------------------------------
+// ---- a world jog under a kinematics -------------------------------------------------------
 // halui's analog jogs (a game pad) and the GUI's buttons each command one axis; motmod
-// composes them into one velocity vector per cycle. Here a world jog is a planner move, so
-// the requested axis velocities are composed into one direction and one move along it,
-// toward the axis limits (cut where a joint would reach its limit), planned at the fastest
-// speed the axes allow in that direction and run at the requested speed through the feed
-// override: a stick that changes its deflection changes the override, no restart. A new
-// direction (an axis joining or leaving) restarts the move: the running one is stopped like
-// an abort and the new one starts when the board is at rest (wj_pending, the cycle hook).
-// Before, a request that came while the previous jog ran or stopped was dropped: a
-// diagonal went orthogonal, and a stick had to be released and applied again
-static void world_jog_abort_move()
+// composes them into one velocity vector every cycle. Here the backend does: the axes'
+// requested velocities go to it as they change, with the limits, and it streams coordinated
+// motion along them on the board (KMotionCNC's coordinated jog, KmBackend::world_jog): a
+// diagonal is a diagonal, a stick that moves bends the path, the release stops on the path,
+// and the board stops itself where an axis or a joint reaches its limit. How each jog ended
+// comes back through the state (world_jog_serial) and is reported from the cycle hook
+static void world_jog_send()
 {
-    if (!m.world_jog) return;
-    m.world_jog = false;
-    m.wj_limit_joint = -1;
-    if (km) km->abort();
-}
-
-static void world_jog_restore_override()
-{
-    if (!m.wj_fro_set) return;
-    m.wj_fro_set = false;
-    if (km) km->set_feed_override(net_feed_scale(), emcmotStatus->rapid_scale);
-}
-
-static void world_jog_override(double speed)
-{
-    double f = m.wj_plan_speed > 0 ? speed / m.wj_plan_speed : 1.0;
-    if (f > 1) f = 1;
-    if (f < 0.01) f = 0.01;
-    m.wj_fro_set = true;
-    km->set_feed_override(f, emcmotStatus->rapid_scale);
-}
-
-static double world_jog_speed(double v[NAXES])
-{
-    double s = 0;
-    for (int i = 0; i < NAXES; i++) { v[i] = i < 8 ? m.wj_vel[i] : 0; s += v[i] * v[i]; }
-    return sqrt(s);
-}
-
-static void world_jog_start_vector()
-{
-    m.wj_pending = false;
-    double v[NAXES];
-    // an axis already at its limit in its direction drops out (motmod stops that axis and
-    // keeps the others); the end lies where the first axis reaches its limit
-    double T = 1e18;
-    for (int i = 0; i < 8; i++) {
-        if (fabs(m.wj_vel[i]) < 1e-9) continue;
-        double lim = m.wj_vel[i] > 0 ? m.jog_max[i] : m.jog_min[i];
-        if (fabs(lim) > 1e6) { report_error("world jogs need [AXIS_%c] MIN_LIMIT and MAX_LIMIT", "XYZABCUVW"[i]); m.wj_vel[i] = 0; continue; }
-        double t = (lim - m.pos[i]) / m.wj_vel[i];       // the time to the limit at the requested speed
-        if (t <= 1e-9) { m.wj_vel[i] = 0; continue; }
-        if (t < T) T = t;
+    KmWorldJog req{};
+    bool any = false;
+    for (int i = 0; i < NAXES; i++) {
+        req.vel[i] = i < 8 ? m.wj_vel[i] : 0;
+        if (req.vel[i] != 0) any = true;
+        req.axis_min[i] = m.jog_min[i];
+        req.axis_max[i] = m.jog_max[i];
     }
-    double speed = world_jog_speed(v);
-    if (speed < 1e-9) { report_error("jog refused: at the axis limit"); return; }
-    double end[NAXES];
-    for (int i = 0; i < NAXES; i++) end[i] = m.pos[i] + v[i] * T;
-    JogLimit cut = world_jog_cut(m.pos, end);
-    if (cut.s < 1) for (int i = 0; i < NAXES; i++) end[i] = m.pos[i] + cut.s * (end[i] - m.pos[i]);
-    double len = 0;
-    for (int i = 0; i < NAXES; i++) len += (end[i] - m.pos[i]) * (end[i] - m.pos[i]);
-    // planned at the fastest speed the axes allow along the direction, run at the requested
-    // speed through the override
-    double vplan = 1e18, acc = 1e18;
-    for (int i = 0; i < 8; i++) {
-        if (fabs(v[i]) < 1e-9) continue;
-        m.wj_dir[i] = v[i] / speed;
-        if (m.axis_vel[i] > 0 && m.axis_vel[i] / fabs(m.wj_dir[i]) < vplan) vplan = m.axis_vel[i] / fabs(m.wj_dir[i]);
-        if (m.axis_acc[i] > 0 && m.axis_acc[i] < acc) acc = m.axis_acc[i];
+    for (int j = 0; j < 8; j++) {
+        req.joint_min[j] = joints[j].min_pos_limit;
+        req.joint_max[j] = joints[j].max_pos_limit;
+        if (j < num_joints && GET_JOINT_ACTIVE_FLAG(&joints[j])) req.joints_active |= 1u << j;
     }
-    for (int i = 0; i < NAXES; i++) if (i >= 8 || fabs(v[i]) < 1e-9) m.wj_dir[i] = 0;
-    if (vplan > 1e17 || vplan < speed) vplan = speed;
-    if (acc > 1e17) acc = emcmotStatus->acc;
-    log_print("WORLD_JOG from X%.5f Y%.5f Z%.5f along (%.3f %.3f %.3f) at %.4g (planned %.4g): %s end X%.5f Y%.5f Z%.5f; "
-              "joints cmd %s; running %d status %u\n", m.pos[0], m.pos[1], m.pos[2], m.wj_dir[0], m.wj_dir[1], m.wj_dir[2],
-              speed, vplan, cut.joint >= 0 ? "cut at a joint limit," : cut.reach ? "not cut," : "cut at the reach,",
-              end[0], end[1], end[2], joints_text(m.ks.act_pos).c_str(), (int) m.ks.running, m.ks.status_count);
-    if (len < 1e-18) {
-        if (cut.joint >= 0) report_joint_limit(cut.joint, cut.dir, "refused");
-        else if (!cut.reach) report_error("jog refused: the kinematics' reach ends here");
-        return;
+    if (any && !m.world_jog) {
+        m.wj_status_seen = m.ks.status_count;
+        m.wj_logged = 0;
+        log_print("WORLD_JOG from X%.5f Y%.5f Z%.5f, velocities %.4g %.4g %.4g; joints cmd %s fb %s; running %d status %u\n",
+                  m.pos[0], m.pos[1], m.pos[2], req.vel[0], req.vel[1], req.vel[2], joints_text(m.ks.act_pos).c_str(),
+                  joints_text(m.ks.act_fb).c_str(), (int) m.ks.running, m.ks.status_count);
     }
-    m.world_jog = true;
-    m.wj_limit_joint = cut.joint;
-    m.wj_limit_dir = cut.dir;
-    m.wj_plan_speed = vplan;
-    m.wj_line = km->line(end, vplan, acc, false, 0);
-    m.wj_status_seen = m.ks.status_count;
-    m.wj_logged = 0;
-    world_jog_override(speed);
+    if (!any && m.world_jog) log_print("WORLD_JOG released at X%.5f Y%.5f Z%.5f\n", m.pos[0], m.pos[1], m.pos[2]);
+    m.world_jog = any;
+    km->world_jog(req);
 }
 
 static void world_jog_request(int axis, double vel)
 {
-    if (axis < 0 || axis >= 8) return;
+    if (axis < 0 || axis >= 8 || !km) return;
+    if (vel != 0 && (fabs(m.jog_max[axis]) > 1e6 || fabs(m.jog_min[axis]) > 1e6)) {
+        report_error("world jogs need [AXIS_%c] MIN_LIMIT and MAX_LIMIT", "XYZABCUVW"[axis]);
+        vel = 0;
+    }
     m.wj_vel[axis] = vel;
-    double v[NAXES];
-    double speed = world_jog_speed(v);
-    if (speed < 1e-9) {                 // every axis released
-        m.wj_pending = false;
-        world_jog_abort_move();
-        world_jog_restore_override();
-        return;
-    }
-    if (m.world_jog && !m.wj_pending) {
-        // the same direction, another speed: the override, the move goes on
-        double dot = 0;
-        for (int i = 0; i < 8; i++) dot += (v[i] / speed) * m.wj_dir[i];
-        if (dot > 0.996 && speed <= m.wj_plan_speed + 1e-9) { world_jog_override(speed); return; }
-    }
-    // a new direction: the running move is stopped, the new one starts when the board is at
-    // rest (the cycle hook); something else running (a program) refuses as before
-    if (m.world_jog) { world_jog_abort_move(); m.wj_pending = true; return; }
-    if (m.ks.running) { if (m.wj_pending) return; m.wj_pending = true; return; }
-    world_jog_start_vector();
+    world_jog_send();
 }
 
 static void start_jog(int index, bool to_target, double target, double vel)
@@ -1362,9 +1294,8 @@ static void start_jog(int index, bool to_target, double target, double vel)
     }
     if (km && km->is_board()) {
         if (joint_kins && teleop) {
-            // a world jog with kinematics moves every actuator: a planner move toward the
-            // target (a continuous jog: the axis's limit), stopped at the jog's release
-            // (JOG_ABORT) the way an abort stops a move
+            // an incremental world jog with kinematics moves every actuator: a planner move to
+            // the target (the continuous one is streamed, above)
             if (index >= 8) return;
             double t = to_target ? target : (vel > 0 ? m.jog_max[index] : m.jog_min[index]);
             if (t > m.jog_max[index]) t = m.jog_max[index];
@@ -1389,12 +1320,9 @@ static void start_jog(int index, bool to_target, double target, double vel)
                 else if (!cut.reach) report_error("jog refused: the kinematics' reach ends here");
                 return;
             }
-            m.world_jog = true;
-            m.wj_limit_joint = cut.joint;
-            m.wj_limit_dir = cut.dir;
-            m.wj_line = km->line(end, fabs(vel), acc, false, 0);
-            m.wj_status_seen = m.ks.status_count;
-            m.wj_logged = 0;
+            // shortened to where a joint reaches its limit: said now (the board stops there itself)
+            if (cut.joint >= 0) report_joint_limit(cut.joint, cut.dir, "shortened to end there");
+            km->line(end, fabs(vel), acc, false, 0);
             return;
         }
         // the board jogs the actuator (the joint) itself. A continuous jog runs to the joint's

@@ -183,6 +183,18 @@ struct KmHomeRequest {
     KmHomeJoint joint[8];
 };
 
+// a world jog under a kinematics (KmBackend::world_jog): the axes' velocities and the limits
+// the stream must stop at
+struct KmWorldJog {
+    double vel[9];                // x y z a b c u v w, units/s (all 0: release)
+    double axis_min[9], axis_max[9];   // [AXIS_n] MIN/MAX_LIMIT: an axis is not jogged past them
+    double joint_min[8], joint_max[8]; // [JOINT_n] MIN/MAX_LIMIT: the jog ends where an active joint reaches one heading out
+    unsigned joints_active;       // bit = joint whose limits count
+};
+// how a world jog ended (KmState.world_jog_end)
+enum { KM_WJ_RELEASED = 0, KM_WJ_AXIS_LIMIT = 1, KM_WJ_JOINT_LIMIT = 2, KM_WJ_REFUSED_AXIS = 3, KM_WJ_REFUSED_JOINT = 4,
+       KM_WJ_REACH = 5, KM_WJ_STOPPED = 6, KM_WJ_FAILED = -1, KM_WJ_ABORTED = -2 };
+
 struct KmState {
     double pos[9];                // x y z a b c u v w
     double act_pos[8];            // the actuators' positions in their units (the joints'; the axes' without a KINEMATICS)
@@ -216,6 +228,10 @@ struct KmState {
     unsigned jog_busy;            // board: bit per axis, a jog the board has not finished yet
     bool tapping;                 // board: a rigid tap is in progress (the program on its thread, the move in spindle sync)
     bool threading;         // a synchronized run (G33 lines) is being collected or runs on the board
+    bool world_jog;               // board: a world jog streams (KmBackend::world_jog), until its stop is confirmed
+    int world_jog_serial;         // counts ended world jogs; the fields below are the last one's
+    int world_jog_end;            // KM_WJ_*: released, at a limit (joint, dir say which), refused there, stopped from outside, failed
+    int world_jog_joint, world_jog_dir;
     int tap_serial;               // counts finished rigid taps; tap_result is the last one's
     int tap_result;               // 0 done, 1 failed (message posted), 2 aborted
     double act_fb[8];             // board: the actuators' feedback (the channels' Position), in their units
@@ -281,6 +297,11 @@ public:
     void probe(const double end[9], double vel, double acc, int id, bool when_clears);
     void machine_on(bool on);                    // enable/disable the axes
     void jog(int axis, double vel);              // continuous jog, units/s; 0 stops
+    // a world jog under a kinematics (board mode): the axes' velocities, as they stand, streamed
+    // to the board as coordinated motion through the planner (KMotionCNC's coordinated jog)
+    // until all are 0 or a limit in `req` is reached. Called again with every change; the
+    // stream bends along the new velocities. Its end comes through state() (world_jog_serial)
+    void world_jog(const KmWorldJog &req);
     // rigid tapping (G33.1): from where the axes stand to `bottom` at pitch units per
     // revolution, the spindle at rps (signed: negative CCW), the retract at retract_scale
     // times the speed (G33.1's I). The result comes through state() (tap_serial, tap_result)

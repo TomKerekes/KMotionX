@@ -38,6 +38,7 @@
 #include "Kinematics3Link.h"
 #include "Kinematics3Rod.h"
 #include "KinematicsScara.h"
+#include "kmotion-joglimit.h"
 #include "Kinematics2AxisRobot.h"
 #include "KinematicsGeppetto.h"
 #include "KinematicsGeppettoExtrude.h"
@@ -126,6 +127,13 @@ struct KmBackend::Impl {
     std::atomic<bool> stop{false};
     std::atomic<bool> paused{false};
     std::atomic<bool> aborting{false}; // abort() requested, the worker has not finished it yet
+    // the world jog stream (w_world_jog): the request as last given, read live by the pass
+    std::mutex wjmx;
+    KmWorldJog wj{};
+    bool wj_refused = false;           // the pass could not move along wj_refused_v (at a limit): not tried again until the velocities change
+    double wj_refused_v[9] = {};
+    std::atomic<bool> world_jogging{false};
+    int wj_serial = 0, wj_end = 0, wj_joint = -1, wj_dir = 0;   // the last pass's end (smx)
     std::atomic<int> stop_state{0};    // board: MAIN_STATUS.StopImmediateState from the last status poll
     std::atomic<unsigned> status_count{0};   // board: status polls so far
     double act_fb[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // poller: the channels' Position, in the actuators' units
@@ -1168,8 +1176,13 @@ static void publish(KmBackend::Impl *d)
     for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
     s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
-    s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting || d->tap_pending;
+    s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting || d->tap_pending || d->world_jogging;
     s.threading = d->sync_run;
+    s.world_jog = d->world_jogging;
+    s.world_jog_serial = d->wj_serial;
+    s.world_jog_end = d->wj_end;
+    s.world_jog_joint = d->wj_joint;
+    s.world_jog_dir = d->wj_dir;
     s.connect_serial = d->connect_serial;
     s.errors = d->errors;
     s.homing = d->homing;
@@ -1930,6 +1943,295 @@ static bool planner_idle(KmBackend::Impl *d)
     return true;
 }
 
+// ---- worker: the world jog stream ---------------------------------------------------------
+// KMotionCNC's coordinated jog (KMotionCNCDlg.cpp, CoordJogWorkerOnce) on this planner: the
+// axes' requested velocities (KmBackend::world_jog, read live) are streamed as short
+// coordinated moves, 0.1 s each, paced so that about `horizon` seconds of downloaded path
+// stay ahead of the board's execution, with a short lookahead so the stream launches at
+// once; a stick that moves changes the direction and the speed from one move to the next,
+// nothing stops. The release stops ON THE PATH by a feed-override ramp to 0 at the planned
+// stop rate (draining the buffer would run on to the end of what was streamed ahead); the
+// rest of the streamed path is abandoned. An axis or a joint limit (kmotion-joglimit.h,
+// checked on each move) cuts the move there and ends the stream with a flush: the planner
+// plans the deceleration to rest exactly at the limit. A pass that cannot move at all (at
+// the limit already) is refused, and not tried again until the velocities change
+static bool wj_velocities(KmBackend::Impl *d, KmWorldJog &req)   // the request now; true: some axis asks to move
+{
+    std::lock_guard<std::mutex> lk(d->wjmx);
+    req = d->wj;
+    for (int i = 0; i < 9; i++) if (req.vel[i] != 0) return true;
+    return false;
+}
+
+static bool wj_wanted(KmBackend::Impl *d)
+{
+    std::lock_guard<std::mutex> lk(d->wjmx);
+    bool any = false;
+    for (int i = 0; i < 9; i++) if (d->wj.vel[i] != 0) any = true;
+    if (!any) return false;
+    return !(d->wj_refused && memcmp(d->wj_refused_v, d->wj.vel, sizeof d->wj.vel) == 0);
+}
+
+static void wj_refuse(KmBackend::Impl *d, const KmWorldJog &req)
+{
+    std::lock_guard<std::mutex> lk(d->wjmx);
+    d->wj_refused = true;
+    memcpy(d->wj_refused_v, req.vel, sizeof d->wj_refused_v);
+}
+
+static void wj_finish(KmBackend::Impl *d, int end, int joint, int dir)
+{
+    std::lock_guard<std::mutex> lock(d->smx);
+    d->wj_serial++;
+    d->wj_end = end;
+    d->wj_joint = joint;
+    d->wj_dir = dir;
+}
+
+// an abort (the urgent hold is on its way to the board; w_abort finishes the stop), or a
+// Machine off queued behind the jog
+static bool wj_interrupted(KmBackend::Impl *d)
+{
+    if (d->aborting || d->cm->GetAbort()) return true;
+    std::lock_guard<std::mutex> lock(d->qmx);
+    for (const Cmd &x : d->q) if (x.kind == Cmd::ABORT || x.kind == Cmd::MACHINE_ON) return true;
+    return false;
+}
+
+// the release stop, verified (KMotionCNC's): the feed override ramped to 0 over the planned
+// stop time (no stop state raised), ExecTime frozen or negative, StopImmediate2 detaches the
+// buffer, and the board confirms it is not executing; retries fall back to a feed hold. Then
+// a stop state left standing is cleared (it would pin the hold indicator and freeze the next
+// buffer at time base 0). false: the board stopped answering
+static bool wj_stop(KmBackend::Impl *d, double stop_time)
+{
+    char reply[MAX_LINE + 1], cmd[64];
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (attempt == 0) {
+            snprintf(cmd, sizeof cmd, "SetFROwRateTemp 0 %.3f", stop_time);
+            if (d->km->WriteLine(cmd)) return false;
+        } else {
+            if (d->km->WriteLine("StopImmediate0")) return false;
+            for (double t0 = now_s(); now_s() - t0 < 5;) {
+                if (board_query(d, "GetStopState", reply)) return false;
+                if (!strcmp(reply, "3") || !strcmp(reply, "4") || !strcmp(reply, "0")) break;   // stopped, or nothing to stop
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+        double last = -1e9;
+        int same = 0;
+        for (int tries = 0; tries < 100; tries++) {        // the ramp: ExecTime frozen (two equal reads) or negative
+            if (board_query(d, "ExecTime", reply)) return false;
+            double e;
+            if (sscanf(reply, "%lf", &e) != 1 || e < 0) break;
+            if (fabs(e - last) < 1e-6) { if (++same >= 2) break; }
+            else { same = 0; last = e; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+        if (d->km->WriteLine("StopImmediate2")) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));   // an ExecBuf in flight lands
+        if (board_query(d, "ExecTime", reply)) return false;
+        double e2;
+        if (sscanf(reply, "%lf", &e2) == 1 && e2 < 0) break;      // confirmed: not executing
+    }
+    for (int settle = 0; settle < 6; settle++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(75));
+        if (board_query(d, "GetStopState", reply)) return false;
+        if (!strcmp(reply, "0")) break;
+        if (d->km->WriteLine("StopImmediate2")) return false;
+    }
+    return true;
+}
+
+static void w_world_jog(KmBackend::Impl *d)
+{
+    CCoordMotion *cm = d->cm;
+    MOTION_PARAMS *MP = cm->GetMotionParams();
+    char reply[MAX_LINE + 1];
+    KmWorldJog req;
+    if (!wj_velocities(d, req)) return;
+    const KmWorldJog first = req;
+
+    // at rest first (the previous pass's stop may still be landing)
+    bool rest = false;
+    for (double t0 = now_s(); now_s() - t0 < 3;) {
+        if (board_query(d, "CheckDoneXYZABC", reply)) { d->message("world jog: the board did not answer"); wj_refuse(d, first); wj_finish(d, KM_WJ_FAILED, -1, 0); return; }
+        if (strcmp(reply, "0") != 0) {
+            if (board_query(d, "CheckDoneBuf", reply)) { d->message("world jog: the board did not answer"); wj_refuse(d, first); wj_finish(d, KM_WJ_FAILED, -1, 0); return; }
+            if (strcmp(reply, "0") != 0) { rest = true; break; }
+        }
+        if (wj_interrupted(d) || !wj_velocities(d, req)) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!rest) { d->message("world jog: the board did not come to rest"); wj_refuse(d, first); wj_finish(d, KM_WJ_FAILED, -1, 0); return; }
+
+    // from where the board stands (the axes may have been moved behind the planner's back)
+    double p[9];
+    if (!read_board_position_to(d, p)) { d->message("world jog: the board's position could not be read"); wj_refuse(d, first); wj_finish(d, KM_WJ_FAILED, -1, 0); return; }
+    {
+        std::lock_guard<std::mutex> lk(d->wmx);
+        memcpy(d->pos, p, sizeof p);
+    }
+    set_cm_position(d, p);
+    double target[9];
+    memcpy(target, p, sizeof target);
+
+    // the joints at a CAD position, for the limit check (the kinematics; actuator units)
+    auto joints_at = [&](const double pos[9], double jp[8]) -> bool {
+        double acts[MAX_ACTUATORS];
+        if (cm->Kinematics->TransformCADtoActuators(pos[0], pos[1], pos[2], pos[3], pos[4], pos[5], pos[6], pos[7], acts)) return false;
+        for (int j = 0; j < 8; j++) jp[j] = d->scale[j] > 0 ? acts[j] / d->scale[j] : 0;
+        return true;
+    };
+
+    // the horizon rides through a step in the planner's emission margin (the end fade is a
+    // fixed arc length: its time jumps when the kinematics slow the actuator path); the
+    // lookahead caps the download wait and must stay above the horizon; the stream bound
+    // exceeds the planner's actual margin or nothing would ever be emitted
+    const double lookahead = 0.85, horizon = 0.75, dt = 0.10;
+    double stream_bound = std::max(1.5, cm->TP3ActualEmissionMargin() + horizon + 0.5);
+    const double save_lookahead = MP->TPLookahead;
+    MP->TPLookahead = lookahead;
+    cm->m_LookaheadOverride = true;
+    cm->ClearHalt();
+    cm->m_JogReleaseRequested = false;
+    cm->SetTPParams();
+    cm->SetPathMode(CANON_CONTINUOUS, -1.0);
+    const double stop_time = cm->TP3PlannedStopTime();
+    d->world_jogging = true;
+    {
+        char t[300];
+        snprintf(t, sizeof t, "world jog: stream from X%.5f Y%.5f Z%.5f, velocities %.4g %.4g %.4g; lookahead %.2f horizon %.2f stop %.3f s",
+                 p[0], p[1], p[2], req.vel[0], req.vel[1], req.vel[2], lookahead, horizon, stop_time);
+        d->trace(t);
+    }
+
+    double streamed = 0, t_start = now_s();
+    bool launched = false, ok = true, released = false, at_limit = false, interrupted = false, external_stop = false;
+    int end = KM_WJ_RELEASED, lim_joint = -1, lim_dir = 0;
+    for (;;) {
+        if (!wj_velocities(d, req)) { released = true; break; }
+        if (wj_interrupted(d)) { interrupted = true; ok = false; break; }
+        // the board's executed time (negative: not launched, ran dry, or stopped from outside)
+        double exec = 0;
+        if (board_query(d, "ExecTime", reply)) { ok = false; break; }
+        double e;
+        if (sscanf(reply, "%lf", &e) == 1) {
+            if (e >= 0) exec = e;
+            else if (launched) {
+                if (board_query(d, "GetStopState", reply)) { ok = false; break; }
+                if (strcmp(reply, "0") != 0) { external_stop = true; break; }   // a feed hold or halt from outside: the jog ends
+                cm->RearmCoordLaunch();   // ran dry: relaunched once more is downloaded
+                launched = false;
+            }
+        }
+        double sb = cm->TP3ActualEmissionMargin() + horizon + 0.5;
+        if (sb > stream_bound) stream_bound = sb;
+        double elapsed = now_s() - t_start, burst0 = now_s();
+        int guard = 0;
+        // pace on downloaded vs executed time (what the board can consume), bounded against
+        // wall time (the planner's margin ahead); the release is seen inside the burst too
+        while (cm->m_TotalDownloadedTime - exec < horizon && streamed - elapsed < stream_bound && guard++ < 12) {
+            if (!wj_velocities(d, req)) { released = true; break; }
+            if (now_s() - burst0 > 0.1) break;
+            BOOL pure_angle;
+            double F = cm->FeedRateDistance(req.vel[0], req.vel[1], req.vel[2], req.vel[3], req.vel[4], req.vel[5], req.vel[6], req.vel[7], &pure_angle);
+            if (F <= 1e-9 || F * dt < 2e-4) break;      // too slow to resolve: wait for more
+            double t[9];
+            bool clamped = false;
+            for (int i = 0; i < 9; i++) {
+                t[i] = target[i] + req.vel[i] * dt;
+                if (req.vel[i] == 0) continue;
+                if (t[i] > req.axis_max[i]) { t[i] = req.axis_max[i]; clamped = true; }
+                if (t[i] < req.axis_min[i]) { t[i] = req.axis_min[i]; clamped = true; }
+            }
+            JogLimit cut = jog_limit(target, t, joints_at, req.joint_min, req.joint_max, req.joints_active);
+            if (cut.s < 1) for (int i = 0; i < 9; i++) t[i] = target[i] + cut.s * (t[i] - target[i]);
+            double len = 0;
+            for (int i = 0; i < 9; i++) len += (t[i] - target[i]) * (t[i] - target[i]);
+            if (len < 1e-18) {
+                // nowhere to go this way: at the limit already
+                at_limit = true;
+                lim_joint = cut.joint;
+                lim_dir = cut.dir;
+                end = cut.joint >= 0 ? (streamed > 0 ? KM_WJ_JOINT_LIMIT : KM_WJ_REFUSED_JOINT)
+                    : !cut.reach ? KM_WJ_REACH : (streamed > 0 ? KM_WJ_AXIS_LIMIT : KM_WJ_REFUSED_AXIS);
+                break;
+            }
+            if (cm->StraightFeedAccelRapid(F, 1e99, false, true, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], 0, 0)) {
+                if (d->aborting || cm->GetAbort()) interrupted = true;
+                ok = false;
+                break;
+            }
+            memcpy(target, t, sizeof target);
+            streamed += dt;
+            if (cut.s < 1 || clamped) {
+                // this move ends at the limit: the stream ends with it
+                at_limit = true;
+                lim_joint = cut.joint;
+                lim_dir = cut.dir;
+                end = cut.joint >= 0 ? KM_WJ_JOINT_LIMIT : cut.reach ? KM_WJ_AXIS_LIMIT : KM_WJ_REACH;
+                break;
+            }
+            // launch once a real cushion is downloaded (the auto-launch waits for a lookahead
+            // of planned time; the first knot alone ran out before the next burst)
+            if (cm->m_TotalDownloadedTime > 0.15) {
+                if (cm->LaunchIfNotStarted()) { ok = false; break; }
+                launched = true;
+            }
+        }
+        if (!ok || released || at_limit) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    if (ok && at_limit && streamed > 0) {
+        // the path ends at the limit: the planner finishes it with the deceleration to rest
+        // there, the board runs it out (let go before arriving: stopped as a release)
+        if (cm->FlushSegments()) ok = false;
+        else for (double t0 = now_s();;) {
+            if (wj_interrupted(d)) { interrupted = true; ok = false; break; }
+            if (!wj_velocities(d, req)) { released = true; break; }
+            if (board_query(d, "CheckDoneBuf", reply)) { ok = false; break; }
+            if (strcmp(reply, "1") == 0) break;
+            if (strcmp(reply, "-1") == 0) { d->message("an axis is disabled: motion aborted"); ok = false; break; }
+            if (now_s() - t0 > 60) { d->message("world jog: the board did not arrive at the limit within 60 s"); ok = false; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (released) at_limit = false;
+    }
+    if (!interrupted && (released || external_stop || !ok) && (launched || streamed > 0)) {
+        if (!wj_stop(d, stop_time)) { d->message("world jog: the board did not answer the stop"); ok = false; }
+    }
+    if (external_stop && ok) end = KM_WJ_STOPPED;
+    if (!ok) end = interrupted ? KM_WJ_ABORTED : KM_WJ_FAILED;
+    d->world_jogging = false;
+
+    // the planner and the download bookkeeping reset (the rest of the streamed path is
+    // abandoned), the program's settings back, the position from the board
+    cm->AbandonCoordBuffer();
+    cm->RearmCoordLaunch();
+    MP->TPLookahead = save_lookahead;
+    cm->m_LookaheadOverride = false;
+    cm->SetTPParams();
+    cm->SetPathMode(d->path_term_cond == 2 ? CANON_CONTINUOUS : CANON_EXACT_STOP, d->path_tolerance);
+    if (!ok && !interrupted) {
+        fail(d, "world jog");            // the planner refused, or the board stopped answering: the full stop and reset
+    } else if (!interrupted) {
+        read_board_position(d);
+        set_cm_position(d, d->pos);
+        memcpy(d->cmd_end, d->pos, sizeof d->cmd_end);
+    }
+    if (end == KM_WJ_REFUSED_AXIS || end == KM_WJ_REFUSED_JOINT || end == KM_WJ_REACH) wj_refuse(d, first);
+    {
+        char t[300];
+        snprintf(t, sizeof t, "world jog: ended %d (joint %d dir %d) after %.2f s streamed, at X%.5f Y%.5f Z%.5f%s%s",
+                 end, lim_joint, lim_dir, streamed, d->pos[0], d->pos[1], d->pos[2], released ? ", released" : "",
+                 interrupted ? ", aborted" : "");
+        d->trace(t);
+    }
+    wj_finish(d, end, lim_joint, lim_dir);
+}
+
 static void worker_main(KmBackend::Impl *d)
 {
     d->last_tick = d->last_poll = now_s();
@@ -2023,6 +2325,8 @@ static void worker_main(KmBackend::Impl *d)
             case Cmd::JOG_TO: if (!d->cfg.simulate) w_jog_to(d, c); d->jog_written[c.axis]++; break;
             }
         }
+        // a world jog asked for, nothing else on the planner: the pass runs until the release
+        if (!d->cfg.simulate && d->connected && !d->aborting && wj_wanted(d) && planner_idle(d)) w_world_jog(d);
         double t = now_s();
         // keep the board (or the replay) fed between waypoints: the planner downloads its
         // finalized segments in bounded chunks when it gets to it, every 8th waypoint,
@@ -2563,6 +2867,17 @@ void KmBackend::jog(int axis, double vel)
     snprintf(cmd, sizeof cmd, "Jog%d=%.3f", ch, vel * d->scale[axis]);   // counts/s, the board's limits apply
     d->jog_issued[axis]++;
     d->send_urgent(cmd, axis);
+}
+
+void KmBackend::world_jog(const KmWorldJog &req)
+{
+    if (d->cfg.simulate) return;
+    {
+        std::lock_guard<std::mutex> lk(d->wjmx);
+        if (memcmp(req.vel, d->wj_refused_v, sizeof req.vel) != 0) d->wj_refused = false;
+        d->wj = req;
+    }
+    d->qcv.notify_one();
 }
 
 void KmBackend::jog_to(int axis, double target, double vel)
