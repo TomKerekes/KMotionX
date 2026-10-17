@@ -1,54 +1,122 @@
 #!/usr/bin/env python3
-"""The game pad for gamepad.hal: hal_input on the pad when it is there, else a stand-in
-component with the same pins at rest, so LinuxCNC starts without the pad (hal_input alone
-exits when no device matches and the HAL file, and the start, fail). The pad's name and
-the pins the HAL file uses come from the ini's [GAMEPAD] section (INI_FILE_NAME).
-Load it as   loadusr -Wn input gamepad-input   (both make a component named "input")."""
-import fnmatch, os, re, sys, time
+"""The game pad for gamepad.hal, as a HAL component named "input" with hal_input's pin names
+(input.0.abs-<axis>-position, input.0.btn-<name>) for the pins the ini's [GAMEPAD] section
+uses. Its own reader of the Linux input device, instead of hal_input, because:
+  - it takes the pad's current state when it opens the device (EVIOCGABS, EVIOCGKEY):
+    hal_input reported every stick at -1 until its first event, full deflection;
+  - the pad may come and go: with no pad the pins stand at rest and LinuxCNC starts all
+    the same; a pad plugged in later is taken within a second, one unplugged is let go.
+The device is found by name ([GAMEPAD] NAME: a shell pattern or a substring of the name
+in /proc/bus/input/devices). Positions are (counts - centre) / half-range, -1..1, as
+hal_input's defaults. Load it as   loadusr -Wn input gamepad-input
+GAMEPAD_COMPONENT=<name> renames the component (a test beside a running one), --debug
+prints the pins' values."""
+import array, fcntl, fnmatch, os, re, select, struct, sys, time
+import hal
 
-ini_path = os.environ.get("INI_FILE_NAME", "")
-keys = {}
-try:
-    sect = None
-    for line in open(ini_path):
-        line = line.strip()
-        if line.startswith("["):
-            sect = line.strip("[]").strip()
-        elif sect == "GAMEPAD" and "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            keys[k.strip()] = v.split("#")[0].strip()
-except Exception as e:
-    print("gamepad-input: cannot read the ini:", e, file=sys.stderr)
-name = keys.get("NAME", "")
+DEBUG = "--debug" in sys.argv
+ABS = {"x": 0, "y": 1, "z": 2, "rx": 3, "ry": 4, "rz": 5, "throttle": 6, "rudder": 7, "wheel": 8, "gas": 9,
+       "brake": 10, "hat0x": 16, "hat0y": 17, "hat1x": 18, "hat1y": 19}
+BTN = {"trigger": 0x120, "thumb": 0x121, "thumb2": 0x122, "top": 0x123, "top2": 0x124, "pinkie": 0x125,
+       "base": 0x126, "base2": 0x127, "base3": 0x128, "base4": 0x129, "base5": 0x12a, "base6": 0x12b,
+       "a": 0x130, "b": 0x131, "c": 0x132, "x": 0x133, "y": 0x134, "z": 0x135, "tl": 0x136, "tr": 0x137,
+       "tl2": 0x138, "tr2": 0x139, "select": 0x13a, "start": 0x13b, "mode": 0x13c, "thumbl": 0x13d,
+       "thumbr": 0x13e, "dpad-up": 0x220, "dpad-down": 0x221, "dpad-left": 0x222, "dpad-right": 0x223}
+EV_KEY, EV_ABS = 1, 3
+EVENT = struct.Struct("llHHi")
+def EVIOCGABS(code): return 0x80000000 | (24 << 16) | (ord('E') << 8) | (0x40 + code)
+EVIOCGKEY = 0x80000000 | ((0x300 // 8 + 1) << 16) | (ord('E') << 8) | 0x18   # 97-byte key bitmap
 
-def pad_present(pattern):
-    if not pattern:
-        return False
+def ini_section(path, section):
+    keys = {}; sect = None
     try:
-        text = open("/proc/bus/input/devices").read()
-    except Exception:
-        return False
+        for line in open(path):
+            line = line.strip()
+            if line.startswith("["): sect = line.strip("[]").strip()
+            elif sect == section and "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1); keys[k.strip()] = v.split("#")[0].strip()
+    except Exception as e:
+        print("gamepad-input: cannot read the ini:", e, file=sys.stderr)
+    return keys
+
+keys = ini_section(os.environ.get("INI_FILE_NAME", ""), "GAMEPAD")
+name = keys.get("NAME", "")
+# the pins the HAL file nets, from the ini: pin name -> (type, event code)
+pins = {}
+for key in ("X_AXIS", "Y_AXIS", "Z_AXIS"):
+    p = keys.get(key, "")
+    m = re.match(r"abs-([a-z0-9]+)-position$", p)
+    if p and m and m.group(1) in ABS: pins[p] = (hal.HAL_FLOAT, ABS[m.group(1)])
+    elif p: print("gamepad-input: %s = %s is not an abs-<axis>-position I know" % (key, p), file=sys.stderr)
+for key in ("ENABLE", "FAST"):
+    p = keys.get(key, "")
+    m = re.match(r"btn-([a-z0-9-]+)$", p)
+    if p and m and m.group(1) in BTN: pins[p] = (hal.HAL_BIT, BTN[m.group(1)])
+    elif p: print("gamepad-input: %s = %s is not a btn-<name> I know" % (key, p), file=sys.stderr)
+abs_pins = {code: p for p, (t, code) in pins.items() if t == hal.HAL_FLOAT}
+key_pins = {code: p for p, (t, code) in pins.items() if t == hal.HAL_BIT}
+
+h = hal.component(os.environ.get("GAMEPAD_COMPONENT", "input"))
+for p, (t, code) in pins.items(): h.newpin("0." + p, t, hal.HAL_OUT)
+h.newpin("0.present", hal.HAL_BIT, hal.HAL_OUT)      # a pad is open
+h.ready()
+
+def find_device(pattern):
+    if not pattern: return None
+    try: text = open("/proc/bus/input/devices").read()
+    except Exception: return None
     for block in text.split("\n\n"):
         m = re.search(r'^N: Name="(.*)"', block, re.M)
         if m and (fnmatch.fnmatch(m.group(1), pattern) or pattern in m.group(1)):
-            return True
-    return False
+            ev = re.search(r"^H: Handlers=.*?(event\d+)", block, re.M)
+            if ev: return "/dev/input/" + ev.group(1), m.group(1)
+    return None
 
-if pad_present(name):
-    os.execvp("hal_input", ["hal_input", "-KA", name])    # becomes hal_input: the component "input"
+def at_rest():
+    for p in abs_pins.values(): h["0." + p] = 0.0
+    for p in key_pins.values(): h["0." + p] = False
+    h["0.present"] = False
 
-# the stand-in: the pins gamepad.hal nets, at rest, so the file loads and nothing moves
-import hal
-h = hal.component("input")
-for key, typ in (("X_AXIS", hal.HAL_FLOAT), ("Y_AXIS", hal.HAL_FLOAT), ("Z_AXIS", hal.HAL_FLOAT),
-                 ("ENABLE", hal.HAL_BIT), ("FAST", hal.HAL_BIT)):
-    pin = keys.get(key, "")
-    if pin:
-        h.newpin("0." + pin, typ, hal.HAL_OUT)
-h.ready()
-print("gamepad-input: no input device matches [GAMEPAD] NAME = %r: the pad's pins stand in at rest" % name, file=sys.stderr)
+fd = None; scale = {}; last_search = 0.0
+at_rest()
 try:
     while True:
-        time.sleep(1)
+        if fd is None:
+            if time.time() - last_search >= 1.0:
+                last_search = time.time()
+                found = find_device(name)
+                if found:
+                    try:
+                        fd = os.open(found[0], os.O_RDONLY | os.O_NONBLOCK)
+                        for code, p in abs_pins.items():      # the stick as it stands, and its range
+                            b = array.array("i", [0] * 6); fcntl.ioctl(fd, EVIOCGABS(code), b, True)
+                            lo, hi = b[1], b[2]
+                            scale[code] = ((lo + hi) / 2.0, max((hi - lo) / 2.0, 1.0))
+                            h["0." + p] = (b[0] - scale[code][0]) / scale[code][1]
+                        kb = array.array("B", [0] * (0x300 // 8 + 1)); fcntl.ioctl(fd, EVIOCGKEY, kb, True)
+                        for code, p in key_pins.items(): h["0." + p] = bool(kb[code // 8] >> (code % 8) & 1)
+                        h["0.present"] = True
+                        print("gamepad-input: %s on %s" % (found[1], found[0]), file=sys.stderr)
+                    except OSError as e:
+                        print("gamepad-input: %s: %s" % (found[0], e), file=sys.stderr); fd = None
+            time.sleep(0.05)
+            continue
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if not r: continue
+        try:
+            data = os.read(fd, EVENT.size * 64)
+        except BlockingIOError:
+            continue
+        except OSError as e:                       # unplugged
+            print("gamepad-input: the pad is gone (%s): its pins at rest" % e, file=sys.stderr)
+            os.close(fd); fd = None; at_rest(); continue
+        for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
+            _, _, typ, code, value = EVENT.unpack_from(data, i)
+            if typ == EV_ABS and code in abs_pins:
+                c, half = scale[code]; h["0." + abs_pins[code]] = (value - c) / half
+            elif typ == EV_KEY and code in key_pins:
+                h["0." + key_pins[code]] = bool(value)
+        if DEBUG:
+            print(" ".join("%s=%s" % (p, round(h["0." + p], 3) if t == hal.HAL_FLOAT else h["0." + p]) for p, (t, _) in pins.items()), file=sys.stderr)
 except KeyboardInterrupt:
     pass

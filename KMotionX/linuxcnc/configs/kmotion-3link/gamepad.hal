@@ -1,5 +1,6 @@
-# A USB game pad for jogging, as KMotionCNC's joystick jog: LinuxCNC's hal_input reads the
-# pad, halui turns the sticks into jogs of the CAD axes (world mode: through the kinematics).
+# A USB game pad for jogging, as KMotionCNC's joystick jog: gamepad-input (panels/, our own
+# reader of the Linux input device, with hal_input's pin names) reads the pad, halui turns
+# the sticks into jogs of the CAD axes (world mode: through the kinematics).
 # Loaded as a second [DISPLAY] POSTGUI_HALFILE, after gmoccapy-postgui.hal; the pad is
 # described in the ini's [GAMEPAD] section (its name, which stick axis moves which machine
 # axis, the dead-man and the fast button, the speeds). Nothing moves unless the dead-man
@@ -14,14 +15,15 @@
 # The user must be allowed to read the pad's /dev/input/event device: the udev rule
 # usb/etc/udev/rules.d/11.joystick.rules (the install script puts it in place).
 #
-# A stick's position is unknown until the pad has sent its first report for it: the kernel
-# holds 0 counts, which hal_input maps to -1 (seen: all four sticks at -1 with the pad at
-# rest after a start), and the dead-man alone would release a full negative jog on every
-# axis. So each axis arms itself only once its stick has been seen inside the centre band
-# (the flipflop below); until then its mux stays at zero whatever the dead-man says.
+# gamepad-input reads the sticks' state when it opens the pad (hal_input did not: every
+# stick read -1, full deflection, until its first event, and the dead-man alone would have
+# released a full negative jog on every axis). As a second guard each axis arms itself only
+# once its stick has been seen inside the centre band (the flipflop below); until then its
+# mux stays at zero whatever the dead-man says.
 
-# gamepad-input (panels/) runs hal_input on the pad, or stands in with the same pins at
-# rest when no pad is attached - LinuxCNC starts either way
+# gamepad-input (panels/): the pad's pins, from the device when a pad is attached (taken
+# or let go at any time, its state read when it is opened), at rest when none is -
+# LinuxCNC starts either way
 loadusr -Wn input ../../panels/gamepad-input
 
 # the pad's logic runs in its own thread (the kmotion configs have no other)
