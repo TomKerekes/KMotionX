@@ -24,7 +24,7 @@
 # gamepad-input (panels/): the pad's pins, from the device when a pad is attached (taken
 # or let go at any time, its state read when it is opened), at rest when none is -
 # LinuxCNC starts either way
-loadusr -Wn input ../../panels/gamepad-input
+loadusr -Wn input ../../panels/gamepad-input --deadband [GAMEPAD]DEADBAND
 
 # the pad's logic runs in its own thread (the kmotion configs have no other)
 loadrt threads name1=pad-thread period1=20000000
@@ -96,11 +96,12 @@ net pad-jog-y mux2.1.out => halui.axis.y.analog
 net pad-jog-z mux2.2.out => halui.axis.z.analog
 
 # the speed the full stick gives, in machine units per minute: slow, or fast while the
-# fast button is held; the centre of the stick ignored within the dead band
+# fast button is held. The dead band is the reader's (above, a soft one: the stick's reading
+# rises from 0 at the band's edge); halui's own, a step, is left only to swallow the residue
 net pad-fast input.0.[GAMEPAD]FAST => mux2.3.sel
 setp mux2.3.in0 [GAMEPAD]SLOW_SPEED
 setp mux2.3.in1 [GAMEPAD]FAST_SPEED
 net pad-speed mux2.3.out => halui.axis.jog-speed
-setp halui.axis.jog-deadband [GAMEPAD]DEADBAND
+setp halui.axis.jog-deadband 0.01
 
 start

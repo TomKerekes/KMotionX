@@ -528,7 +528,7 @@ static void limit_switches();          // below, after the HAL pins it reads
 // (counted by status read, not by time), the commanded joints next to their feedback
 static void log_world_jog_status()
 {
-    if (!km || !km->is_board() || !m.world_jog || m.wj_logged >= 25 || m.ks.status_count == m.wj_status_seen) return;
+    if (!km || !km->is_board() || !m.world_jog || m.wj_logged >= 2000 || m.ks.status_count == m.wj_status_seen) return;
     m.wj_status_seen = m.ks.status_count;
     m.wj_logged++;
     log_print("  world jog status %u: X%.5f Y%.5f Z%.5f; joints cmd %s fb %s; running %d streaming %d; "

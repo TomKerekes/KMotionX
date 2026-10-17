@@ -15,6 +15,16 @@ import array, fcntl, fnmatch, os, re, select, struct, sys, time
 import hal
 
 DEBUG = "--debug" in sys.argv
+# --deadband D: a stick within D of its centre reads 0, and beyond it the reading rises from
+# 0 at the band's edge to 1 at full deflection (halui's own dead band is a step: the jog is
+# off within it and at the band's speed just outside, so a stick held near the edge toggled
+# a slow jog on and off)
+DEADBAND = float(sys.argv[sys.argv.index("--deadband") + 1]) if "--deadband" in sys.argv else 0.0
+def soft(v):
+    a = abs(v)
+    if a <= DEADBAND: return 0.0
+    r = (a - DEADBAND) / (1.0 - DEADBAND) if DEADBAND < 1.0 else 0.0
+    return min(r, 1.0) if v > 0 else -min(r, 1.0)
 ABS = {"x": 0, "y": 1, "z": 2, "rx": 3, "ry": 4, "rz": 5, "throttle": 6, "rudder": 7, "wheel": 8, "gas": 9,
        "brake": 10, "hat0x": 16, "hat0y": 17, "hat1x": 18, "hat1y": 19}
 BTN = {"trigger": 0x120, "thumb": 0x121, "thumb2": 0x122, "top": 0x123, "top2": 0x124, "pinkie": 0x125,
@@ -92,7 +102,7 @@ try:
                             b = array.array("i", [0] * 6); fcntl.ioctl(fd, EVIOCGABS(code), b, True)
                             lo, hi = b[1], b[2]
                             scale[code] = ((lo + hi) / 2.0, max((hi - lo) / 2.0, 1.0))
-                            h["0." + p] = (b[0] - scale[code][0]) / scale[code][1]
+                            h["0." + p] = soft((b[0] - scale[code][0]) / scale[code][1])
                         kb = array.array("B", [0] * (0x300 // 8 + 1)); fcntl.ioctl(fd, EVIOCGKEY, kb, True)
                         for code, p in key_pins.items(): h["0." + p] = bool(kb[code // 8] >> (code % 8) & 1)
                         h["0.present"] = True
@@ -113,7 +123,7 @@ try:
         for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
             _, _, typ, code, value = EVENT.unpack_from(data, i)
             if typ == EV_ABS and code in abs_pins:
-                c, half = scale[code]; h["0." + abs_pins[code]] = (value - c) / half
+                c, half = scale[code]; h["0." + abs_pins[code]] = soft((value - c) / half)
             elif typ == EV_KEY and code in key_pins:
                 h["0." + key_pins[code]] = bool(value)
         if DEBUG:

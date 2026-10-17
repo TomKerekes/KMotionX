@@ -1954,7 +1954,15 @@ static bool planner_idle(KmBackend::Impl *d)
 // rest of the streamed path is abandoned. An axis or a joint limit (kmotion-joglimit.h,
 // checked on each move) cuts the move there and ends the stream with a flush: the planner
 // plans the deceleration to rest exactly at the limit. A pass that cannot move at all (at
-// the limit already) is refused, and not tried again until the velocities change
+// the limit already) is refused, and not tried again until the velocities change.
+// The path streamed ahead (the planner's emission margin plus the horizon, 1.5 s on the 3
+// Link robot) is committed: a new direction only bends the path that far ahead. A stick's
+// drift is absorbed that way, but a swing of the stick (the direction turned by more than
+// WJ_REAIM_DEG from the moves last fed) re-aims instead: the stream stops on the path as a
+// release does and the next pass starts along the new velocities at once, a hitch of a few
+// tenths of a second instead of seconds of the old direction
+static const double WJ_REAIM_DEG = 30;
+
 static bool wj_velocities(KmBackend::Impl *d, KmWorldJog &req)   // the request now; true: some axis asks to move
 {
     std::lock_guard<std::mutex> lk(d->wjmx);
@@ -2043,6 +2051,15 @@ static bool wj_stop(KmBackend::Impl *d, double stop_time)
     return true;
 }
 
+// the direction of `v` turned by more than WJ_REAIM_DEG from `from` (both nonzero)
+static bool wj_turned(const double from[9], const double v[9])
+{
+    double a = 0, b = 0, dot = 0;
+    for (int i = 0; i < 9; i++) { a += from[i] * from[i]; b += v[i] * v[i]; dot += from[i] * v[i]; }
+    if (a < 1e-18 || b < 1e-18) return false;
+    return dot / sqrt(a * b) < cos(WJ_REAIM_DEG * M_PI / 180);
+}
+
 static void w_world_jog(KmBackend::Impl *d)
 {
     CCoordMotion *cm = d->cm;
@@ -2051,6 +2068,7 @@ static void w_world_jog(KmBackend::Impl *d)
     KmWorldJog req;
     if (!wj_velocities(d, req)) return;
     const KmWorldJog first = req;
+    double fed_v[9] = {};                 // the velocities the last move was fed along
 
     // at rest first (the previous pass's stop may still be landing)
     bool rest = false;
@@ -2107,14 +2125,18 @@ static void w_world_jog(KmBackend::Impl *d)
     }
 
     double streamed = 0, t_start = now_s();
-    bool launched = false, ok = true, released = false, at_limit = false, interrupted = false, external_stop = false;
-    int end = KM_WJ_RELEASED, lim_joint = -1, lim_dir = 0;
+    bool launched = false, ok = true, released = false, at_limit = false, interrupted = false, external_stop = false, reaim = false;
+    int end = KM_WJ_RELEASED, lim_joint = -1, lim_dir = 0, iterations = 0, relaunches = 0;
+    double exec_min_ahead = 1e9;        // the least downloaded time ahead of the board seen while launched
     for (;;) {
         if (!wj_velocities(d, req)) { released = true; break; }
+        if (wj_turned(fed_v, req.vel)) { reaim = true; break; }
         if (wj_interrupted(d)) { interrupted = true; ok = false; break; }
         // the board's executed time (negative: not launched, ran dry, or stopped from outside)
-        double exec = 0;
+        double exec = 0, t_iter = now_s();
         if (board_query(d, "ExecTime", reply)) { ok = false; break; }
+        double exec_raw = -1;
+        sscanf(reply, "%lf", &exec_raw);
         double e;
         if (sscanf(reply, "%lf", &e) == 1) {
             if (e >= 0) exec = e;
@@ -2123,8 +2145,11 @@ static void w_world_jog(KmBackend::Impl *d)
                 if (strcmp(reply, "0") != 0) { external_stop = true; break; }   // a feed hold or halt from outside: the jog ends
                 cm->RearmCoordLaunch();   // ran dry: relaunched once more is downloaded
                 launched = false;
+                relaunches++;
             }
         }
+        if (launched && cm->m_TotalDownloadedTime - exec < exec_min_ahead) exec_min_ahead = cm->m_TotalDownloadedTime - exec;
+        int fed = 0;
         double sb = cm->TP3ActualEmissionMargin() + horizon + 0.5;
         if (sb > stream_bound) stream_bound = sb;
         double elapsed = now_s() - t_start, burst0 = now_s();
@@ -2133,6 +2158,7 @@ static void w_world_jog(KmBackend::Impl *d)
         // wall time (the planner's margin ahead); the release is seen inside the burst too
         while (cm->m_TotalDownloadedTime - exec < horizon && streamed - elapsed < stream_bound && guard++ < 12) {
             if (!wj_velocities(d, req)) { released = true; break; }
+            if (wj_turned(fed_v, req.vel)) { reaim = true; break; }
             if (now_s() - burst0 > 0.1) break;
             BOOL pure_angle;
             double F = cm->FeedRateDistance(req.vel[0], req.vel[1], req.vel[2], req.vel[3], req.vel[4], req.vel[5], req.vel[6], req.vel[7], &pure_angle);
@@ -2164,7 +2190,9 @@ static void w_world_jog(KmBackend::Impl *d)
                 break;
             }
             memcpy(target, t, sizeof target);
+            memcpy(fed_v, req.vel, sizeof fed_v);
             streamed += dt;
+            fed++;
             if (cut.s < 1 || clamped) {
                 // this move ends at the limit: the stream ends with it
                 at_limit = true;
@@ -2180,7 +2208,16 @@ static void w_world_jog(KmBackend::Impl *d)
                 launched = true;
             }
         }
-        if (!ok || released || at_limit) break;
+        // the stream's timeline (the first 600 iterations of a pass): what the board had ahead
+        // of it, how far the planner's emission lagged the stream, how long the iteration took
+        if (iterations++ < 600) {
+            char t[300];
+            snprintf(t, sizeof t, "wj %6.3f exec %7.3f dl %7.3f ahead %6.3f streamed %6.2f margin %5.2f fed %d launched %d took %.0f ms",
+                     now_s() - t_start, exec_raw, cm->m_TotalDownloadedTime, cm->m_TotalDownloadedTime - exec, streamed,
+                     cm->TP3ActualEmissionMargin(), fed, (int) launched, (now_s() - t_iter) * 1e3);
+            d->trace(t);
+        }
+        if (!ok || released || reaim || at_limit) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
@@ -2191,18 +2228,20 @@ static void w_world_jog(KmBackend::Impl *d)
         else for (double t0 = now_s();;) {
             if (wj_interrupted(d)) { interrupted = true; ok = false; break; }
             if (!wj_velocities(d, req)) { released = true; break; }
+            if (wj_turned(fed_v, req.vel)) { reaim = true; break; }
             if (board_query(d, "CheckDoneBuf", reply)) { ok = false; break; }
             if (strcmp(reply, "1") == 0) break;
             if (strcmp(reply, "-1") == 0) { d->message("an axis is disabled: motion aborted"); ok = false; break; }
             if (now_s() - t0 > 60) { d->message("world jog: the board did not arrive at the limit within 60 s"); ok = false; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        if (released) at_limit = false;
+        if (released || reaim) at_limit = false;
     }
-    if (!interrupted && (released || external_stop || !ok) && (launched || streamed > 0)) {
+    if (!interrupted && (released || reaim || external_stop || !ok) && (launched || streamed > 0)) {
         if (!wj_stop(d, stop_time)) { d->message("world jog: the board did not answer the stop"); ok = false; }
     }
     if (external_stop && ok) end = KM_WJ_STOPPED;
+    if (reaim && ok) end = KM_WJ_REAIMED;
     if (!ok) end = interrupted ? KM_WJ_ABORTED : KM_WJ_FAILED;
     d->world_jogging = false;
 
@@ -2224,9 +2263,9 @@ static void w_world_jog(KmBackend::Impl *d)
     if (end == KM_WJ_REFUSED_AXIS || end == KM_WJ_REFUSED_JOINT || end == KM_WJ_REACH) wj_refuse(d, first);
     {
         char t[300];
-        snprintf(t, sizeof t, "world jog: ended %d (joint %d dir %d) after %.2f s streamed, at X%.5f Y%.5f Z%.5f%s%s",
-                 end, lim_joint, lim_dir, streamed, d->pos[0], d->pos[1], d->pos[2], released ? ", released" : "",
-                 interrupted ? ", aborted" : "");
+        snprintf(t, sizeof t, "world jog: ended %d (joint %d dir %d) after %.2f s streamed in %d iterations, %d relaunches, least ahead %.3f s, at X%.5f Y%.5f Z%.5f%s%s",
+                 end, lim_joint, lim_dir, streamed, iterations, relaunches, exec_min_ahead, d->pos[0], d->pos[1], d->pos[2],
+                 released ? ", released" : reaim ? ", re-aimed" : "", interrupted ? ", aborted" : "");
         d->trace(t);
     }
     wj_finish(d, end, lim_joint, lim_dir);

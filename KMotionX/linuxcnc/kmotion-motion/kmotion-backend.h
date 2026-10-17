@@ -193,7 +193,7 @@ struct KmWorldJog {
 };
 // how a world jog ended (KmState.world_jog_end)
 enum { KM_WJ_RELEASED = 0, KM_WJ_AXIS_LIMIT = 1, KM_WJ_JOINT_LIMIT = 2, KM_WJ_REFUSED_AXIS = 3, KM_WJ_REFUSED_JOINT = 4,
-       KM_WJ_REACH = 5, KM_WJ_STOPPED = 6, KM_WJ_FAILED = -1, KM_WJ_ABORTED = -2 };
+       KM_WJ_REACH = 5, KM_WJ_STOPPED = 6, KM_WJ_REAIMED = 7, KM_WJ_FAILED = -1, KM_WJ_ABORTED = -2 };
 
 struct KmState {
     double pos[9];                // x y z a b c u v w
