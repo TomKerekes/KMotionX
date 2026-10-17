@@ -2640,17 +2640,17 @@ int main(int argc, char *argv[])
     } else {
         log_print("motion: stand-in model\n");
     }
-    update_motion_state();
-    update_status();
-    update_pins();
-    // the shared memory task talks through is made last: task attaches as soon as it
-    // exists and times its first command out after a second, and the board connect above
-    // takes longer than that with a cold KMotionServer (a start after a reboot failed so:
-    // "USRMOT: ERROR: command 32 timeout", emcTrajInit failed)
+    // the shared memory task talks through is made only now, after the board connect:
+    // task attaches as soon as it exists and times its first command out after a second,
+    // and the connect takes longer than that with a cold KMotionServer (a start after a
+    // reboot failed so: "USRMOT: ERROR: command 32 timeout", emcTrajInit failed)
     if (init_comm_buffers() < 0) {
         hal_exit(comp_id);
         return 1;
     }
+    update_motion_state();
+    update_status();
+    update_pins();
     int r = hal_ready(comp_id);
     if (r < 0) {
         fprintf(stderr, "kmotion-motion: hal_ready failed: %d\n", r);
