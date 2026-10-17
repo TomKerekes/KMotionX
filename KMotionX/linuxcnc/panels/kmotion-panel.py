@@ -40,8 +40,9 @@ class KMotionPanel:
         self.cont = builder.get_object("continue")
         self.stat = linuxcnc.stat()
         self.cmd = linuxcnc.command()
-        self.stop_line = 0
-        self.file_lines = 0
+        self.stop_line = 0              # the last line LinuxCNC reported while the program ran
+        self.stop_paused = False        # ... and whether the program was paused (M0) then
+        self.file_lines = []            # the program's lines, for the M0 after the stop line
         self.stop_file = ""
         GLib.timeout_add(100, self._watch_program)
 
@@ -66,27 +67,49 @@ class KMotionPanel:
             self.stat.poll()
         except Exception:
             return True
+        # LinuxCNC's current line is the last line that EXECUTED: at an M0 pause it is the
+        # motion before the M0 (the interpreter has read ahead to the end of the file by
+        # then), after an abort it is meaningless. So: the last line seen while the program
+        # ran, and whether it was paused there
         line = max(self.stat.current_line, self.stat.motion_line)
         if self.stat.interp_state != linuxcnc.INTERP_IDLE:
             if line > 0 and self.stat.file:
                 self.stop_line = line
+                self.stop_paused = bool(self.stat.paused)
                 if self.stat.file != self.stop_file:
                     self.stop_file = self.stat.file
+                    path = self.stat.file
+                    if not os.path.isabs(path):
+                        path = os.path.join(os.path.dirname(os.environ.get("INI_FILE_NAME", "")), path)
                     try:
-                        with open(self.stat.file) as f:
-                            self.file_lines = sum(1 for _ in f)
+                        with open(path) as f:
+                            self.file_lines = f.read().splitlines()
                     except Exception:
-                        self.file_lines = 0
+                        self.file_lines = []
             self.cont.set_sensitive(False)
         else:
-            self.cont.set_sensitive(self.stop_line > 0 and self.stop_line < self.file_lines and self.stat.file == self.stop_file
+            self.cont.set_sensitive(self._continue_line() > 0 and self.stat.file == self.stop_file
                                     and self.stat.task_state == linuxcnc.STATE_ON)
         return True
 
+    def _continue_line(self):
+        """the line to run from: after a pause, the line after the M0 (or M1) that follows the
+        last executed line; after a halt in a move, that move's line again. 0: nothing to continue"""
+        if self.stop_line <= 0 or not self.file_lines:
+            return 0
+        start = self.stop_line
+        if self.stop_paused:
+            start = self.stop_line + 1
+            for n in range(self.stop_line, len(self.file_lines)):          # lines are 1-based: index n is line n+1
+                if re.match(r"\s*[Mm]0*[01]\b", self.file_lines[n]):
+                    start = n + 2
+                    break
+        return start if start <= len(self.file_lines) else 0
+
     def on_continue_clicked(self, widget):
-        if self.stop_line <= 0:
+        start = self._continue_line()
+        if start <= 0:
             return
-        start = self.stop_line + 1
         self.stop_line = 0
         try:
             self.cmd.mode(linuxcnc.MODE_AUTO)
