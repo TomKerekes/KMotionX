@@ -13,6 +13,12 @@
 #   cat /proc/bus/input/devices    (the N: Name= line) gives the name for [GAMEPAD] NAME.
 # The user must be allowed to read the pad's /dev/input/event device: the udev rule
 # usb/etc/udev/rules.d/11.joystick.rules (the install script puts it in place).
+#
+# A stick's position is unknown until the pad has sent its first report for it: the kernel
+# holds 0 counts, which hal_input maps to -1 (seen: all four sticks at -1 with the pad at
+# rest after a start), and the dead-man alone would release a full negative jog on every
+# axis. So each axis arms itself only once its stick has been seen inside the centre band
+# (the flipflop below); until then its mux stays at zero whatever the dead-man says.
 
 loadusr -W hal_input -KA [GAMEPAD]NAME
 
@@ -20,11 +26,29 @@ loadusr -W hal_input -KA [GAMEPAD]NAME
 loadrt threads name1=pad-thread period1=20000000
 # the sticks, with a sign and gain per axis (a pad's Y stick reads negative when pushed away)
 loadrt scale count=3
-# the dead-man: the stick reaches halui only while the button is held; and the speed choice
+# the arming latch per axis: |stick| (abs) below the band (comp) sets a flipflop
+loadrt abs count=3
+loadrt comp count=3
+loadrt flipflop count=3
+loadrt and2 count=3
+# the dead-man: the stick reaches halui only while the button is held and the axis is
+# armed; and the speed choice
 loadrt mux2 count=4
 addf scale.0 pad-thread
 addf scale.1 pad-thread
 addf scale.2 pad-thread
+addf abs.0 pad-thread
+addf abs.1 pad-thread
+addf abs.2 pad-thread
+addf comp.0 pad-thread
+addf comp.1 pad-thread
+addf comp.2 pad-thread
+addf flipflop.0 pad-thread
+addf flipflop.1 pad-thread
+addf flipflop.2 pad-thread
+addf and2.0 pad-thread
+addf and2.1 pad-thread
+addf and2.2 pad-thread
 addf mux2.0 pad-thread
 addf mux2.1 pad-thread
 addf mux2.2 pad-thread
@@ -37,13 +61,30 @@ net pad-x-raw input.0.[GAMEPAD]X_AXIS-position => scale.0.in
 net pad-y-raw input.0.[GAMEPAD]Y_AXIS-position => scale.1.in
 net pad-z-raw input.0.[GAMEPAD]Z_AXIS-position => scale.2.in
 
-net pad-enable input.0.[GAMEPAD]ENABLE => mux2.0.sel mux2.1.sel mux2.2.sel
+# armed: the stick has been inside the centre band at least once (comp: in1 > in0, with
+# in0 = |stick| and in1 = the band); the flipflop keeps it
+net pad-x scale.0.out => mux2.0.in1 abs.0.in
+net pad-y scale.1.out => mux2.1.in1 abs.1.in
+net pad-z scale.2.out => mux2.2.in1 abs.2.in
+net pad-x-abs abs.0.out => comp.0.in0
+net pad-y-abs abs.1.out => comp.1.in0
+net pad-z-abs abs.2.out => comp.2.in0
+setp comp.0.in1 0.3
+setp comp.1.in1 0.3
+setp comp.2.in1 0.3
+net pad-x-centred comp.0.out => flipflop.0.set
+net pad-y-centred comp.1.out => flipflop.1.set
+net pad-z-centred comp.2.out => flipflop.2.set
+net pad-x-armed flipflop.0.out => and2.0.in0
+net pad-y-armed flipflop.1.out => and2.1.in0
+net pad-z-armed flipflop.2.out => and2.2.in0
+net pad-enable input.0.[GAMEPAD]ENABLE => and2.0.in1 and2.1.in1 and2.2.in1
+net pad-x-go and2.0.out => mux2.0.sel
+net pad-y-go and2.1.out => mux2.1.sel
+net pad-z-go and2.2.out => mux2.2.sel
 setp mux2.0.in0 0
 setp mux2.1.in0 0
 setp mux2.2.in0 0
-net pad-x scale.0.out => mux2.0.in1
-net pad-y scale.1.out => mux2.1.in1
-net pad-z scale.2.out => mux2.2.in1
 net pad-jog-x mux2.0.out => halui.axis.x.analog
 net pad-jog-y mux2.1.out => halui.axis.y.analog
 net pad-jog-z mux2.2.out => halui.axis.z.analog
