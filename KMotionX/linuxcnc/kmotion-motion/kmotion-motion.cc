@@ -142,6 +142,12 @@ static void log_print(const char *fmt, ...)
 {
     if (logfile == NULL) {
         if (logfile_name == NULL) return;
+        // the previous run's log is kept as <name>.prev: what went wrong before a restart
+        // is otherwise gone with the restart
+        {
+            std::string prev = std::string(logfile_name) + ".prev";
+            rename(logfile_name, prev.c_str());
+        }
         logfile = fopen(logfile_name, "w");
         if (logfile == NULL) {
             fprintf(stderr, "kmotion-motion: cannot open %s: %s\n", logfile_name, strerror(errno));

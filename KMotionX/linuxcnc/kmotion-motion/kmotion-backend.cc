@@ -1322,6 +1322,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             memset(&status, 0, sizeof status);
+            bool thread_done = false;
             if (d->km->GetStatus(status, true) == 0) {
                 bool all = true;
                 for (int i = 0; i < 8; i++) {
@@ -1329,10 +1330,26 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
                     if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((status.Enables >> ch) & 1)) all = false;
                 }
                 if (all) break;
+                // the program has ended without enabling every axis (it found a servo with a
+                // latched error, say): no point in waiting out the timeout
+                thread_done = !((status.ThreadActive >> d->cfg.enable_thread) & 1);
+            }
+            // a Machine off (or an abort) behind this Machine on ends the wait: the operator
+            // gave up, and the commands after it would otherwise pile up for the timeout
+            bool superseded = d->aborting;
+            if (!superseded) {
+                std::lock_guard<std::mutex> lock(d->qmx);
+                for (const Cmd &x : d->q) if (x.kind == Cmd::MACHINE_ON || x.kind == Cmd::ABORT) superseded = true;
+            }
+            if (superseded) { d->message("Machine on given up: the enable program had not enabled every axis yet"); return; }
+            if (thread_done && now_s() - t0 > 0.5) {
+                d->message("the enable program ended without enabling every axis: its messages are on the board's "
+                           "console (the KMotion tool's Console screen)");
+                return;
             }
             if (now_s() - t0 > d->cfg.enable_timeout) {
                 d->message("the enable program did not enable every axis in time ([KMOTION] ENABLE_TIMEOUT_S): "
-                           "its messages are on the board's console");
+                           "its messages are on the board's console (the KMotion tool's Console screen)");
                 return;
             }
         }
