@@ -2608,7 +2608,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "kmotion-motion: hal_init failed: %d\n", comp_id);
         return 1;
     }
-    if (create_pins() < 0 || init_comm_buffers() < 0) {
+    if (create_pins() < 0) {
         hal_exit(comp_id);
         return 1;
     }
@@ -2643,6 +2643,14 @@ int main(int argc, char *argv[])
     update_motion_state();
     update_status();
     update_pins();
+    // the shared memory task talks through is made last: task attaches as soon as it
+    // exists and times its first command out after a second, and the board connect above
+    // takes longer than that with a cold KMotionServer (a start after a reboot failed so:
+    // "USRMOT: ERROR: command 32 timeout", emcTrajInit failed)
+    if (init_comm_buffers() < 0) {
+        hal_exit(comp_id);
+        return 1;
+    }
     int r = hal_ready(comp_id);
     if (r < 0) {
         fprintf(stderr, "kmotion-motion: hal_ready failed: %d\n", r);

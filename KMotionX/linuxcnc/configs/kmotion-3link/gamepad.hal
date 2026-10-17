@@ -20,7 +20,9 @@
 # axis. So each axis arms itself only once its stick has been seen inside the centre band
 # (the flipflop below); until then its mux stays at zero whatever the dead-man says.
 
-loadusr -W hal_input -KA [GAMEPAD]NAME
+# gamepad-input (panels/) runs hal_input on the pad, or stands in with the same pins at
+# rest when no pad is attached - LinuxCNC starts either way
+loadusr -Wn input ../../panels/gamepad-input
 
 # the pad's logic runs in its own thread (the kmotion configs have no other)
 loadrt threads name1=pad-thread period1=20000000

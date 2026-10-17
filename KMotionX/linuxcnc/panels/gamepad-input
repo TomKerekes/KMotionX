@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""The game pad for gamepad.hal: hal_input on the pad when it is there, else a stand-in
+component with the same pins at rest, so LinuxCNC starts without the pad (hal_input alone
+exits when no device matches and the HAL file, and the start, fail). The pad's name and
+the pins the HAL file uses come from the ini's [GAMEPAD] section (INI_FILE_NAME).
+Load it as   loadusr -Wn input gamepad-input   (both make a component named "input")."""
+import fnmatch, os, re, sys, time
+
+ini_path = os.environ.get("INI_FILE_NAME", "")
+keys = {}
+try:
+    sect = None
+    for line in open(ini_path):
+        line = line.strip()
+        if line.startswith("["):
+            sect = line.strip("[]").strip()
+        elif sect == "GAMEPAD" and "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            keys[k.strip()] = v.split("#")[0].strip()
+except Exception as e:
+    print("gamepad-input: cannot read the ini:", e, file=sys.stderr)
+name = keys.get("NAME", "")
+
+def pad_present(pattern):
+    if not pattern:
+        return False
+    try:
+        text = open("/proc/bus/input/devices").read()
+    except Exception:
+        return False
+    for block in text.split("\n\n"):
+        m = re.search(r'^N: Name="(.*)"', block, re.M)
+        if m and (fnmatch.fnmatch(m.group(1), pattern) or pattern in m.group(1)):
+            return True
+    return False
+
+if pad_present(name):
+    os.execvp("hal_input", ["hal_input", "-KA", name])    # becomes hal_input: the component "input"
+
+# the stand-in: the pins gamepad.hal nets, at rest, so the file loads and nothing moves
+import hal
+h = hal.component("input")
+for key, typ in (("X_AXIS", hal.HAL_FLOAT), ("Y_AXIS", hal.HAL_FLOAT), ("Z_AXIS", hal.HAL_FLOAT),
+                 ("ENABLE", hal.HAL_BIT), ("FAST", hal.HAL_BIT)):
+    pin = keys.get(key, "")
+    if pin:
+        h.newpin("0." + pin, typ, hal.HAL_OUT)
+h.ready()
+print("gamepad-input: no input device matches [GAMEPAD] NAME = %r: the pad's pins stand in at rest" % name, file=sys.stderr)
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    pass
