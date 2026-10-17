@@ -93,7 +93,11 @@ installation from scratch, with its scripts.
     greys Back/Forward unless `kmotion.hold-allowed` says a hold jog is possible, hides Geo
     reload without a `GEO_FILE`, shows Measure only with `[KMOTION] MEASURE_BUTTON = 1`, and
     takes gmoccapy's GTK theme from its preference file at start (the panel is its own
-    process and would follow the desktop's theme otherwise).
+    process and would follow the desktop's theme otherwise). Its **Continue** button is
+    KMotionCNC's Go after a halt: LinuxCNC cannot jog a paused program, so a geo
+    measurement goes M0, Halt, jog, Measure, Continue - the program runs again from the
+    line after the one it stopped on (run-from-line without the dialog), from wherever the
+    pen stands; the panel watches the stop line while the program runs.
   - **Rigid tapping** (G33.1, board mode): the planner's move from the start through the
     bottom, and on by `[KMOTION] TAP_OVERSHOOT_REVS` revolutions for the spindle's
     deceleration, at pitch x spindle speed, launched in the board's spindle-sync mode

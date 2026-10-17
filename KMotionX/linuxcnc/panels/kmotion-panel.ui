@@ -77,6 +77,17 @@
           </object>
         </child>
         <child>
+          <object class="GtkButton" id="continue">
+            <property name="label" translatable="yes">Continue</property>
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <property name="receives-default">True</property>
+            <property name="sensitive">False</property>
+            <property name="tooltip-text">Run the program again from the line after the one it stopped on (KMotionCNC's Go after a halt): halt, jog, measure, continue</property>
+            <signal name="clicked" handler="on_continue_clicked" swapped="no"/>
+          </object>
+        </child>
+        <child>
           <object class="HAL_Button" id="geo-reload">
             <property name="label" translatable="yes">Geo reload</property>
             <property name="visible">True</property>
