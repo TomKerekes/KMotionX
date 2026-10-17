@@ -109,7 +109,11 @@ installation from scratch, with its scripts.
     its name from /proc/bus/input/devices; the event device is made readable by the udev
     rule `usb/etc/udev/rules.d/11.joystick.rules`. In the VM the pad needs a USB filter or
     Devices > USB, like the KFLOP. The jog is LinuxCNC's: machine on, manual mode, world
-    mode through the kinematics; a stick's velocity change restarts a running world jog.
+    mode through the kinematics. Under a kinematics the axes' requested velocities are
+    composed into one planner move along their direction (a diagonal is a diagonal), planned
+    at the fastest speed the axes allow that way and run at the requested speed through the
+    feed override, so a stick's deflection changes the speed without a restart; a new
+    direction stops the move and starts the next when the board is at rest, nothing dropped.
   - **Rigid tapping** (G33.1, board mode): the planner's move from the start through the
     bottom, and on by `[KMOTION] TAP_OVERSHOOT_REVS` revolutions for the spindle's
     deceleration, at pitch x spindle speed, launched in the board's spindle-sync mode
