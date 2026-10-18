@@ -17,7 +17,8 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 
        & "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs
 
-   Each adapter is a block of lines. Find the block of the adapter that connects to the Kogna (its `IPAddress:` is 192.168.113.x when the Kogna is on) and copy the text after `Name:` in that block, for example `Intel(R) Ethernet Controller I226-V #2`. Not the `VBoxNetworkName:` line. With a KFLOP there is none to note.
+   Each adapter is a block of lines. Find the block of the adapter that connects to the Kogna (its `IPAddress:` is 192.168.113.x when the Kogna is on) and copy the text after `Name:` in that block, for example `Intel(R) Ethernet Controller I226-V #2`. Not the `VBoxNetworkName:` line: that one carries a `HostInterfaceNetworking-` prefix and is not accepted. With a KFLOP there is none to note.
+   If the name is wrong, the script makes nothing and prints the accepted names; run it again with one of those.
 6. Make the VM (one line; the ISO name exactly as downloaded, the adapter name in quotes, or leave it out for a KFLOP):
 
        .\vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "Intel(R) Ethernet Controller I226-V #2"
