@@ -140,6 +140,7 @@ struct KmBackend::Impl {
     double act_fb[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // poller: the channels' Position, in the actuators' units
     unsigned axis_done = 0;                // poller: AxisDone by axis (bit = LinuxCNC joint)
     std::atomic<unsigned> lines_posted{0}, lines_begun{0};   // line() calls, and the ones the worker took up
+    std::atomic<unsigned> moves_posted{0}, moves_taken{0};   // line/arc/dwell commands posted, and taken from the queue (or dropped by an abort)
     std::mutex tmx;                        // traces' own lock: they are written with wmx held, and publish takes smx before wmx
     std::deque<std::string> traces;        // for the log (under tmx)
     void trace(const std::string &t)
@@ -1178,15 +1179,6 @@ static void publish(KmBackend::Impl *d)
     for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
     s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
-    // ... and the moves posted but not yet taken up by the worker: task waits for a depth
-    // of 0 before an M5 or an M-code, and a burst of moves released to the worker (after a
-    // spindle-at-speed wait) showed a depth of 0 for a few ms, so the program's M5 ran with
-    // the whole program still to go (the spindle-off program then blocked the final flush,
-    // and the board stood 1 s short of the path's end until it came)
-    {
-        std::lock_guard<std::mutex> lq(d->qmx);
-        for (const Cmd &x : d->q) if (x.kind == Cmd::LINE || x.kind == Cmd::ARC || x.kind == Cmd::DWELL) s.depth++;
-    }
     s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting || d->tap_pending || d->world_jogging;
     s.threading = d->sync_run;
     s.world_jog = d->world_jogging;
@@ -2317,6 +2309,7 @@ static void worker_main(KmBackend::Impl *d)
                 if (d->q.empty()) break;
                 c = d->q.front();
                 d->q.pop_front();
+                if (c.kind == Cmd::LINE || c.kind == Cmd::ARC || c.kind == Cmd::DWELL) d->moves_taken++;
             }
             // a threading run ends with the first unsynchronized move after its synchronized
             // lines - G76's pull-out to the drive line, which LinuxCNC runs as a rapid right
@@ -2823,6 +2816,7 @@ int KmBackend::sync_line(const double end[9], double pitch, double rps, double a
     memcpy(c.end, end, sizeof c.end);
     c.sync_pitch = pitch; c.sync_rps = rps; c.acc = acc; c.id = id;
     int serial = (int) ++d->lines_posted;
+    d->moves_posted++;
     d->post(c);
     return serial;
 }
@@ -2834,6 +2828,7 @@ int KmBackend::line(const double end[9], double vel, double acc, bool rapid, int
     memcpy(c.end, end, sizeof c.end);
     c.vel = vel; c.acc = acc; c.rapid = rapid; c.id = id;
     int serial = (int) ++d->lines_posted;
+    d->moves_posted++;
     d->post(c);
     return serial;
 }
@@ -2855,6 +2850,7 @@ int KmBackend::arc(const double end[9], const double center[3], const double nor
     memcpy(c.center, center, sizeof c.center);
     memcpy(c.normal, normal, sizeof c.normal);
     c.turn = turn; c.vel = vel; c.acc = acc; c.id = id;
+    d->moves_posted++;
     d->post(c);
     return 0;
 }
@@ -2872,8 +2868,15 @@ int KmBackend::dwell(double seconds, int id)
     Cmd c{};
     c.kind = Cmd::DWELL;
     c.seconds = seconds; c.id = id;
+    d->moves_posted++;
     d->post(c);
     return 0;
+}
+
+int KmBackend::moves_queued() const
+{
+    unsigned p = d->moves_posted, t = d->moves_taken;
+    return p > t ? (int) (p - t) : 0;
 }
 
 void KmBackend::abort()
@@ -2893,6 +2896,7 @@ void KmBackend::abort()
                 x.kind == Cmd::SPINDLE) keep.push_back(x);
             else if (x.kind == Cmd::JOG_TO) d->jog_written[x.axis]++;   // dropped: nothing to wait for
             else if (x.kind == Cmd::MCODE) { d->mcode_result = 2; d->mcode_done = x.ticket; }
+            else if (x.kind == Cmd::LINE || x.kind == Cmd::ARC || x.kind == Cmd::DWELL) d->moves_taken++;   // dropped: no longer queued
         d->q.swap(keep);
     }
     d->cm->SetAbort();

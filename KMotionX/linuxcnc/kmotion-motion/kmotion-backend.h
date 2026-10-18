@@ -269,6 +269,10 @@ public:
     int sync_line(const double end[9], double pitch, double rps, double acc, int id);
     int arc(const double end[9], const double center[3], const double normal[3], int turn, double vel, double acc, int id);
     int dwell(double seconds, int id);
+    // moves (line, arc, dwell) posted and not yet taken up by the worker, read live: the
+    // state's depth is a status read old (up to a poll period), and a burst of moves posted
+    // in between must count for task at once, or its next M code runs early
+    int moves_queued() const;
     // LinuxCNC's SET_TERM_COND (G61/G61.1/G64 P): 1 = exact stop at block ends, 2 = blend;
     // tolerance in machine units, 0 = the planner's own corner tolerance
     void set_path_mode(int term_cond, double tolerance);

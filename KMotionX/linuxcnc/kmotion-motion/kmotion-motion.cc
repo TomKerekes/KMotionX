@@ -1048,7 +1048,12 @@ static void update_status()
     SET_MOTION_INPOS_FLAG(inpos ? 1 : 0);
     emcmotStatus->carte_pos_cmd = array_to_pose(m.pos);
     emcmotStatus->carte_pos_fb = emcmotStatus->carte_pos_cmd;
-    int depth = km ? m.ks.depth + (int) m.held.size() : (int) m.queue.size();
+    // task waits for a depth of 0 before an M5 or an M code: the moves the worker has not
+    // taken up yet count too, read live - the state's depth is a status read old, and the
+    // burst released after the spindle-at-speed wait read 0 for a moment, so the program's
+    // M5 ran with the whole program still to go (and its wait held the final flush: the
+    // board stood a second short of the path's end)
+    int depth = km ? m.ks.depth + (int) m.held.size() + km->moves_queued() : (int) m.queue.size();
     for (int s = 0; s < EMCMOT_MAX_SPINDLES; s++) {
         // spindle.N.at-speed (true when nothing drives it) and, for spindle 0, what the board
         // says (SPINDLE_AT_SPEED) in a status read made after its last spindle command
