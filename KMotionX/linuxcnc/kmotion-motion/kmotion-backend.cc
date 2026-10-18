@@ -133,6 +133,7 @@ struct KmBackend::Impl {
     bool wj_refused = false;           // the pass could not move along wj_refused_v (at a limit): not tried again until the velocities change
     double wj_refused_v[9] = {};
     std::atomic<bool> world_jogging{false};
+    std::atomic<bool> seglog_new_run{false};   // the segment log is truncated at the next move (a program start)
     int wj_serial = 0, wj_end = 0, wj_joint = -1, wj_dir = 0;   // the last pass's end (smx)
     std::atomic<int> stop_state{0};    // board: MAIN_STATUS.StopImmediateState from the last status poll
     std::atomic<unsigned> status_count{0};   // board: status polls so far
@@ -468,6 +469,7 @@ static void fail(KmBackend::Impl *d, const char *what, int id = 0)
 // ---- worker: planning ----------------------------------------------------------------
 static int begin_move(KmBackend::Impl *d, int id)
 {
+    if (d->seglog_new_run.exchange(false)) d->cm->SegLogNewRun();   // LOG_SEGMENTS: a job's log starts here
     // the first move of a run starts where the board stands, as KMotionCNC re-reads the
     // position before every run: the axes may have been moved behind the planner's back
     // (the KMotion console, a program on the board) since the last one. The board is read
@@ -2934,6 +2936,11 @@ void KmBackend::world_jog(const KmWorldJog &req)
         d->wj = req;
     }
     d->qcv.notify_one();
+}
+
+void KmBackend::seglog_new_run()
+{
+    d->seglog_new_run = true;
 }
 
 void KmBackend::jog_to(int axis, double target, double vel)

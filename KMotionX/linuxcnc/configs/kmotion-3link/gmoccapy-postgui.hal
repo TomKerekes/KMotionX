@@ -6,3 +6,7 @@ sets gui-ready 1
 # the fake spindle's measured speed and at-speed state for the GUI (kmotion-3link.ini: SPINDLE_*)
 net spindle-rpm-measured kmotion.spindle-rpm-abs => gmoccapy.spindle_feedback_bar
 net spindle-at-speed kmotion.spindle-at-speed => gmoccapy.spindle_at_speed_led
+
+# a program start begins a fresh planner segment log ([KMOTION] LOG_SEGMENTS, /tmp/TPSegLog.csv
+# for the MotionLogPlotter): the file holds the last job only
+net program-running halui.program.is-running => kmotion.program-running

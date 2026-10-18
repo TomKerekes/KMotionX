@@ -1,0 +1,4 @@
+# after AXIS is up (POSTGUI_HALFILE): halui's pins exist by then.
+# A program start begins a fresh planner segment log ([KMOTION] LOG_SEGMENTS, /tmp/TPSegLog.csv
+# for the MotionLogPlotter): the file holds the last job only
+net program-running halui.program.is-running => kmotion.program-running

@@ -775,6 +775,7 @@ struct Pins {
     hal_bool_t hold_forward, hold_reverse, measure, geo_reload;
     hal_real_t hold_rate;
     hal_bool_t hold_allowed;         // out: a hold jog is possible now (paused, board mode, machine on): the panel greys its buttons by it
+    hal_bool_t program_running;      // in: halui.program.is-running; its rising edge starts a fresh planner segment log
 };
 static Pins *pins = NULL;        // in HAL shared memory: hal_pin_new_* requires that
 
@@ -895,6 +896,7 @@ static int create_pins()
     PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->hold_reverse, 0, "kmotion.hold-reverse"));
     PIN(hal_pin_new_real(comp_id, HAL_IN, &pins->hold_rate, 0, "kmotion.hold-rate"));
     PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->measure, 0, "kmotion.measure"));
+    PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->program_running, 0, "kmotion.program-running"));
     PIN(hal_pin_new_bool(comp_id, HAL_IN, &pins->geo_reload, 0, "kmotion.geo-reload"));
     PIN(hal_pin_new_bool(comp_id, HAL_OUT, &pins->hold_allowed, 0, "kmotion.hold-allowed"));
     return 0;
@@ -1124,6 +1126,17 @@ static void update_status()
 
 static void update_pins()
 {
+    // a program start (halui.program.is-running on kmotion.program-running) begins a fresh
+    // planner segment log ([KMOTION] LOG_SEGMENTS), so /tmp/TPSegLog.csv holds the last job only
+    {
+        static bool was_running = false;
+        bool running = hal_get_bool(pins->program_running);
+        if (running && !was_running && km) {
+            km->seglog_new_run();
+            log_print("program start: the planner's segment log starts over\n");
+        }
+        was_running = running;
+    }
     hal_set_bool(pins->motion_enabled, GET_MOTION_ENABLE_FLAG());
     hal_set_bool(pins->in_position, GET_MOTION_INPOS_FLAG());
     hal_set_bool(pins->coord_mode, GET_MOTION_COORD_FLAG());

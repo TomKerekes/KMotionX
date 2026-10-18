@@ -302,6 +302,9 @@ public:
     // until all are 0 or a limit in `req` is reached. Called again with every change; the
     // stream bends along the new velocities. Its end comes through state() (world_jog_serial)
     void world_jog(const KmWorldJog &req);
+    // the planner's segment log (LOG_SEGMENTS, /tmp/TPSegLog.csv) starts over with the next move:
+    // a program start, so the file holds one job
+    void seglog_new_run();
     // rigid tapping (G33.1): from where the axes stand to `bottom` at pitch units per
     // revolution, the spindle at rps (signed: negative CCW), the retract at retract_scale
     // times the speed (G33.1's I). The result comes through state() (tap_serial, tap_result)

@@ -8,3 +8,7 @@ net spindle-at-speed kmotion.spindle-at-speed => gmoccapy.spindle_at_speed_led
 # the end of the GUI's start-up, for a start-up script that turns the machine on (kmotion-3link's autostart.py)
 newsig gui-ready bit
 sets gui-ready 1
+
+# a program start begins a fresh planner segment log ([KMOTION] LOG_SEGMENTS, /tmp/TPSegLog.csv
+# for the MotionLogPlotter): the file holds the last job only
+net program-running halui.program.is-running => kmotion.program-running
