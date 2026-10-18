@@ -268,7 +268,15 @@ class Log:
                 bt.append(abs_t - ct)
                 bx.append(segs[si + 1].p0[0] + off[0])
                 by.append(segs[si + 1].p0[1] + off[1])
-        if ts and tail > 0:
+        # the hold-at-end tail only when the log ends at rest: a log read while its run
+        # is still writing ends mid-motion, and a hold there is a velocity step (an
+        # accel/jerk spike at the end of the plot)
+        at_rest = False
+        if ts:
+            last = segs[-1]
+            v_end = np.linalg.norm((last.eval(last.total) - last.eval(max(0.0, last.total - tick))) / tick)
+            at_rest = v_end < 1e-3
+        if ts and tail > 0 and at_rest:
             bt.append(abs_t - ct)
             bx.append(segs[-1].p1[0] + off[0])
             by.append(segs[-1].p1[1] + off[1])
