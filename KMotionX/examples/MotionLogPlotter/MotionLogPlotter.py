@@ -168,7 +168,12 @@ class Log:
     def load(cls, path):
         log = cls()
         with open(path, 'r', newline='') as fh:
-            lines = [l.rstrip('\r\n') for l in fh]
+            raw = fh.readlines()
+        # a run still writing the file leaves a partial last row (no newline yet): its
+        # truncated numbers made a wild segment, an accel/jerk spike at the end of the plot
+        if raw and not raw[-1].endswith('\n'):
+            raw.pop()
+        lines = [l.rstrip('\r\n') for l in raw]
         if not lines:
             return log
         if lines[0].startswith('kind'):
