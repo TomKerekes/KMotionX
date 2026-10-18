@@ -6,7 +6,7 @@ The scripts are in this folder: `vm-create.cmd` / `vm-create.sh` make the VM on 
 
 ## 1. What you need
 
-- A host with VirtualBox 7. The Extension Pack is not needed: the KFLOP's USB interface (FTDI 0403:6001, the FT232/FT245 family) is a USB 2.0 full-speed device, 12 Mbit/s, and VirtualBox's built-in OHCI controller (labelled USB 1.1) serves full-speed devices; the pack only adds the high-speed and USB 3 controllers, which the KFLOP cannot use. A VM that has the pack and an xHCI controller works as well.
+- A host with Oracle VirtualBox 7 installed (skip this if it already is): the installer for your host from https://www.virtualbox.org/wiki/Downloads ("Windows hosts" on Windows; on Linux the distribution's package or Oracle's), installed with its defaults. `vm-create.cmd` runs it from `C:\Program Files\Oracle\VirtualBox`, `vm-create.sh` needs `VBoxManage` on the PATH. The Extension Pack is not needed: the KFLOP's USB interface (FTDI 0403:6001, the FT232/FT245 family) is a USB 2.0 full-speed device, 12 Mbit/s, and VirtualBox's built-in OHCI controller (labelled USB 1.1) serves full-speed devices; the pack only adds the high-speed and USB 3 controllers, which the KFLOP cannot use. A VM that has the pack and an xHCI controller works as well.
 - The Debian 13 "netinst" ISO, `debian-13.x.x-amd64-netinst.iso`, from debian.org (about 700 MB). The VM downloads the rest during the install, so the host needs internet.
 - For the Kogna: the host's network interface that connects to it (a USB-Ethernet adapter on the laptop). The Kogna is its own DHCP server on that link (192.168.113.x) and the VM gets a bridged adapter on it. For a KFLOP: a USB port; the VM takes the board through a USB filter.
 - The board must run the firmware this tree carries (`DSP_KOGNA/DSPKOGNA.out`, `DSP_KFLOP/DSPKFLOP.out`): kmotion-motion checks the build stamp when it connects and refuses Machine on with both builds named until they match. The KMotion tool's Config & Flash screen flashes it (or KMotion on Windows).
@@ -14,7 +14,12 @@ The scripts are in this folder: `vm-create.cmd` / `vm-create.sh` make the VM on 
 
 ## 2. The VM
 
-With the script, on the host, from this folder (a checkout, or just the one file):
+With the script, on the host. Get the one file for your host (no checkout is needed yet; the VM gets its own in step 3):
+
+    https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/vm-create.cmd
+    https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/vm-create.sh
+
+and run it from a command prompt (Windows: Start, type `cmd`) in the folder you saved it to:
 
     vm-create.cmd  C:\path\debian-13.1.0-amd64-netinst.iso  "<host adapter to the Kogna>"  [C:\kmotion-share]
     bash vm-create.sh  ~/debian-13.1.0-amd64-netinst.iso  "<host interface to the Kogna>"  [~/kmotion-share]
