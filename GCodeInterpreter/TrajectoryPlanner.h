@@ -160,6 +160,15 @@ typedef struct
 	double	MaxJerkU;
 	double	MaxJerkV;
 
+	// 3rd Order planner: a direction change up to this many degrees between
+	// two moves of one feed, at least one of them too short to hold a
+	// tolerance-sized corner blend, is a facet of a smooth curve (an arc's
+	// chords, a CAM polyline), not a corner: no blend, the planner's filter
+	// smooths it and the curve runs at the speed its curvature, the
+	// tolerance and the feed allow.  Larger turns are corners, blended or
+	// stopped as ever.  0 = every junction is a corner (the old behavior)
+	double	CurveFacetAngle;
+
 } MOTION_PARAMS;
 
 

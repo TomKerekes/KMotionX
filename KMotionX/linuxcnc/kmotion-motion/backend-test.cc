@@ -53,7 +53,16 @@
 //                         (KM_KOGNA=1 selects those settings in simulate mode; KM_CORNER_TOL,
 //                         KM_BREAK_ANGLE override the planner's corner settings)
 //   backend-test arcspeed how fast the planner lets a circle of r=1 run
-// Each check prints ok/FAIL; the exit status is the number of failures.
+//   backend-test curve    a curve of short moves (a 6.3 mm radius arc's chords, then the same arc
+//                         as 1 degree G1 facets) runs at the speed the filter window and the
+//                         tolerance allow, within the tolerance and the joints' limits, and a
+//                         90 degree corner is still blended; KM_3LINK=1 through the 3 Link
+//                         kinematics at the robot's joint limits (KM_ACT_VEL, KM_ACT_JERK vary them)
+//   backend-test canon    replays a program from LinuxCNC's canon dump (rs274 -g file.ngc) given
+//                         as KM_CANON=<file>, at the work offset KM_OFFSET="x y z" (inches), and
+//                         prints the program's time and the arcs' speeds
+// Each check prints ok/FAIL; the exit status is the number of failures. The planner's logs
+// (TPSegLog.csv, TP3_Timeline.log) go to /tmp/backend-test, or to KMX_LOG_DIR when set.
 // KM_BOARD=1 in the environment runs the backend in board mode with the kmotion-kogna
 // settings (2540 counts/in, 9.84 in/s, the config's MinirouterInit.c): "abort" then measures the real
 // stop on the Kogna, with KM_JOG0=1 adding the Jog<ch>=0 the protocol side used to send.
@@ -72,6 +81,10 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <sys/stat.h>
+
+// the least mean speed on the curve the curve scenario accepts, in/s (one chord per window ran it at 0.19)
+#define KM_CURVE_MIN_SPEED 0.5
 
 static int failures = 0;
 static void check(bool ok, const char *what)
@@ -98,6 +111,7 @@ struct Follower {
     bool have_prev = false;
     double prev[3];
     std::map<int, Extent> extent;
+    std::map<int, double> t_start, t_end;   // when each move became active, and stopped being
     std::string messages;
     std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     explicit Follower(KmBackend &k) : km(k) { memset(&st, 0, sizeof st); }
@@ -119,6 +133,8 @@ struct Follower {
             if (st.active_id) extent[st.active_id].add(st.pos);
             if (st.active_id != last_id) {
                 printf("  t=%6.2f line %2d starts at X%.3f Y%.3f Z%.3f depth %d\n", t, st.active_id, st.pos[0], st.pos[1], st.pos[2], st.depth);
+                if (last_id > 0) t_end[last_id] = t;
+                if (st.active_id > 0 && !t_start.count(st.active_id)) t_start[st.active_id] = t;
                 last_id = st.active_id;
             }
             if (t - last_report >= 5) { last_report = t; printf("  t=%6.2f X%.3f Y%.3f Z%.3f v=%.3f\n", t, st.pos[0], st.pos[1], st.pos[2], st.current_vel); }
@@ -1199,7 +1215,7 @@ static void scenario_tapsegs(KmBackend &km)
     f.run();
     printf("  t=%.2f: the feed ended at Z%.4f\n", f.t, f.st.pos[2]);
     check(f.at(0, 0, -0.2), "the feed ends at Z-0.2");
-    printf("  the planner's knots are in /tmp/TPSegLog.csv\n");
+    printf("  the planner's knots are in %s/TPSegLog.csv\n", getenv("KMX_LOG_DIR"));
 }
 
 // threading (G33): lines under spindle sync form one run, planned at pitch x rev/s (here
@@ -1222,15 +1238,361 @@ static void scenario_thread(KmBackend &km)
     check(f.messages.empty(), "no messages");
 }
 
+
+// ---- the planner's knots from its segment log ---------------------------------------------
+// The simulate replay publishes positions at the poll period; the planner's own output is finer:
+// the cubic knots (CUBIC_KNOTS) in TPSegLog.csv, each axis a cubic of time over the knot. Their
+// derivatives are the speed, acceleration and jerk the board is told to run, per actuator (per
+// joint), exactly; the positions sampled at 1 ms, through the kinematics, are the pen's path
+struct KnotLog {
+    double vmax[8] = {}, amax[8] = {}, jmax[8] = {};
+    std::vector<double> t;                      // sample times (1 ms apart within a knot)
+    std::vector<std::array<double, 3>> p;       // CAD positions
+    double total = 0;                           // the knots' total time
+    int knots = 0;
+    bool load(KmBackend &km, const std::string &path)
+    {
+        FILE *f = fopen(path.c_str(), "r");
+        if (!f) return false;
+        char line[8192];
+        double tt = 0;
+        while (fgets(line, sizeof line, f)) {
+            if (line[0] != 'K') continue;
+            // kind,plane,ccw,seq,dx,dwell,ntrips, 8 x P0, 8 x P1, xc, yc, tt0, the 32 coefficients
+            double v[60] = {};
+            int n = 0;
+            for (char *tok = strtok(line, ","); tok && n < 60; tok = strtok(NULL, ",")) v[n++] = atof(tok);
+            if (n < 58) continue;
+            double T = v[25];
+            if (!(T > 0)) continue;
+            const double *K = &v[26];
+            knots++;
+            for (int a = 0; a < 8; a++) {
+                double ka = K[4 * a], kb = K[4 * a + 1], kc = K[4 * a + 2];
+                auto vel = [&](double x) { return (3 * ka * x + 2 * kb) * x + kc; };
+                double vm = std::max(fabs(vel(0)), fabs(vel(T)));
+                if (ka != 0) { double x = -kb / (3 * ka); if (x > 0 && x < T) vm = std::max(vm, fabs(vel(x))); }
+                double am = std::max(fabs(2 * kb), fabs(6 * ka * T + 2 * kb));
+                double jm = fabs(6 * ka);
+                if (vm > vmax[a]) vmax[a] = vm;
+                if (am > amax[a]) amax[a] = am;
+                if (jm > jmax[a]) jmax[a] = jm;
+            }
+            for (double x = 0; x < T - 1e-9; x += 0.001) {
+                double joints[8], cad[9];
+                for (int a = 0; a < 8; a++) joints[a] = ((K[4 * a] * x + K[4 * a + 1]) * x + K[4 * a + 2]) * x + K[4 * a + 3];
+                if (!km.joints_to_cad(joints, cad)) continue;
+                t.push_back(tt + x);
+                p.push_back({cad[0], cad[1], cad[2]});
+            }
+            tt += T;
+        }
+        fclose(f);
+        total = tt;
+        return knots > 0;
+    }
+    // the speed between samples i and i+1
+    double speed(size_t i) const
+    {
+        if (i + 1 >= p.size()) return 0;
+        double dt = t[i + 1] - t[i];
+        if (dt <= 0) return 0;
+        return sqrt(pow(p[i + 1][0] - p[i][0], 2) + pow(p[i + 1][1] - p[i][1], 2) + pow(p[i + 1][2] - p[i][2], 2)) / dt;
+    }
+};
+
+// the programmed path as geometry: lines and counterclockwise XY arcs, to measure the executed
+// path's deviation from it and to tell which element a sample belongs to
+struct PathGeom {
+    struct El { bool arc; double a[3], b[3], c[3], r, th0, dth; };
+    std::vector<El> els;
+    void line(const double *a, const double *b)
+    {
+        El e{}; e.arc = false; memcpy(e.a, a, sizeof e.a); memcpy(e.b, b, sizeof e.b); els.push_back(e);
+    }
+    void arc(const double *a, const double *b, const double *c)   // CCW about c in the XY plane
+    {
+        El e{}; e.arc = true; memcpy(e.a, a, sizeof e.a); memcpy(e.b, b, sizeof e.b); memcpy(e.c, c, sizeof e.c);
+        e.r = hypot(a[0] - c[0], a[1] - c[1]);
+        e.th0 = atan2(a[1] - c[1], a[0] - c[0]);
+        e.dth = atan2(b[1] - c[1], b[0] - c[0]) - e.th0;
+        if (e.dth <= 0) e.dth += 2 * M_PI;
+        els.push_back(e);
+    }
+    static double dist_el(const El &e, const double *p)
+    {
+        if (!e.arc) {
+            double d[3] = {e.b[0] - e.a[0], e.b[1] - e.a[1], e.b[2] - e.a[2]};
+            double l2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            double f = l2 > 0 ? ((p[0] - e.a[0]) * d[0] + (p[1] - e.a[1]) * d[1] + (p[2] - e.a[2]) * d[2]) / l2 : 0;
+            f = std::min(1.0, std::max(0.0, f));
+            return sqrt(pow(p[0] - e.a[0] - f * d[0], 2) + pow(p[1] - e.a[1] - f * d[1], 2) + pow(p[2] - e.a[2] - f * d[2], 2));
+        }
+        double th = atan2(p[1] - e.c[1], p[0] - e.c[0]) - e.th0;
+        while (th < 0) th += 2 * M_PI;
+        double dz = p[2] - e.c[2];
+        if (th <= e.dth) return hypot(hypot(p[0] - e.c[0], p[1] - e.c[1]) - e.r, dz);
+        double da = sqrt(pow(p[0] - e.a[0], 2) + pow(p[1] - e.a[1], 2) + pow(p[2] - e.a[2], 2));
+        double db = sqrt(pow(p[0] - e.b[0], 2) + pow(p[1] - e.b[1], 2) + pow(p[2] - e.b[2], 2));
+        return std::min(da, db);
+    }
+    int nearest(const double *p, double *dist) const
+    {
+        int best = -1;
+        double bd = 1e30;
+        for (size_t i = 0; i < els.size(); i++) { double d = dist_el(els[i], p); if (d < bd) { bd = d; best = (int) i; } }
+        if (dist) *dist = bd;
+        return best;
+    }
+};
+
+// what one pass over the curve path came to: the time spent on the arc element, the speeds
+// there, the deviation from the programmed path everywhere, the crawl at the 90 degree corner
+struct CurveResult {
+    double arc_time = 0, arc_vmax = 0, arc_vmean = 0, dev_max = 0, corner_vmin = 1e9, total = 0;
+    double in_vmin = 1e9, in_vmax = 0, in_amax = 0;   // the arc's interior (10..41 of its 51 degrees): the
+                                                      // speed's range and the tangential acceleration
+    double jv[8] = {}, ja[8] = {}, jj[8] = {};
+};
+static CurveResult measure_curve(KmBackend &km, const std::string &logfile, const PathGeom &path, int arc_el,
+                                 double arc_len, const double *corner, const char *what)
+{
+    CurveResult r;
+    KnotLog kl;
+    check(kl.load(km, logfile), "the knot log was written");
+    std::string keep = logfile.substr(0, logfile.rfind('/')) + "/curve-" + what + ".csv";
+    rename(logfile.c_str(), keep.c_str());      // this pass's knots, kept for a look
+    int on_arc = 0;
+    const PathGeom::El &arc = path.els[arc_el];
+    double vprev = -1, tprev = 0;
+    int dev_el = -1; double dev_v = 0, dev_t = 0; std::array<double, 3> dev_p{};
+    for (size_t i = 0; i + 1 < kl.p.size(); i++) {
+        double d;
+        int el = path.nearest(kl.p[i].data(), &d);
+        double v = kl.speed(i);
+        if (d > r.dev_max) { r.dev_max = d; dev_el = el; dev_v = v; dev_t = kl.t[i]; dev_p = kl.p[i]; }
+        if (el == arc_el) {
+            on_arc++;
+            if (v > r.arc_vmax) r.arc_vmax = v;
+            double th = atan2(kl.p[i][1] - arc.c[1], kl.p[i][0] - arc.c[0]) - arc.th0;
+            while (th < 0) th += 2 * M_PI;
+            if (th > 10 * M_PI / 180 && th < 41 * M_PI / 180) {
+                if (v < r.in_vmin) r.in_vmin = v;
+                if (v > r.in_vmax) r.in_vmax = v;
+                if (vprev >= 0 && kl.t[i] > tprev) r.in_amax = std::max(r.in_amax, fabs(v - vprev) / (kl.t[i] - tprev));
+                vprev = v; tprev = kl.t[i];
+            }
+        }
+        double dc = sqrt(pow(kl.p[i][0] - corner[0], 2) + pow(kl.p[i][1] - corner[1], 2) + pow(kl.p[i][2] - corner[2], 2));
+        if (dc < 0.02 && v < r.corner_vmin) r.corner_vmin = v;
+    }
+    r.arc_time = on_arc * 0.001;
+    r.arc_vmean = r.arc_time > 0 ? arc_len / r.arc_time : 0;
+    r.total = kl.total;
+    memcpy(r.jv, kl.vmax, sizeof r.jv); memcpy(r.ja, kl.amax, sizeof r.ja); memcpy(r.jj, kl.jmax, sizeof r.jj);
+    printf("  %s: %d knots, %.2f s; on the arc %.2f s, mean %.3f in/s, max %.3f in/s; deviation max %.5f in; corner crawl %.3f in/s\n",
+           what, kl.knots, kl.total, r.arc_time, r.arc_vmean, r.arc_vmax, r.dev_max, r.corner_vmin);
+    printf("    the arc's interior: speed %.3f..%.3f in/s, tangential accel up to %.1f in/s^2\n", r.in_vmin, r.in_vmax, r.in_amax);
+    printf("    the largest deviation is nearest element %d (0 approach, 1 arc, 2 exit, 3 after the corner) at t=%.3f X%.4f Y%.4f, speed %.3f in/s\n",
+           dev_el, dev_t, dev_p[0], dev_p[1], dev_v);
+    printf("    per joint max |v| %.2f %.2f %.2f  |a| %.1f %.1f %.1f  |j| %.0f %.0f %.0f\n",
+           kl.vmax[0], kl.vmax[1], kl.vmax[2], kl.amax[0], kl.amax[1], kl.amax[2], kl.jmax[0], kl.jmax[1], kl.jmax[2]);
+    return r;
+}
+
+// A curve made of short moves must run at the speed the filter window and the tolerance allow,
+// not at one chord per window: an approach line, a 6.3 mm radius 51 degree G3 arc at F 2.5
+// in/s (the chords ArcFeedAccel makes of it), its tangent exit line, then a 90 degree corner;
+// then the same path with the arc as 1 degree G1 facets (a CAM polyline). Measured from the
+// planner's knots: the speed on the arc, the deviation from the programmed path (within the
+// corner tolerance everywhere), each joint's v/a/j within its limits, the corner still blended
+// (a crawl, no stop), and the facets planned like the arc. KM_3LINK=1 runs it through the
+// 3 Link kinematics at the robot's joint limits
+static void scenario_curve(KmBackend &km, const KmConfig &cfg, const std::string &logdir)
+{
+    const double F = getenv("KM_CURVE_F") ? atof(getenv("KM_CURVE_F")) : 2.5, Acc = 30, Rapid = 3.0, Z = 0.1;
+    const double R = getenv("KM_CURVE_R") ? atof(getenv("KM_CURVE_R")) : 0.248;                 // the arc's radius, inches
+    const double ang = (getenv("KM_CURVE_DEG") ? atof(getenv("KM_CURVE_DEG")) : 51) * M_PI / 180;   // and angle
+    const int nfacet = (int) lround(ang * 180 / M_PI);                                          // 1 degree facets
+    const double tol = cfg.corner_tol;
+    printf("  arc radius %.3f in, %.0f degrees, F %.2f in/s\n", R, ang * 180 / M_PI, F);
+    double A[9] = {-0.5, -0.3, Z, 0, 0, 0, 0, 0, 0}, B[9] = {0, -0.3, Z, 0, 0, 0, 0, 0, 0};
+    double O[3] = {0, -0.3 + R, Z};
+    double C[9] = {R * sin(ang), -0.3 + R * (1 - cos(ang)), Z, 0, 0, 0, 0, 0, 0};
+    double u[2] = {cos(ang), sin(ang)};                              // the tangent at C
+    double D[9] = {C[0] + 0.4 * u[0], C[1] + 0.4 * u[1], Z, 0, 0, 0, 0, 0, 0};
+    double E[9] = {D[0] - 0.4 * u[1], D[1] + 0.4 * u[0], Z, 0, 0, 0, 0, 0, 0};
+    double nz[3] = {0, 0, 1};
+    PathGeom path;
+    path.line(A, B); path.arc(B, C, O); path.line(C, D); path.line(D, E);
+    const std::string logfile = logdir + "/TPSegLog.csv";
+    printf("  tolerance %.4f, collinear %.4f, kinematics %s\n", tol, cfg.collinear_tol, km.identity_kinematics() ? "identity" : cfg.kinematics);
+
+    // the arc
+    Follower f(km);
+    km.line(A, Rapid, Acc, true, 1);
+    f.run();
+    check(f.at(A[0], A[1], A[2]), "the rapid reached the start");
+    km.seglog_new_run();
+    auto tp0 = std::chrono::steady_clock::now();
+    km.line(B, F, Acc, false, 2);
+    km.arc(C, O, nz, 0, F, Acc, 3);
+    km.line(D, F, Acc, false, 4);
+    km.line(E, F, Acc, false, 5);
+    f.t0 = std::chrono::steady_clock::now(); f.t = 0;
+    // the planner's own time: the worker takes the moves as fast as it plans them (no throttle
+    // without a board), so the wait until the queue is empty is the planning time
+    while (km.moves_queued() > 0) std::this_thread::sleep_for(std::chrono::microseconds(200));
+    printf("  the planner took %.3f s to plan the arc path\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tp0).count());
+    f.run();
+    check(f.at(E[0], E[1], E[2]), "the arc path ended at E");
+    CurveResult ra = measure_curve(km, logfile, path, 1, R * ang, D, "arc");
+
+    // the same arc as 1 degree facets
+    km.line(A, Rapid, Acc, true, 10);
+    f.run();
+    km.seglog_new_run();
+    tp0 = std::chrono::steady_clock::now();
+    km.line(B, F, Acc, false, 11);
+    int id = 12;
+    for (int k = 1; k <= nfacet; k++) {
+        double th = k * ang / nfacet;
+        double P[9] = {R * sin(th), -0.3 + R * (1 - cos(th)), Z, 0, 0, 0, 0, 0, 0};
+        km.line(P, F, Acc, false, id++);
+    }
+    km.line(D, F, Acc, false, id++);
+    km.line(E, F, Acc, false, id++);
+    f.t0 = std::chrono::steady_clock::now(); f.t = 0;
+    while (km.moves_queued() > 0) std::this_thread::sleep_for(std::chrono::microseconds(200));
+    printf("  the planner took %.3f s to plan the facet path\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tp0).count());
+    f.run();
+    check(f.at(E[0], E[1], E[2]), "the facet path ended at E");
+    CurveResult rf = measure_curve(km, logfile, path, 1, R * ang, D, "facets");
+
+    // the joints' limits (the actuators'; the axes' without a kinematics)
+    for (int i = 0; i < 3; i++) {
+        const KmAxisParams &a = cfg.axis[i];
+        bool kin = cfg.kinematics[0] != 0;
+        double vl = kin ? a.act_max_vel : a.max_vel, al = kin ? a.act_max_accel : a.max_accel, jl = kin ? a.act_max_jerk : a.max_jerk;
+        char what[128];
+        snprintf(what, sizeof what, "joint %d within its limits: v %.2f/%.2f a %.1f/%.1f j %.0f/%.0f", i,
+                 std::max(ra.jv[i], rf.jv[i]), vl, std::max(ra.ja[i], rf.ja[i]), al, std::max(ra.jj[i], rf.jj[i]), jl);
+        check(std::max(ra.jv[i], rf.jv[i]) <= 1.02 * vl && std::max(ra.ja[i], rf.ja[i]) <= 1.02 * al && std::max(ra.jj[i], rf.jj[i]) <= 1.1 * jl, what);
+    }
+    check(ra.dev_max <= tol * 1.05, "the arc path stays within the tolerance");
+    check(rf.dev_max <= tol * 1.05, "the facet path stays within the tolerance");
+    check(ra.arc_vmean >= KM_CURVE_MIN_SPEED, "the arc runs at the speed the window allows, not one chord per window");
+    check(rf.arc_vmean >= KM_CURVE_MIN_SPEED, "the facets run at that speed too");
+    check(fabs(rf.arc_time - ra.arc_time) <= 0.25 * ra.arc_time, "the facets plan like the arc (times within 25%)");
+    // at this tolerance the 90 degree corner's blend would crawl below 5% of the feed, so the
+    // planner stops there instead (TP3_CORNER_STOP_FRAC), with or without the facet rule
+    check(ra.corner_vmin < 0.005 && rf.corner_vmin < 0.005, "the 90 degree corner stops, as before");
+    check(f.messages.empty(), "no messages");
+}
+
+// replays a canon dump of a G-code program (LinuxCNC's rs274 -g file.ngc: STRAIGHT_FEED,
+// STRAIGHT_TRAVERSE, ARC_FEED in the XY plane, SET_FEED_RATE, USE_LENGTH_UNITS,
+// SET_MOTION_CONTROL_MODE) as task would hand it over: KM_CANON=<file>, KM_OFFSET="x y z" the
+// work offset in inches (the program's G54). Prints the program's time and each move's
+static void scenario_canon(KmBackend &km, double rapid, double acc)
+{
+    const char *file = getenv("KM_CANON");
+    if (!file) { check(false, "KM_CANON=<canon dump> names the program"); return; }
+    double off[3] = {0, 0, 0};
+    if (getenv("KM_OFFSET")) sscanf(getenv("KM_OFFSET"), "%lf %lf %lf", &off[0], &off[1], &off[2]);
+    FILE *fp = fopen(file, "r");
+    if (!fp) { check(false, "the canon dump opens"); return; }
+    double scale = 1.0, feed = 0;
+    KmState st;
+    km.state(st);
+    double cur[3] = {st.pos[0], st.pos[1], st.pos[2]};
+    struct Move { int id; bool rapid, arc; double len; };
+    std::vector<Move> moves;
+    char line[1024];
+    int id = 0;
+    while (fgets(line, sizeof line, fp)) {
+        char *c = strchr(line, 'N');
+        if (!c) continue;
+        c = strchr(c, ' ');
+        if (!c) continue;
+        c++;
+        double a[9];
+        if (strstr(c, "USE_LENGTH_UNITS")) scale = strstr(c, "MM") ? 1 / 25.4 : 1.0;
+        else if (sscanf(c, "SET_FEED_RATE(%lf)", &a[0]) == 1) feed = a[0] * scale / 60;
+        else if (strstr(c, "SET_MOTION_CONTROL_MODE")) {
+            if (sscanf(c, "SET_MOTION_CONTROL_MODE(CANON_CONTINUOUS, %lf)", &a[0]) == 1) km.set_path_mode(2, a[0] * scale);
+            else if (strstr(c, "EXACT_PATH")) km.set_path_mode(1, 0);
+            else if (strstr(c, "EXACT_STOP")) km.set_path_mode(0, 0);
+        } else if (sscanf(c, "STRAIGHT_TRAVERSE(%lf, %lf, %lf", &a[0], &a[1], &a[2]) == 3 || sscanf(c, "STRAIGHT_FEED(%lf, %lf, %lf", &a[0], &a[1], &a[2]) == 3) {
+            bool rp = strstr(c, "TRAVERSE") != NULL;
+            double e[9] = {a[0] * scale + off[0], a[1] * scale + off[1], a[2] * scale + off[2], 0, 0, 0, 0, 0, 0};
+            moves.push_back({++id, rp, false, sqrt(pow(e[0] - cur[0], 2) + pow(e[1] - cur[1], 2) + pow(e[2] - cur[2], 2))});
+            km.line(e, rp ? rapid : feed, acc, rp, id);
+            memcpy(cur, e, sizeof cur);
+        } else if (sscanf(c, "ARC_FEED(%lf, %lf, %lf, %lf, %lf, %lf", &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]) == 6) {
+            double e[9] = {a[0] * scale + off[0], a[1] * scale + off[1], a[5] * scale + off[2], 0, 0, 0, 0, 0, 0};
+            double ctr[3] = {a[2] * scale + off[0], a[3] * scale + off[1], cur[2]}, nz[3] = {0, 0, 1};
+            int rot = (int) a[4];
+            int turn = rot > 0 ? rot - 1 : rot;
+            double r = hypot(cur[0] - ctr[0], cur[1] - ctr[1]);
+            double th = atan2(e[1] - ctr[1], e[0] - ctr[0]) - atan2(cur[1] - ctr[1], cur[0] - ctr[0]);
+            if (rot > 0) { if (th <= 0) th += 2 * M_PI; } else { if (th >= 0) th -= 2 * M_PI; }
+            moves.push_back({++id, false, true, r * fabs(th)});
+            km.arc(e, ctr, nz, turn, feed, acc, id);
+            memcpy(cur, e, sizeof cur);
+        } else if (strstr(c, "PROGRAM_END")) break;
+    }
+    fclose(fp);
+    printf("  %d moves handed over\n", id);
+    auto tp0 = std::chrono::steady_clock::now();
+    // a long first move through a kinematics takes the planner a while: wait for the replay
+    for (int i = 0; i < 6000; i++) { km.state(st); if (st.running) break; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    Follower f(km);
+    std::thread planwatch([&] {       // the planner's own time: the worker takes the moves as it plans them
+        while (km.moves_queued() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        printf("  the planner took %.2f s to plan the program\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tp0).count());
+    });
+    f.run(600);
+    planwatch.join();
+    double feed_len = 0, feed_time = 0, arc_len = 0, arc_time = 0;
+    for (const Move &m : moves) {
+        if (!f.t_start.count(m.id)) continue;
+        double dur = f.t_end.count(m.id) ? f.t_end[m.id] - f.t_start[m.id] : 0;
+        if (!m.rapid) { feed_len += m.len; feed_time += dur; }
+        if (m.arc) { arc_len += m.len; arc_time += dur; printf("  arc %3d: %.3f in in %.2f s = %.3f in/s\n", m.id, m.len, dur, dur > 0 ? m.len / dur : 0); }
+    }
+    printf("  program time %.2f s; feeds %.2f in in %.2f s (mean %.3f in/s); arcs %.2f in in %.2f s (mean %.3f in/s)\n",
+           f.t, feed_len, feed_time, feed_time > 0 ? feed_len / feed_time : 0, arc_len, arc_time, arc_time > 0 ? arc_len / arc_time : 0);
+    check(f.at(cur[0], cur[1], cur[2]), "the program ended at its last point");
+    check(f.messages.empty(), "no messages");
+}
+
 int main(int argc, char **argv)
 {
     const char *scenario = argc > 1 ? argv[1] : "program";
+    // the planner's logs (TPSegLog.csv, TP3_Timeline.log) go to their own directory, never to
+    // /tmp where a LinuxCNC running beside the test writes its own
+    if (!getenv("KMX_LOG_DIR")) { mkdir("/tmp/backend-test", 0777); setenv("KMX_LOG_DIR", "/tmp/backend-test", 1); }
+    const std::string logdir = getenv("KMX_LOG_DIR");
     KmConfig cfg;
     cfg.log_segments = true;
     for (int i = 0; i < 3; i++) { cfg.axis[i].counts_per_unit = 4000; cfg.axis[i].max_vel = 4; cfg.axis[i].max_accel = 100; cfg.axis[i].max_jerk = 1000; }
     if (getenv("KM_KOGNA")) {               // the kmotion-kogna settings, simulate mode
         for (int i = 0; i < 3; i++) { cfg.axis[i].counts_per_unit = 2540; cfg.axis[i].max_vel = 9.84; cfg.axis[i].max_accel = 98.4; cfg.axis[i].max_jerk = 984; }
     }
+    const bool link3 = getenv("KM_3LINK") || strcmp(scenario, "kins3link") == 0 || strcmp(scenario, "tapsegs") == 0;
+    if (link3) {                            // the kmotion-3link settings, simulate mode
+        snprintf(cfg.kinematics, sizeof cfg.kinematics, "3Link");
+        for (int i = 0; i < 3; i++) {
+            KmAxisParams &a = cfg.axis[i];
+            a.counts_per_unit = 11.37778; a.max_vel = 3; a.max_accel = 30; a.max_jerk = 300;
+            a.act_max_vel = i == 0 ? 35 : 17.6; a.act_max_accel = 700; a.act_max_jerk = 7000; a.act_degrees = true;
+            if (getenv("KM_ACT_VEL")) a.act_max_vel = atof(getenv("KM_ACT_VEL"));     // the joints' limits, all alike
+            if (getenv("KM_ACT_JERK")) a.act_max_jerk = atof(getenv("KM_ACT_JERK"));
+        }
+    }
+    if (strcmp(scenario, "curve") == 0 || strcmp(scenario, "canon") == 0) { cfg.corner_tol = 0.002; cfg.collinear_tol = 0.0005; }   // the robot's
+    if (getenv("KM_CURVE_FACET_ANGLE")) cfg.curve_facet_angle = atof(getenv("KM_CURVE_FACET_ANGLE"));   // 0: every junction a corner, as before
     if (getenv("KM_CORNER_TOL")) cfg.corner_tol = atof(getenv("KM_CORNER_TOL"));
     if (getenv("KM_COLLINEAR_TOL")) cfg.collinear_tol = atof(getenv("KM_COLLINEAR_TOL"));
     if (getenv("KM_JERK")) for (int i = 0; i < 3; i++) cfg.axis[i].max_jerk = atof(getenv("KM_JERK"));
@@ -1238,14 +1600,6 @@ int main(int argc, char **argv)
     if (getenv("KM_LOOKAHEAD")) cfg.lookahead = atof(getenv("KM_LOOKAHEAD"));
     const bool exact = getenv("KM_EXACT") != NULL;      // the path mode G61 for the scenario (default G64)
     if (strcmp(scenario, "gated") == 0) cfg.queue_limit = 20;     // the backend must know task's limit
-    if (strcmp(scenario, "kins3link") == 0 || strcmp(scenario, "tapsegs") == 0) {                      // the kmotion-3link settings, simulate mode
-        snprintf(cfg.kinematics, sizeof cfg.kinematics, "3Link");
-        for (int i = 0; i < 3; i++) {
-            KmAxisParams &a = cfg.axis[i];
-            a.counts_per_unit = 11.37778; a.max_vel = 3; a.max_accel = 30; a.max_jerk = 300;
-            a.act_max_vel = i == 0 ? 35 : 17.6; a.act_max_accel = 700; a.act_max_jerk = 7000; a.act_degrees = true;
-        }
-    }
     if (getenv("KM_BOARD")) {
         cfg.simulate = false;
         const std::string kogna = kogna_config_dir();
@@ -1306,7 +1660,7 @@ int main(int argc, char **argv)
     KmBackend *km = new KmBackend;
     if (!km->init(cfg, pos)) { printf("init failed\n"); return 1; }
     if (exact) km->set_path_mode(1, 0);                 // G61: exact path, as LinuxCNC's canned cycles run
-    printf("mode: %s, scenario: %s\n", km->mode_name(), scenario);
+    printf("mode: %s, scenario: %s, logs in %s\n", km->mode_name(), scenario, logdir.c_str());
     if (getenv("KM_PATH_TOL")) km->set_path_mode(2, atof(getenv("KM_PATH_TOL")));   // as G64 P<tol> would
     if (strcmp(scenario, "arcs") == 0) scenario_arcs(*km);
     else if (strcmp(scenario, "abort") == 0) scenario_abort(*km);
@@ -1330,6 +1684,8 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "joglimit") == 0) scenario_joglimit(*km);
     else if (strcmp(scenario, "tapsegs") == 0) scenario_tapsegs(*km);
     else if (strcmp(scenario, "thread") == 0) scenario_thread(*km);
+    else if (strcmp(scenario, "curve") == 0) scenario_curve(*km, cfg, logdir);
+    else if (strcmp(scenario, "canon") == 0) scenario_canon(*km, link3 ? 3.0 : cfg.axis[0].max_vel, link3 ? 30.0 : cfg.axis[0].max_accel);
     else scenario_program(*km);
     if (km) {
         auto t0 = std::chrono::steady_clock::now();

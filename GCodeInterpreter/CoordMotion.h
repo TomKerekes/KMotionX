@@ -282,6 +282,9 @@ public:
 		double x, double y, double z, double a, double b, double c, double u, double v,
 		int sequence_number, int ID);
 	int TP3FlushStager();
+	double TP3WindowTime();                 // the planner's FIR span Tw
+	void TP3ChordLimits(double F, const double *P, const double *d1, const double *d2,
+		double *chordTol, double *angMax);   // how fine a curve's chords (probed at P along d1 -> d2)
 
 	// buffered controller commands under the 3rd Order planner: held while a
 	// streaming run is open and attached to the knot that comes from the

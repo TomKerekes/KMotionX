@@ -71,6 +71,7 @@ CKinematics::CKinematics()
 	m_MotionParams.CornerTol = 0.0002;
 	m_MotionParams.LogSegments = false;
 	m_MotionParams.FacetAngle = 0.5;
+	m_MotionParams.CurveFacetAngle = 15.0;
 	m_MotionParams.UseOnlyLinearSegments=false;
 	m_MotionParams.DoRapidsAsFeeds=false;
 	m_MotionParams.DegreesA=false;

@@ -581,6 +581,9 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 }
 // Arc Feed with Specified Acceleration
 
+// the 3rd Order run's arc-chording depth (CTP3FeedRun::arcChord, defined below)
+static void TP3ArcChord(CCoordMotion *CM, int delta);
+
 int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double DesiredAccel, CANON_PLANE plane,
 				double first_end, double second_end, 
 		        double first_axis, double second_axis, int rotation,
@@ -598,8 +601,33 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 	// staged straight chord (collinear combining) must reach the planner
 	// first (the bisection below re-enters with the stager already empty;
 	// a chord being committed never comes through here)
-	if (MP->ThirdOrderTP && (!m_Simulate || m_DoTime))
+	bool tp3 = MP->ThirdOrderTP && (!m_Simulate || m_DoTime);
+	if (tp3)
 		if (TP3FlushStager()) return 1;
+
+	// 3rd Order Planner: the arc is ONE programmed move.  Its chords (the
+	// bisection below) go to the planner directly - not through the
+	// collinear stager, which would merge them back into chords of the
+	// Collinear Tolerance - and every chord end before the arc's own end is
+	// an interior point (the exact path modes do not stop there, as for
+	// the kinematics' pieces of a line).  Both hold for the outermost call
+	// of the programmed arc and everything inside it
+	bool outerArc = tp3 && !m_TP3Splitting;
+	if (outerArc)
+	{
+		double E[8] = {0, 0, 0, a, b, c, u, v};
+		if (plane == CANON_PLANE_XY)      { E[0] = first_end; E[1] = second_end; E[2] = axis_end_point; }
+		else if (plane == CANON_PLANE_XZ) { E[2] = first_end; E[0] = second_end; E[1] = axis_end_point; }
+		else                              { E[1] = first_end; E[2] = second_end; E[0] = axis_end_point; }
+		memcpy(m_TP3SplitEnd, E, sizeof E);
+		m_TP3Splitting = true;
+		TP3ArcChord(this, +1);
+	}
+	struct ArcScope      // restored on every return path of this call
+	{
+		CCoordMotion *cm; bool outer;
+		~ArcScope() { if (outer) { cm->m_TP3Splitting = false; TP3ArcChord(cm, -1); } }
+	} arcScope = {this, outerArc};
 
 	if (FeedRateToUse <= 0.0)
 	{
@@ -692,7 +720,30 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 		 (MP->DegreesB && fabs(b - current_b) > MP->MaxAngularChange) ||
 		 (MP->DegreesC && fabs(c - current_c) > MP->MaxAngularChange));
 
-	if (cord < MP->CollinearTol && !RotaryCoarse)
+	// 3rd Order planner: chords finer than the Collinear Tolerance, both in
+	// chord error and in angle (TP3ChordLimits) - their junctions are facets
+	// of the curve to the planner (TP3CurveFacet), which cost no speed
+	double chordTol = MP->CollinearTol, angMax = 1e30;
+	if (tp3)
+	{
+		// the probe: the arc's tangent at its start, and that tangent turned
+		// one degree toward the center (the way the arc turns), as CAD
+		// directions in the plane's axes
+		int i1 = 0, i2 = 1;
+		if (plane == CANON_PLANE_XZ) { i1 = 2; i2 = 0; }
+		else if (plane == CANON_PLANE_YZ) { i1 = 1; i2 = 2; }
+		double sgn = (dtheta >= 0.0) ? 1.0 : -1.0;
+		double t1 = -sgn * sin(theta0), t2 = sgn * cos(theta0);        // the tangent
+		double n1 = -cos(theta0), n2 = -sin(theta0);                   // toward the center
+		const double dl = PI / 180.0;
+		double P[8] = {current_x, current_y, current_z, current_a, current_b, current_c, current_u, current_v};
+		double d1[8] = {0, 0, 0, 0, 0, 0, 0, 0}, d2[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+		d1[i1] = t1;  d1[i2] = t2;
+		d2[i1] = t1 * cos(dl) + n1 * sin(dl);  d2[i2] = t2 * cos(dl) + n2 * sin(dl);
+		TP3ChordLimits(FeedRateToUse, P, d1, d2, &chordTol, &angMax);
+	}
+
+	if (cord < chordTol && fabs(dtheta) <= angMax && !RotaryCoarse)
 	{
 		// use straight line
 
@@ -983,7 +1034,20 @@ int CCoordMotion::ArcFeedAccel(double DesiredFeedRate_in_per_sec, double Desired
 // Setup "Log" option (MP->LogSegments) is selected - the same switch that
 // enables the segment log; all logging no-ops when the file is closed.
 #ifdef _KMOTIONX
-#define TP3_TIMELINE_FILE "/tmp/TP3_Timeline.log"
+// Linux: the logs go under /tmp, or under KMX_LOG_DIR when it is set in
+// the environment - a planner test run beside a live LinuxCNC (the
+// backend-test harness) must not truncate the logs that run is writing
+#include <string>
+#include <cstdlib>
+static std::string KmxLogPath(const char *name)
+{
+	const char *dir = getenv("KMX_LOG_DIR");
+	std::string p = (dir && *dir) ? dir : "/tmp";
+	p += "/";
+	p += name;
+	return p;
+}
+#define TP3_TIMELINE_FILE KmxLogPath("TP3_Timeline.log").c_str()
 #else
 #define TP3_TIMELINE_FILE "c:\\Temp\\TP3_Timeline.log"
 #endif
@@ -1089,6 +1153,11 @@ public:
 	bool stRapid = false;
 	int stSeq = 0, stId = 0;
 	double stLen = 0, stMaxLen = 0;
+	double stDir[8];           // the last facet's unit direction (CAD)
+	double stTurn = 0;         // the chord's turn so far: the sum of the
+	                           // direction changes between its facets
+	int arcChord = 0;          // > 0: ArcFeedAccel is chording a programmed
+	                           // arc - its chords bypass the stager
 
 	// buffered controller commands issued while the run is open: held here
 	// (cmdIssued so far) and attached to the knot that comes from the
@@ -1104,6 +1173,13 @@ void CCoordMotion::TP3DeleteFeed()
 {
 	delete m_TP3Feed;
 	m_TP3Feed = NULL;
+}
+
+static void TP3ArcChord(CCoordMotion *CM, int delta)
+{
+	if (!CM->m_TP3Feed) CM->m_TP3Feed = new CTP3FeedRun;
+	CM->m_TP3Feed->arcChord += delta;
+	if (CM->m_TP3Feed->arcChord < 0) CM->m_TP3Feed->arcChord = 0;
 }
 
 static double TP3Dist8(const TP3::VecN &a, const TP3::VecN &b)
@@ -1587,9 +1663,37 @@ struct TP3BlendGeom
 {
 	double L1, L2;             // adjacent facet lengths (0 = degenerate)
 	double dDn, dDw;           // kink size: actuator norm, tip-weighted norm
+	double theta;              // the turn angle, radians: the larger of the
+	                           // tip-space and the actuator-space angles
+	double Lfull;              // the half-length a tolerance-sized blend
+	                           // WANTS (the full apex budget), before the
+	                           // clamp to the adjacent facets
 	double L, apex, reserve, tolF;
 	double vcap;               // blend corner-speed cap (see TP3ComputeBlend)
 };
+
+// the turn angle at a junction of unit directions d1 -> d2: in tip space
+// (the directions weighted by the tool-tip error per axis unit) and in
+// actuator space; the larger of the two
+static double TP3TurnAngle(const TP3::VecN &d1, const TP3::VecN &d2, double dDn,
+	const TP3::Waypoint &w0, const TP3::Waypoint &wp1)
+{
+	double aa = 0, bb = 0, ab = 0;
+	for (int i = 0; i < TP3::NAX; i++)
+	{
+		double wg = (w0.wgt[i] > wp1.wgt[i]) ? w0.wgt[i] : wp1.wgt[i];
+		double x = d1[i] * wg, y = d2[i] * wg;
+		aa += x*x;  bb += y*y;  ab += x*y;
+	}
+	double c = (aa > 0.0 && bb > 0.0) ? ab / sqrt(aa * bb) : 1.0;
+	if (c > 1.0) c = 1.0;
+	if (c < -1.0) c = -1.0;
+	double thetaW = acos(c);
+	double sinHalf = dDn / 2.0;
+	if (sinHalf > 1.0) sinHalf = 1.0;
+	double thetaA = 2.0 * asin(sinHalf);
+	return (thetaW > thetaA) ? thetaW : thetaA;
+}
 
 static void TP3ComputeBlend(const TP3::Waypoint &wm1, const TP3::Waypoint &w0,
 	const TP3::Waypoint &wp1, double dsFixed, double Tw, TP3BlendGeom *g)
@@ -1598,6 +1702,7 @@ static void TP3ComputeBlend(const TP3::Waypoint &wm1, const TP3::Waypoint &w0,
 	TP3::VecN d2 = wp1.p - w0.p;
 	g->L1 = d1.norm();  g->L2 = d2.norm();
 	g->dDn = g->dDw = g->L = g->apex = g->reserve = 0.0;
+	g->theta = g->Lfull = 0.0;
 	g->vcap = 1e30;
 	double tolmin = (w0.tol < wp1.tol) ? w0.tol : wp1.tol;
 	g->tolF = tolmin;
@@ -1607,11 +1712,13 @@ static void TP3ComputeBlend(const TP3::Waypoint &wm1, const TP3::Waypoint &w0,
 	TP3::VecN dD = d2 - d1;
 	g->dDn = dD.norm();
 	g->dDw = TP3WNorm(dD, w0, wp1);           // tip-referenced kink size
+	g->theta = TP3TurnAngle(d1, d2, g->dDn, w0, wp1);
 	if (g->dDw >= 1e-9)
 	{
 		double frac = TP3_FAIR_FRAC;
 		if (frac > 1.0 - TP3_FIR_MIN_FRAC) frac = 1.0 - TP3_FIR_MIN_FRAC;
 		double budget = frac * tolmin;
+		g->Lfull = 4.0 * budget / g->dDw;
 		// 49.9% (not 50%) so the two blends sharing a facet never meet:
 		// the remnant between them is 0.2% of the facet, invisible, and
 		// their waypoints stay distinct for Polyline::build's dedupe
@@ -1676,21 +1783,8 @@ static void TP3ComputeBlend(const TP3::Waypoint &wm1, const TP3::Waypoint &w0,
 		double vcap = vkink;
 		if (g->L > 0.0 && g->apex > 0.0 && 2.0 * g->L >= dsFixed)
 		{
-			double aa = 0, bb = 0, ab = 0;      // tip-space turn angle
-			for (int i = 0; i < TP3::NAX; i++)
-			{
-				double wg = (w0.wgt[i] > wp1.wgt[i]) ? w0.wgt[i] : wp1.wgt[i];
-				double x = d1[i] * wg, y = d2[i] * wg;
-				aa += x*x;  bb += y*y;  ab += x*y;
-			}
-			double c = (aa > 0.0 && bb > 0.0) ? ab / sqrt(aa * bb) : 1.0;
-			if (c > 1.0) c = 1.0;
-			if (c < -1.0) c = -1.0;
-			double thetaW = acos(c);
-			double sinHalf = g->dDn / 2.0;       // actuator-space turn angle
-			if (sinHalf > 1.0) sinHalf = 1.0;
-			double thetaA = 2.0 * asin(sinHalf);
-			double theta = (thetaW > thetaA) ? thetaW : thetaA;
+			double theta = g->theta;            // the larger of the tip-space and
+			                                    // actuator-space turn angles
 			double f = 0.20 + 0.58 * (1.0 - cos(0.5 * theta));
 			double vwin = 2.0 * g->L / Tw;
 			double scale = g->tolF / (f * g->apex);
@@ -1699,6 +1793,47 @@ static void TP3ComputeBlend(const TP3::Waypoint &wm1, const TP3::Waypoint &w0,
 		}
 		g->vcap = vcap;
 	}
+}
+
+// Is the junction at w0 (wm1 -> w0 -> wp1) a facet of a smooth curve rather
+// than a programmed corner?  Decided by geometry alone: a small direction
+// change - under the machine's CurveFacetAngle - between two moves of the
+// same programmed feed (both rapid, or both at one F), at least one of them
+// too short to hold a tolerance-sized blend (the blend TP3ComputeBlend would
+// emit is clamped by that facet).  That is exactly where a blend costs
+// speed: a blend clamped to half a facet caps the junction at 2L/Tw, one
+// facet per filter window, whatever the angle or the tolerance - 0.19 in/s
+// on the 3 Link's 6.4 degree arc chords, slower the finer the facets.  Such
+// a junction is handed to the planner as it is (no blend, no corner-speed
+// clamp, the full tolerance): the FIR filter smooths the kink and the
+// speed is bounded by the planner's own curvature caps - each actuator's
+// accel and jerk along the curve, the per-kink apex cap over its window
+// (finer facets raise it), the tolerance cap on the filter's residual
+// after its lateral pre-compensation - and by the feed.  An arc's chords
+// and a CAM polyline then run at the feed the window and the tolerance
+// allow.  Programmed corners (a larger turn, a feed change, or two moves
+// long enough for the full blend) are blended or stopped as before; so is
+// the first or last junction of a curve to a neighbour at an angle, as
+// those are corners by the same rule, while a tangent entry (a small
+// angle to a short chord) joins the curve.  The exact path modes keep
+// their stops (TP3CornerNeedsStop runs first).  CurveFacetAngle <= 0
+// turns the rule off: every junction is blended as before.
+static bool TP3CurveFacet(const MOTION_PARAMS *MP, const TP3::Waypoint &w0,
+	const TP3::Waypoint &wp1, const TP3BlendGeom &g)
+{
+	if (MP->CurveFacetAngle <= 0.0) return false;
+	if (g.L1 <= 0.0 || g.L2 <= 0.0 || g.dDw < 1e-9) return false;
+	if (g.theta > MP->CurveFacetAngle * PI / 180.0) return false;
+	// the same programmed feed on both sides (Fprog < 0 is a rapid)
+	if ((w0.Fprog < 0.0) != (wp1.Fprog < 0.0)) return false;
+	if (w0.Fprog >= 0.0)
+	{
+		double fmax = (w0.Fprog > wp1.Fprog) ? w0.Fprog : wp1.Fprog;
+		if (fabs(w0.Fprog - wp1.Fprog) > 1e-9 * fmax) return false;
+	}
+	// short: the tolerance-sized blend would be clamped by a facet
+	double Lmin = (g.L1 < g.L2) ? g.L1 : g.L2;
+	return g.Lfull > 0.499 * Lmin;
 }
 
 static void TP3EmitFairedVertex(CCoordMotion *CM, CTP3FeedRun *r,
@@ -1713,6 +1848,31 @@ static void TP3EmitFairedVertex(CCoordMotion *CM, CTP3FeedRun *r,
 		TP3::Waypoint w = w0;              // (nearly) collinear: keep vertex;
 		                                   // nothing spent, full tol stays
 		TP3AddWaypointThrottled(CM, r, w, "vertex");
+		return;
+	}
+
+	if (TP3CurveFacet(&CM->Kinematics->m_MotionParams, w0, wp1, g))
+	{
+		TP3::Waypoint w = w0;              // a facet of a smooth curve: the
+		                                   // raw vertex, full tolerance, the
+		                                   // planner's curvature caps bound it
+		if (tp3Log)
+		{
+			// the CAD-space turn, to compare with the tip-weighted kink the
+			// planner's per-kink cap takes (dDw)
+			double c1[3], c2[3], n1 = 0, n2 = 0, dot = 0;
+			for (int i = 0; i < 3; i++)
+			{
+				c1[i] = w0.cad[i] - wm1.cad[i]; c2[i] = wp1.cad[i] - w0.cad[i];
+				n1 += c1[i]*c1[i]; n2 += c2[i]*c2[i]; dot += c1[i]*c2[i];
+			}
+			double cc = (n1 > 0 && n2 > 0) ? dot / sqrt(n1*n2) : 1.0;
+			if (cc > 1.0) cc = 1.0;
+			if (cc < -1.0) cc = -1.0;
+			TP3Log("FACET          seq=%d theta=%.2fdeg cad=%.2fdeg dDw=%.4f L1=%.5f L2=%.5f Lfull=%.5f",
+				w0.seq, g.theta * 180.0 / PI, acos(cc) * 180.0 / PI, g.dDw, g.L1, g.L2, g.Lfull);
+		}
+		TP3AddWaypointThrottled(CM, r, w, "facet");
 		return;
 	}
 
@@ -1819,6 +1979,26 @@ int CCoordMotion::TP3StageMove(double DesiredFeedRate_in_per_sec, double Desired
 						b-r->stC[4], c-r->stC[5], u-r->stC[6], v-r->stC[7], &pure_angle);
 		if (dP == 0.0 && !RapidMode) return 0;   // zero length move: ignore
 
+		// this facet's direction, and the chord's turn with it
+		double dir[8], dn = 0, turn = 0;
+		for (i = 0; i < 8; i++) { dir[i] = P[i] - r->stC[i]; dn += dir[i]*dir[i]; }
+		dn = sqrt(dn);
+		if (dn > 0.0)
+		{
+			for (i = 0; i < 8; i++) { dir[i] /= dn; turn += (dir[i] - r->stDir[i]) * (dir[i] - r->stDir[i]); }
+			turn = r->stTurn + sqrt(turn);
+		}
+
+		// the chords of a polyline are kept finer than the Collinear
+		// Tolerance, in chord error and in turn (TP3ChordLimits, probed
+		// along the chord's first facet and this one): a curve's facets
+		// are no corners to the planner (TP3CurveFacet) and cost no speed,
+		// while the coarser chord's error and the kink between coarse
+		// chords would
+		double chordTol = MP->CollinearTol, angMax = 1e30;
+		TP3ChordLimits(RapidMode ? -1.0 : DesiredFeedRate_in_per_sec * SW, r->stA, r->stDir,
+			dn > 0.0 ? dir : NULL, &chordTol, &angMax);
+
 		double fmin = (DesiredFeedRate_in_per_sec < r->stF) ? DesiredFeedRate_in_per_sec : r->stF;
 		double amin = (DesiredAccel < r->stAccel) ? DesiredAccel : r->stAccel;
 		bool same = (RapidMode == r->stRapid) &&
@@ -1834,25 +2014,27 @@ int CCoordMotion::TP3StageMove(double DesiredFeedRate_in_per_sec, double Desired
 		// becomes a few long chords meeting at large angles), and the
 		// planner's kink caps charge by kink size, not by vertex count.
 		bool tooLong = r->stLen > MaxLength;
-		const char *why = !same ? "attributes" : tooLong ? "length" :
+		bool turned = turn > angMax;
+		const char *why = !same ? "attributes" : tooLong ? "length" : turned ? "turn" :
 			(r->stN >= TP3_MAX_COMBINE) ? "count" : "collinear";
-		if (same && !tooLong && r->stN < TP3_MAX_COMBINE)
+		if (same && !tooLong && !turned && r->stN < TP3_MAX_COMBINE)
 		{
 			SEGMENT s0, s1, s2;
 			TP3FillSeg(s0, r->stA);
 			TP3FillSeg(s1, r->stC);
 			TP3FillSeg(s2, P);
-			bool ok = CheckCollinear(&s0, &s1, &s2, MP->CollinearTol);
+			bool ok = CheckCollinear(&s0, &s1, &s2, chordTol);
 			for (i = 0; ok && i < r->stN; i++)      // every eliminated point too
 			{
 				TP3FillSeg(s1, &r->stE[8*i]);
-				ok = CheckCollinear(&s0, &s1, &s2, MP->CollinearTol);
+				ok = CheckCollinear(&s0, &s1, &s2, chordTol);
 			}
 			if (ok)
 			{
 				r->stE.insert(r->stE.end(), r->stC, r->stC + 8);
 				r->stN++;
 				for (i = 0; i < 8; i++) r->stC[i] = P[i];
+				if (dn > 0.0) { memcpy(r->stDir, dir, sizeof dir); r->stTurn = turn; }
 				// keep the last line number (a halt backs up no further than
 				// it), except a radius-compensated arc's deferred vector (ID
 				// 0 -> 1) which keeps the vector's line so it is re-issued
@@ -1899,8 +2081,130 @@ int CCoordMotion::TP3StageMove(double DesiredFeedRate_in_per_sec, double Desired
 	r->stId = ID;
 	r->stLen = d0;
 	r->stMaxLen = MaxLength;
+	r->stTurn = 0;
+	{
+		double dn = 0;
+		for (i = 0; i < 8; i++) { r->stDir[i] = P[i] - r->stA[i]; dn += r->stDir[i]*r->stDir[i]; }
+		dn = sqrt(dn);
+		for (i = 0; i < 8; i++) r->stDir[i] = dn > 0.0 ? r->stDir[i]/dn : 0.0;
+	}
 	r->stOpen = true;
 	return 0;
+}
+
+// The FIR filter span the 3rd Order planner runs with: 3 x the largest
+// effective Accel/Jerk over the actuators in use (TP3::filterRatio, as the
+// run computes it - the run's own value once it exists)
+double CCoordMotion::TP3WindowTime()
+{
+	if (m_TP3Feed && m_TP3Feed->sp) return m_TP3Feed->Tw;
+	MOTION_PARAMS *MP = &Kinematics->m_MotionParams;
+	double Rmax = 0.0;
+	for (int i = 0; i < TP3::NAX; i++)
+	{
+		double Scale, Vel, Accel, Jerk;
+		GetEffectiveActuatorLimits(MP, i, &Scale, &Vel, &Accel, &Jerk);
+		if (!TP3SlotInUse(i) || Vel <= 0.0 || Accel <= 0.0 || Jerk <= 0.0) continue;
+		double Ri = TP3::effectiveAmax(Vel, Accel, Jerk) / Jerk;
+		if (Ri > Rmax) Rmax = Ri;
+	}
+	return 3.0 * Rmax;
+}
+
+// How fine the 3rd Order planner wants the chords of a curve - an arc's
+// (ArcFeedAccel) or a polyline's combined by the stager (TP3StageMove):
+//   chordTol  the chord error (sagitta) stays under TP3_CHORD_TOL_FRAC of
+//             the path tolerance, and under the Collinear Tolerance: the
+//             planner keeps the executed path on the chords (its lateral
+//             pre-compensation targets the raw polygon), so the chord
+//             error is spent from the tolerance budget outright
+//   angMax    the turn per chord stays under 8*tol/(F*Tw) at the programmed
+//             feed F (down to the machine's FacetAngle): the planner's
+//             per-kink apex cap 8*tol/(dD*Tw) at the chords' junctions is
+//             then at or above F, so the curve's speed is set by its
+//             curvature (the actuators' accel and jerk, the tolerance) and
+//             the feed, not by the chord angle.  Rapids (F < 0) set no
+//             angle limit.  The planner's cap takes the TIP-WEIGHTED
+//             ACTUATOR kink and bounds the ACTUATOR path speed; under a
+//             nonlinear kinematics both differ from the CAD angle and the
+//             CAD feed by the local Jacobian (on the 3 Link an arc's
+//             chords kinked 2.5x more in actuator space, the cap held the
+//             arc at half the speed its 1 degree facets ran at).  So the
+//             chording is probed through the kinematics at P: the actuator
+//             path per CAD inch along d1, and the tip-weighted actuator
+//             direction change per radian of CAD turn from d1 to d2 (both
+//             unit CAD directions; 1 and 1 on a linear machine), and the
+//             angle limit is divided by both
+// Chords of such a curve are facets to the planner (TP3CurveFacet) and cost
+// no speed, so finer costs only waypoints (about 0.5 ms of planning each
+// here).  The exact path modes take the machine's corner tolerance (the
+// chords of one move blend at it).  With CurveFacetAngle <= 0 (every
+// junction a corner, the old behavior) the limits stay the Collinear
+// Tolerance alone, as before
+#define TP3_CHORD_TOL_FRAC 0.125
+void CCoordMotion::TP3ChordLimits(double F, const double *P, const double *d1, const double *d2,
+	double *chordTol, double *angMax)
+{
+	MOTION_PARAMS *MP = &Kinematics->m_MotionParams;
+	*angMax = 1e30;
+	if (MP->CurveFacetAngle <= 0.0) return;
+	double tol = EffectiveCornerTol();
+	if (tol <= 0.0) tol = MP->CornerTol;
+	if (tol < 1e-5) tol = 1e-5;
+	double ct = tol * TP3_CHORD_TOL_FRAC;
+	if (ct < *chordTol) *chordTol = ct;
+	if (F > 0.0)
+	{
+		double fa = MP->FacetAngle * PI / 180.0;
+		if (fa < 1e-4) fa = 1e-4;
+		double Tw = TP3WindowTime();
+		double Jlen = 1.0, aniso = 1.0;      // the kinematic probe
+		if (P && d1 && d2)
+		{
+			const double eps = 1e-3;
+			double dot = 0, n1 = 0, n2 = 0;
+			for (int i = 0; i < 8; i++) { dot += d1[i]*d2[i]; n1 += d1[i]*d1[i]; n2 += d2[i]*d2[i]; }
+			double cc = (n1 > 0.0 && n2 > 0.0) ? dot / sqrt(n1*n2) : 1.0;
+			if (cc > 1.0) cc = 1.0;
+			if (cc < -1.0) cc = -1.0;
+			double cadA = acos(cc);
+			double P1[8], P2[8], A0[MAX_ACTUATORS], A1[MAX_ACTUATORS], A2[MAX_ACTUATORS], W[8];
+			for (int i = 0; i < 8; i++) { P1[i] = P[i] + eps * d1[i]; P2[i] = P[i] + eps * d2[i]; }
+			if (cadA > 1e-6 &&
+				!Kinematics->TransformCADtoActuators(P[0], P[1], P[2], P[3], P[4], P[5], P[6], P[7], A0) &&
+				!Kinematics->TransformCADtoActuators(P1[0], P1[1], P1[2], P1[3], P1[4], P1[5], P1[6], P1[7], A1) &&
+				!Kinematics->TransformCADtoActuators(P2[0], P2[1], P2[2], P2[3], P2[4], P2[5], P2[6], P2[7], A2) &&
+				!ComputeTipWeights(P[0], P[1], P[2], P[3], P[4], P[5], P[6], P[7], W))
+			{
+				double u1[8], u2[8], L1 = 0, L2 = 0;
+				for (int i = 0; i < 8; i++)
+				{
+					double Scale, Vel, Accel, Jerk;
+					GetEffectiveActuatorLimits(MP, i, &Scale, &Vel, &Accel, &Jerk);
+					u1[i] = (Scale != 0.0) ? (A1[i] - A0[i]) / Scale : 0.0;
+					u2[i] = (Scale != 0.0) ? (A2[i] - A0[i]) / Scale : 0.0;
+					L1 += u1[i]*u1[i];  L2 += u2[i]*u2[i];
+				}
+				L1 = sqrt(L1);  L2 = sqrt(L2);
+				if (L1 > 0.0 && L2 > 0.0)
+				{
+					double dDw = 0;
+					for (int i = 0; i < 8; i++)
+					{
+						double e = (u2[i]/L2 - u1[i]/L1) * W[i];
+						dDw += e*e;
+					}
+					dDw = sqrt(dDw);
+					Jlen = L1 / eps;
+					aniso = dDw / (2.0 * sin(0.5 * cadA));   // 1 on a linear machine
+					if (aniso < 1e-6) aniso = 1e-6;
+				}
+			}
+		}
+		double am = (Tw > 0.0) ? 8.0 * tol / (F * Jlen * Tw * aniso) : 1e30;
+		if (am < fa) am = fa;
+		*angMax = am;
+	}
 }
 
 // Commit the open chord: it goes through the normal StraightFeedAccelRapid
@@ -2403,6 +2707,8 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 	// waypoints (kink-cap corner speed) which must not flip the
 	// rapid/feed attribution (G-view color, Beg/EndRapidBuf brackets)
 	w.rapid = (FeedRateToUse < 0.0);
+	w.Fprog = FeedRateToUse;   // the programmed feed itself (negative = rapid), for
+	                           // the junction classification (TP3CurveFacet)
 
 	// tolerance stays in TOOL-TIP inches: the per-axis Jacobian weights
 	// on the waypoint denominate deviations (replacing the old scalar
@@ -2777,9 +3083,11 @@ int CCoordMotion::StraightFeedAccelRapid(double DesiredFeedRate_in_per_sec, doub
 	// zero Collinear Tolerance stream directly, after any staged chord.
 	// (Before the zero-length test below: while a chord is open current_*
 	// is the chord START, so that test is the stager's to make.)
+	// (an arc's chords stream directly too: the stager would merge them
+	// back into chords of the Collinear Tolerance, see ArcFeedAccel)
 	if (MP->ThirdOrderTP && (!m_Simulate || m_DoTime) && !(m_TP3Feed && m_TP3Feed->staging))
 	{
-		if (!NoCallback && MP->CollinearTol > 0.0)
+		if (!NoCallback && MP->CollinearTol > 0.0 && !(m_TP3Feed && m_TP3Feed->arcChord > 0))
 			return TP3StageMove(DesiredFeedRate_in_per_sec, DesiredAccel, RapidMode,
 				x, y, z, a, b, c, u, v, sequence_number, ID);
 		if (TP3FlushStager()) return 1;
@@ -3047,7 +3355,7 @@ static void SegBegCADPoint(SEGMENT *p, double *px, double *py, double *pz,
 // their endpoints.  Legacy arcs stay CAD (see SegLogSegment).
 
 #ifdef _KMOTIONX
-#define TP_SEGLOG_FILE "/tmp/TPSegLog.csv"
+#define TP_SEGLOG_FILE KmxLogPath("TPSegLog.csv").c_str()   // /tmp, or KMX_LOG_DIR (see TP3_TIMELINE_FILE)
 #else
 #define TP_SEGLOG_FILE "c:\\Temp\\TPSegLog.csv"
 #endif

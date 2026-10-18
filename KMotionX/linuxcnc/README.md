@@ -401,12 +401,18 @@ A desktop icon that starts LinuxCNC with the kmotion-kogna or the kmotion-sim co
 stream goes to `/tmp/kmotion-motion.log` (the `-l` option in the HAL file).
 
 `make test` runs the harness (`backend-test.cc`) in simulate mode: the test program's moves,
-arc directions/planes/multiple turns as LinuxCNC encodes them, and an abort in mid-program
-(`./build/backend-test circles|arcspeed|quit|letters|gated` are five more; `KM_KOGNA=1` selects
-the Kogna settings, `KM_CORNER_TOL`, `KM_COLLINEAR_TOL`, `KM_JERK`, `KM_PATH_TOL` vary the
-planner settings). Each check prints ok or FAIL. The planner writes `/tmp/TPSegLog.csv` and
-`/tmp/TP3_Timeline.log` during every run with logging on; both are overwritten by the
-next run, LinuxCNC's included.
+arc directions/planes/multiple turns as LinuxCNC encodes them, an abort in mid-program, and
+`curve` - a curve of short moves (an arc's chords, then the same arc as 1 degree facets) on
+identity and on the 3 Link kinematics: it must run at the speed the filter window and the
+tolerance allow, within the tolerance and the joints' limits, with a 90 degree corner still
+treated as a corner (`./build/backend-test circles|arcspeed|quit|letters|gated|canon` are
+more; `KM_KOGNA=1` selects the Kogna settings, `KM_3LINK=1` the 3 Link's, `KM_CORNER_TOL`,
+`KM_COLLINEAR_TOL`, `KM_JERK`, `KM_PATH_TOL`, `KM_CURVE_FACET_ANGLE`, `KM_ACT_VEL`,
+`KM_ACT_JERK` vary the planner settings; `canon` replays a program from LinuxCNC's canon dump,
+`rs274 -g file.ngc`, given as `KM_CANON=<file>` at the work offset `KM_OFFSET="x y z"`, and
+prints its time and the arcs' speeds). Each check prints ok or FAIL. The harness sends the
+planner's logs, `TPSegLog.csv` and `TP3_Timeline.log`, to `/tmp/backend-test` (or to
+`KMX_LOG_DIR`), never to `/tmp` where a LinuxCNC running beside it writes its own.
 With `KM_BOARD=1` the harness runs against the Kogna with the kmotion-kogna settings
 (`abort` then measures the real stop and the move after it; `KM_DEBUG_STOP=1` prints the
 timeline; `home`, `spindle` and `jog` run homing, the spindle actions and jogs on the board).
@@ -487,9 +493,14 @@ program zeroes the positions and the test moves the axes.
   0.0005, 26.9 s with none at the 0.003 KMotionCNC uses for this machine; the configs now
   carry 0.003 / 0.0005 (corner / collinear), Tom's KMotionXCNC values. Speed changes still
   take about Tw (0.3 s) each with jerk 984; ten times the jerk brings the same moves to 21 s.
-- Observation, not investigated: with TP3 the planner caps the speed on arcs at roughly one
-  radian per second of arc angle whatever F says (r = 1 in runs at ~1 in/s, r = 0.5 at
-  ~0.42 in/s; `backend-test arcspeed`). It looks like `FACET_ANGLE` (0.5°) per 10 ms knot.
+- Was: with TP3 the planner capped the speed on arcs at roughly one radian per second of arc
+  angle whatever F says (r = 1 in ran at ~1 in/s, r = 0.5 at ~0.42 in/s). It was the corner
+  blend at every chord junction: a blend clamped to half a chord capped the junction at one
+  chord per filter window. A curve's facets - a small turn between two moves of one feed too
+  short for a tolerance-sized blend, `[KMOTION] CURVE_FACET_ANGLE` - are no longer blended;
+  the planner's filter smooths them and its curvature caps (each joint's accel and jerk, the
+  tolerance against the filter's residual) set the speed. Arcs are chorded finely enough
+  that the chords cost nothing (`backend-test curve`).
 
 ## Next
 

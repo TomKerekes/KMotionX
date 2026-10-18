@@ -297,6 +297,15 @@ void PathPlan::compute(const Polyline& path, const Limits& lim, double s0abs)
     const double NORMAL_ACCEL_CHARGE = 1.5;  // curvature accel charged against
                                              // the tangential budget (see the
                                              // backward/forward passes)
+    const double COMP_RESIDUAL = 0.3;        // share of the filter's curvature
+                                             // undercut the pre-compensation
+                                             // leaves on a curve at least as
+                                             // long as the window (see the
+                                             // curvature caps); grows for
+                                             // shorter features
+    const double COMP_RESIDUAL_MAX = 5.4;    // ... up to the uncompensated
+                                             // apex miss of the whole turn in
+                                             // the window, v*Tw*sum(dD)/8
 
     // --- vertex direction changes, per-axis kink caps ---------------------
     verts.clear();
@@ -313,18 +322,41 @@ void PathPlan::compute(const Polyline& path, const Limits& lim, double s0abs)
         // tool-tip error per axis unit (weights default 1)
         v.dDw = wnorm(dD, wmax(path.segWgt[i-1], path.segWgt[i]));
         v.tol = std::min(path.segTol[i-1], path.segTol[i]);
-        v.vc  = std::min(path.segVcap[i-1], path.segVcap[i]);
         v.halfSpan = 0.0;
+        double vk = 1e300;                           // the kink's own caps
         for (int a = 0; a < NAX; ++a) {
             double da = std::fabs(dD[a]);
             if (da < 1e-12) continue;
-            v.vc = std::min(v.vc, ax.amax[a] * T1 / da);      // NATIVE units:
-            v.vc = std::min(v.vc, ax.jmax[a] * T1 * T2 / da); // drive physics
+            vk = std::min(vk, ax.amax[a] * T1 / da);      // NATIVE units:
+            vk = std::min(vk, ax.jmax[a] * T1 * T2 / da); // drive physics
         }
         if (v.dDw > 1e-12)                         // apex-miss TIP tolerance
-            v.vc = std::min(v.vc, 8.0 * v.tol / (v.dDw * Tw));
-        v.vc = std::max(v.vc, 1e-6 * Vbig);
-        if (dDn > DD_DISCRETE) v.halfSpan = v.vc * Tw;
+            vk = std::min(vk, 8.0 * v.tol / (v.dDw * Tw));
+        vk = std::max(vk, 1e-6 * Vbig);
+        v.vcKink = vk;
+        v.vc = std::min(vk, std::min(path.segVcap[i-1], path.segVcap[i]));
+        // A discrete corner's cap holds over a constant-speed plateau of a
+        // full window each side (and fades the comp there).  A small kink's
+        // cap used to hold at its own grid cell only - the apex miss
+        // v*Tw*dD/8 that cap bounds comes from the speed over the WHOLE
+        // window around the kink, so a one-cell dip bounded nothing, and on
+        // a raw polygon of a curve (the host feeds facets of a smooth curve
+        // unblended, see CoordMotion's TP3CurveFacet) the dips made a
+        // speed sawtooth at the chord rate, an acceleration ripple after
+        // the filter.  The cap now holds over the same plateau as a
+        // corner's, vcKink*Tw each side: an isolated kink is bounded for real,
+        // and on a polygon of equal chords the overlapping plateaus are
+        // one constant cap, 8*tol/(dD*Tw) per chord - finer chords raise
+        // it until the curvature caps and the feed take over.  Faired
+        // blends are unchanged: their points' caps lie above the blend's
+        // own corner-speed clamp.  The plateau does not fade the comp
+        // (halfSpan stays 0): the pre-compensation is what keeps a dense
+        // curve on the path.  The plateau carries the kink's OWN caps
+        // (vcKink); the adjacent segments' feed caps stay with their
+        // segments (gVcap), as before, so a faired blend's corner-speed
+        // clamp reaches no further than its blend
+        if (dDn > DD_DISCRETE) { v.halfSpan = v.vc * Tw; v.capSpan = 0.0; }
+        else                   { v.halfSpan = 0.0;       v.capSpan = v.vcKink * Tw; }
         verts.push_back(v);
     }
 
@@ -471,6 +503,48 @@ void PathPlan::compute(const Polyline& path, const Limits& lim, double s0abs)
                 double c3 = 0.8 * gTol[i] / (Cf * Cf * Cf);
                 vlim[i] = std::min(vlim[i],
                           std::pow(c3 / std::pow(kbx, 5), 1.0/6.0));
+                // The filter cuts a curve of tip-weighted curvature kbx
+                // inside by Cf*v^2*kbx.  The two-pass lateral
+                // pre-compensation (sampleCompRaw) removes that on steady
+                // curvature, but a curve's entry and exit - curvature
+                // STEPS - keep a share of it, and the shorter the curve
+                // against the window the larger the share: the comp
+                // cannot restore a feature the window flattens.  The cap
+                // above (the Taylor-regime residual, sixth order) does not
+                // see this; raw facets of an arc ran 0.0025 in off a 0.002
+                // tolerance on the 3 Link at 2.2 in/s.  Measured against
+                // Cf*v^2*kbx on 90 degree arcs with 1 degree facets, with
+                // r the window over the arc's length: 0.22 at r <= 1.15,
+                // 0.27 at 1.4, 0.34 at 1.9, 1.0 at 3.4 (R 0.5 mm, the
+                // arc cut to 60% of its sagitta).  r is read off the
+                // density itself: a quarter window's density over the
+                // full window's is 1 on a long curve and the whole turn
+                // concentrates into it on a short one (up to 4).  The
+                // share 0.25*r^1.3 envelopes the data; it is capped at the
+                // uncompensated apex miss of the window's whole turn.
+                // Faired blends sit far below this cap (their own
+                // corner-speed clamp is tighter by 7x or more); it bounds
+                // the raw facets of a curve (the host's TP3CurveFacet).
+                // The feature's share must hold over the whole window
+                // around it (every cell whose window holds the feature
+                // sees the same flattening), so r takes the densest
+                // quarter-window stretch ANYWHERE in this cell's window.
+                // That scan costs a window of cells; it is skipped where
+                // even the largest share could not bind
+                double rhoMax = std::min(COMP_RESIDUAL_MAX, COMP_RESIDUAL * std::pow(4.0, 1.3));
+                if (std::sqrt(gTol[i] / (rhoMax * Cf * kbx)) < vlim[i]) {
+                    int w4 = std::max(2, (int)std::lround(0.25 * L / ds));
+                    int jlo = (int)std::floor(el), jhi = (int)std::ceil(eh) - w4;
+                    if (jlo < 0) jlo = 0;
+                    if (jhi > N - w4) jhi = N - w4;
+                    double best = 0.0;
+                    for (int j = jlo; j <= jhi; ++j)
+                        best = std::max(best, apxyz[j + w4] - apxyz[j]);
+                    double kb4 = best / (w4 * ds);
+                    double r = (kb4 > kbx) ? kb4 / kbx : 1.0;
+                    double rho = std::min(COMP_RESIDUAL_MAX, COMP_RESIDUAL * std::pow(r, 1.3));
+                    vlim[i] = std::min(vlim[i], std::sqrt(gTol[i] / (rho * Cf * kbx)));
+                }
             }
         }
         // a pass that changed no speed leaves the next one identical windows
@@ -522,8 +596,20 @@ void PathPlan::compute(const Polyline& path, const Limits& lim, double s0abs)
     // INT_MIN, which here would make hi < lo and SILENTLY DROP the corner's
     // kink cap, running a sharp corner at the uncapped planned speed.
     for (const Vert& v : verts) {
-        double flo = std::floor((v.s - v.halfSpan - off) / ds);
-        double fhi = std::ceil ((v.s + v.halfSpan - off) / ds);
+        // a corner's plateau carries its full cap; a small kink's span
+        // carries the kink's own caps, its cell also the segments' caps
+        double span = std::max(v.halfSpan, v.capSpan);
+        double cap  = (v.halfSpan > 0.0) ? v.vc : v.vcKink;
+        {
+            double fc = std::floor((v.s - off) / ds);
+            if (fc >= 0.0 && fc < (double)(N - 1)) {
+                int ic = (int)fc;
+                vlim[ic] = std::min(vlim[ic], v.vc);
+                if (ic + 1 < N) vlim[ic + 1] = std::min(vlim[ic + 1], v.vc);
+            }
+        }
+        double flo = std::floor((v.s - span - off) / ds);
+        double fhi = std::ceil ((v.s + span - off) / ds);
         // clamp in DOUBLE to the representable span, then cast.  -1 is the
         // "entirely before the grid" sentinel (loop body skips), preserving
         // the original behavior for genuinely out-of-window corners; NaN
@@ -533,7 +619,7 @@ void PathPlan::compute(const Polyline& path, const Limits& lim, double s0abs)
         if (!(fhi < (double)(N - 1)))   fhi = (double)(N - 1);
         else if (fhi < -1.0)            fhi = -1.0;
         int lo = (int)flo, hi = (int)fhi;
-        for (int i = lo; i <= hi; ++i) vlim[i] = std::min(vlim[i], v.vc);
+        for (int i = lo; i <= hi; ++i) vlim[i] = std::min(vlim[i], cap);
     }
 
     // --- accel caps + time-optimal backward/forward passes ------------------

@@ -132,6 +132,12 @@ struct Waypoint {
                             // (attributed at the group delay) so the host can
                             // attach each command to the output that comes
                             // from the motion the command preceded
+    double Fprog = 0;       // the host's PROGRAMMED feed of the segment
+                            // arriving here (its own units; < 0 = rapid), for
+                            // the host's junction classification only: F
+                            // above is that feed seen through the kinematic
+                            // map, which varies along a curve.  The planner
+                            // never reads it
 };
 
 // F is the programmed feedrate of the source segment (INFINITY = no feed
@@ -205,7 +211,12 @@ private:
     const Polyline* pp = nullptr;
     Limits lm;
     std::vector<double> vlim, ts;
-    struct Vert { double s; VecN dD; double dDn, dDw, vc, halfSpan, tol; };
+    struct Vert { double s; VecN dD; double dDn, dDw, vc, halfSpan, tol;
+                  double vcKink;               // the kink's own caps (vc less
+                                               // the adjacent segments' feed caps)
+                  double capSpan;              // small kink: half-width of its
+                                               // kink-cap plateau (see compute)
+                };
     std::vector<Vert> verts;
     double sOfT(double t, int& j) const;     // forward map with cell hint
 };

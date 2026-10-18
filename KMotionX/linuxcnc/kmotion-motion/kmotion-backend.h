@@ -71,6 +71,8 @@ struct KmConfig {
     double collinear_tol = 0.0002;
     double corner_tol = 0.0005;
     double facet_angle = 0.5;
+    double curve_facet_angle = 15.0;   // 3rd Order planner: a turn up to this (degrees) between two short
+                                       // moves of one feed is a facet of a smooth curve, not a corner
     double lookahead = 3.0;
     KmAxisParams axis[8];
     int channel[8] = {0, 1, 2, -1, -1, -1, -1, -1};   // board channel per axis (DefineCS)
