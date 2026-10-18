@@ -1178,6 +1178,15 @@ static void publish(KmBackend::Impl *d)
     for (int i = 0; i < 8; i++) s.enabled[i] = d->cfg.simulate ? true : d->enabled[i];
     s.depth = 0;                                  // LinuxCNC moves pending (a multi-turn arc is several sequence numbers)
     for (size_t k = 0; k < d->ids.size(); k++) if (k == 0 || d->ids[k] != d->ids[k - 1]) s.depth++;
+    // ... and the moves posted but not yet taken up by the worker: task waits for a depth
+    // of 0 before an M5 or an M-code, and a burst of moves released to the worker (after a
+    // spindle-at-speed wait) showed a depth of 0 for a few ms, so the program's M5 ran with
+    // the whole program still to go (the spindle-off program then blocked the final flush,
+    // and the board stood 1 s short of the path's end until it came)
+    {
+        std::lock_guard<std::mutex> lq(d->qmx);
+        for (const Cmd &x : d->q) if (x.kind == Cmd::LINE || x.kind == Cmd::ARC || x.kind == Cmd::DWELL) s.depth++;
+    }
     s.running = d->unflushed || d->run_active || d->have_cur || !d->replay.empty() || d->aborting || d->tap_pending || d->world_jogging;
     s.threading = d->sync_run;
     s.world_jog = d->world_jogging;
