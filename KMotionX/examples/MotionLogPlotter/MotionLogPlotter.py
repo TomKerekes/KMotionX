@@ -12,7 +12,9 @@ the XY path next to Position, Velocity, Accel and Jerk over time.
                      [--tail 0.02] [--range T0 T1] [--save FILE] [--stats]
 
 In the window: keys x y z a b c u v (or 1-8) pick the axis, a click marks the
-nearest sample on every plot and prints its values, r resets the view, ctrl+o
+nearest sample on every plot and prints its values (a click without a drag
+does the same while the toolbar's zoom or pan is selected; clicking the marked
+sample again, or Escape, clears it), r resets the view, ctrl+o
 opens another log, F5 reloads the current one, w watches the file and reloads
 it by itself after each run (also --watch); the toolbar zooms and pans (the
 time plots share their time axis), and zooming the XY plot limits the time
@@ -389,6 +391,8 @@ class Plotter:
         self.ax_xy.callbacks.connect('xlim_changed', lambda ax: self.on_xy_view())
         self.ax_xy.callbacks.connect('ylim_changed', lambda ax: self.on_xy_view())
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
+        self.fig.canvas.mpl_connect('button_release_event', self.on_release)
+        self._press = None                  # where button 1 went down (x, y in pixels)
         self.fig.canvas.mpl_connect('key_press_event', self.on_key)
         self.timer = self.fig.canvas.new_timer(interval=1000)
         self.timer.add_callback(self.poll_file)
@@ -616,9 +620,24 @@ class Plotter:
         self.fig.canvas.draw_idle()
 
     def on_click(self, ev):
+        if ev.button != 1 or ev.inaxes is None:
+            return
+        self._press = (ev.x, ev.y)
         toolbar = getattr(self.fig.canvas, 'toolbar', None)
-        if ev.button != 1 or ev.inaxes is None or (toolbar is not None and toolbar.mode):
-            return      # zoom/pan drags are the toolbar's
+        if toolbar is not None and toolbar.mode:
+            return      # zoom/pan drags are the toolbar's; a click without a drag marks on the release
+        self.mark_at(ev)
+
+    def on_release(self, ev):
+        press, self._press = self._press, None
+        toolbar = getattr(self.fig.canvas, 'toolbar', None)
+        if ev.button != 1 or ev.inaxes is None or press is None or toolbar is None or not toolbar.mode:
+            return
+        if abs(ev.x - press[0]) <= 3 and abs(ev.y - press[1]) <= 3:
+            self.mark_at(ev)
+
+    def mark_at(self, ev):
+        """mark the sample nearest the click; the marked sample clicked again clears the mark"""
         log = self.log
         if not log.count:
             return
@@ -626,13 +645,17 @@ class Plotter:
             # snap to the nearest path sample, in screen pixels
             pts = self.ax_xy.transData.transform(np.column_stack([log.P[0], log.P[1]]))
             d = (pts[:, 0] - ev.x) ** 2 + (pts[:, 1] - ev.y) ** 2
-            self.mark = int(np.argmin(d))
+            i = int(np.argmin(d))
         elif ev.inaxes in self.strips:
-            self.mark = int(np.clip(np.searchsorted(log.T, ev.xdata), 0, log.count - 1))
+            i = int(np.clip(np.searchsorted(log.T, ev.xdata), 0, log.count - 1))
         else:
             return
+        if self.mark is not None and self.mark == i:
+            i = None
+        self.mark = i
         self.show_mark()
-        print(self.readout.get_text())
+        if i is not None:
+            print(self.readout.get_text())
 
     def on_key(self, ev):
         k = (ev.key or '').lower()
