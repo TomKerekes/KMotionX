@@ -1,6 +1,6 @@
 # Installing LinuxCNC on KMotion from scratch
 
-A procedure, with scripts, for a fresh machine: a VirtualBox VM here, but step 3 on is the same on any Debian 13 PC. Nothing needs a real-time kernel: the KFLOP or Kogna does the real time, the PC plans ahead. What you get at the end is what `FEATURES.md` lists: LinuxCNC (the run-in-place tree, 2.10 pre-release, with the four small patches in `patches/`), KMotionX (Tom's fork: the libraries, KMotionServer, the planner, kmotion-motion), the KMotion tool, the desktop icons and the three configurations.
+`QUICKSTART.md` is the same as a bare list of steps for a Windows PC; this file says why. A procedure, with scripts, for a fresh machine: a VirtualBox VM here, but step 3 on is the same on any Debian 13 PC. Nothing needs a real-time kernel: the KFLOP or Kogna does the real time, the PC plans ahead. What you get at the end is what `FEATURES.md` lists: LinuxCNC (the run-in-place tree, 2.10 pre-release, with the four small patches in `patches/`), KMotionX (Tom's fork: the libraries, KMotionServer, the planner, kmotion-motion), the KMotion tool, the desktop icons and the three configurations.
 
 The scripts are in this folder: `vm-create.cmd` / `vm-create.sh` make the VM on the host, `install-vm.sh` does everything inside it. They were written from the notes of building the existing VM by hand and have not yet been run on a clean machine: the first clean install is the test.
 
