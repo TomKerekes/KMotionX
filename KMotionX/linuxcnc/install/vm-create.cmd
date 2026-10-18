@@ -2,7 +2,7 @@
 rem vm-create.cmd - makes the VirtualBox VM for LinuxCNC on KMotion, on a Windows host
 rem (vm-create.sh is the same for Linux/macOS). Needs VirtualBox 7 and the Debian 13 netinst ISO.
 rem Usage:   vm-create.cmd <debian-13 iso> [bridged host adapter] [shared folder]
-rem    e.g.  vm-create.cmd %USERPROFILE%\Downloads\debian-13.1.0-amd64-netinst.iso "Realtek USB GbE Family Controller" C:\kmotion-share
+rem    e.g.  vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "Intel(R) Ethernet Controller I226-V #2" C:\kmotion-share
 rem The bridged adapter is the host's network connection to the Kogna, by the name VirtualBox
 rem shows ("VBoxManage list bridgedifs"); the Kogna is its own DHCP server on that link.
 rem Then start the VM and install Debian (INSTALL.md, step 2).
@@ -15,9 +15,19 @@ set DISK=40000
 if "%~1"=="" ( echo usage: vm-create.cmd ^<debian-13 iso^> [bridged host adapter] [shared folder] & exit /b 2 )
 if not exist "%~1" ( echo no such ISO: %~1 & exit /b 2 )
 if "%~2"=="" ( echo host adapters for the bridge to the Kogna ^(give one as the 2nd argument, or none for now^): & %VBM% list bridgedifs | findstr /b Name: )
+rem the adapter must be one VirtualBox lists under "Name:" (not the VBoxNetworkName line): checked before anything is made
+if not "%~2"=="" (
+    %VBM% list bridgedifs | findstr /b /c:"Name:" | findstr /e /c:"%~2" >nul || (
+        echo no host adapter named "%~2". VirtualBox knows these ^(use the name after Name: exactly^):
+        %VBM% list bridgedifs | findstr /b Name:
+        exit /b 2
+    )
+)
 
 %VBM% createvm --name "%NAME%" --ostype Debian_64 --register || exit /b 1
-for /f "tokens=1,* delims==" %%a in ('%VBM% showvminfo "%NAME%" --machinereadable ^| findstr /b CfgFile') do set CFG=%%~b
+rem (the whole command in one more pair of quotes: cmd strips the outer pair, and the path with its space survives)
+for /f "tokens=1,* delims==" %%a in ('"%VBM% showvminfo "%NAME%" --machinereadable ^| findstr /b CfgFile"') do set CFG=%%~b
+if "%CFG%"=="" ( echo could not find where VirtualBox put the VM ^(showvminfo gave no CfgFile^) & exit /b 1 )
 for %%f in ("%CFG%") do set VMDIR=%%~dpf
 %VBM% modifyvm "%NAME%" --memory %RAM% --cpus %CPUS% --vram 64 --graphicscontroller vmsvga --usb on --usbohci on --clipboard-mode bidirectional --draganddrop bidirectional --audio-enabled off --nic1 nat || exit /b 1
 if not "%~2"=="" %VBM% modifyvm "%NAME%" --nic2 bridged --bridgeadapter2 "%~2" --cableconnected2 on || exit /b 1
