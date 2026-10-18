@@ -14,7 +14,8 @@ the XY path next to Position, Velocity, Accel and Jerk over time.
 In the window: keys x y z a b c u v (or 1-8) pick the axis, a click marks the
 nearest sample on every plot and prints its values (a click without a drag
 does the same while the toolbar's zoom or pan is selected; clicking the marked
-sample again, or Escape, clears it), r resets the view, ctrl+o
+sample again, or Escape, clears it), the mouse wheel zooms about the cursor
+(the XY plot in both directions, a time plot in time), r resets the view, ctrl+o
 opens another log, F5 reloads the current one, w watches the file and reloads
 it by itself after each run (also --watch); the toolbar zooms and pans (the
 time plots share their time axis), and zooming the XY plot limits the time
@@ -392,6 +393,7 @@ class Plotter:
         self.ax_xy.callbacks.connect('ylim_changed', lambda ax: self.on_xy_view())
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
         self.fig.canvas.mpl_connect('button_release_event', self.on_release)
+        self.fig.canvas.mpl_connect('scroll_event', self.on_scroll)
         self._press = None                  # where button 1 went down (x, y in pixels)
         self.fig.canvas.mpl_connect('key_press_event', self.on_key)
         self.timer = self.fig.canvas.new_timer(interval=1000)
@@ -656,6 +658,23 @@ class Plotter:
         self.show_mark()
         if i is not None:
             print(self.readout.get_text())
+
+    def on_scroll(self, ev):
+        """the wheel zooms about the cursor: the XY plot in both directions (the time plots
+        follow the samples in view), a time plot along time"""
+        if ev.inaxes is None or ev.xdata is None or not self.log.count:
+            return
+        f = 1.25 ** (-ev.step)              # a notch up zooms in
+        def zoomed(lo, hi, at):
+            return at + (lo - at) * f, at + (hi - at) * f
+        if ev.inaxes is self.ax_xy:
+            self.ax_xy.set_xlim(*zoomed(*self.ax_xy.get_xlim(), ev.xdata))
+            self.ax_xy.set_ylim(*zoomed(*self.ax_xy.get_ylim(), ev.ydata))
+        elif ev.inaxes in self.strips:
+            self.strips[0].set_xlim(*zoomed(*self.strips[0].get_xlim(), ev.xdata))
+        else:
+            return
+        self.fig.canvas.draw_idle()
 
     def on_key(self, ev):
         k = (ev.key or '').lower()
