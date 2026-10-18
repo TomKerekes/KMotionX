@@ -7,10 +7,14 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 1. Make a folder `C:\InstallLinuxCNC`.
 2. If VirtualBox is not installed: open https://www.virtualbox.org/wiki/Downloads, click **Windows hosts**, run the downloaded installer, keep every default.
 3. Open https://www.debian.org/download, click the **debian-13.x.x-amd64-netinst.iso** link, save the file to `C:\InstallLinuxCNC`. Note its exact name: the version number changes (13.7.0 in October 2026).
-4. Open https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/vm-create.cmd in the browser, press Ctrl+S, save it as `vm-create.cmd` in `C:\InstallLinuxCNC` (file type "All files", so the browser does not add `.txt`).
-5. Open PowerShell: Start, type `powershell`, Enter. Then:
+4. Open PowerShell: Start, type `powershell`, Enter. Fetch the VM script into the folder (Windows has `curl.exe` built in):
 
        cd C:\InstallLinuxCNC
+       curl.exe -fsSL -o vm-create.cmd https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/vm-create.cmd
+
+   (Saving it from the browser works too, but the browser tends to add `.txt`; if that happened, `Rename-Item vm-create.cmd.txt vm-create.cmd`.)
+5. List the host's network adapters:
+
        & "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs
 
    Each adapter is a block of lines. Find the block of the adapter that connects to the Kogna (its `IPAddress:` is 192.168.113.x when the Kogna is on) and copy the text after `Name:` in that block, for example `Intel(R) Ethernet Controller I226-V #2`. Not the `VBoxNetworkName:` line. With a KFLOP there is none to note.
