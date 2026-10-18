@@ -407,7 +407,7 @@ identity and on the 3 Link kinematics: it must run at the speed the filter windo
 tolerance allow, within the tolerance and the joints' limits, with a 90 degree corner still
 treated as a corner (`./build/backend-test circles|arcspeed|quit|letters|gated|canon` are
 more; `KM_KOGNA=1` selects the Kogna settings, `KM_3LINK=1` the 3 Link's, `KM_CORNER_TOL`,
-`KM_COLLINEAR_TOL`, `KM_JERK`, `KM_PATH_TOL`, `KM_CURVE_FACET_ANGLE`, `KM_ACT_VEL`,
+`KM_COLLINEAR_TOL`, `KM_JERK`, `KM_PATH_TOL`, `KM_CURVE_FACETS`, `KM_ACT_VEL`,
 `KM_ACT_JERK` vary the planner settings; `canon` replays a program from LinuxCNC's canon dump,
 `rs274 -g file.ngc`, given as `KM_CANON=<file>` at the work offset `KM_OFFSET="x y z"`, and
 prints its time and the arcs' speeds). Each check prints ok or FAIL. The harness sends the
@@ -496,8 +496,8 @@ program zeroes the positions and the test moves the axes.
 - Was: with TP3 the planner capped the speed on arcs at roughly one radian per second of arc
   angle whatever F says (r = 1 in ran at ~1 in/s, r = 0.5 at ~0.42 in/s). It was the corner
   blend at every chord junction: a blend clamped to half a chord capped the junction at one
-  chord per filter window. A curve's facets - a small turn between two moves of one feed too
-  short for a tolerance-sized blend, `[KMOTION] CURVE_FACET_ANGLE` - are no longer blended;
+  chord per filter window. A curve's facets - a junction of two moves of one feed too short
+  for a tolerance-sized blend, no angle threshold, `[KMOTION] CURVE_FACETS` - are no longer blended;
   the planner's filter smooths them and its curvature caps (each joint's accel and jerk, the
   tolerance against the filter's residual) set the speed. Arcs are chorded finely enough
   that the chords cost nothing (`backend-test curve`).

@@ -1795,35 +1795,39 @@ static void TP3ComputeBlend(const TP3::Waypoint &wm1, const TP3::Waypoint &w0,
 	}
 }
 
-// Is the junction at w0 (wm1 -> w0 -> wp1) a facet of a smooth curve rather
-// than a programmed corner?  Decided by geometry alone: a small direction
-// change - under the machine's CurveFacetAngle - between two moves of the
-// same programmed feed (both rapid, or both at one F), at least one of them
-// too short to hold a tolerance-sized blend (the blend TP3ComputeBlend would
-// emit is clamped by that facet).  That is exactly where a blend costs
-// speed: a blend clamped to half a facet caps the junction at 2L/Tw, one
-// facet per filter window, whatever the angle or the tolerance - 0.19 in/s
-// on the 3 Link's 6.4 degree arc chords, slower the finer the facets.  Such
-// a junction is handed to the planner as it is (no blend, no corner-speed
-// clamp, the full tolerance): the FIR filter smooths the kink and the
-// speed is bounded by the planner's own curvature caps - each actuator's
-// accel and jerk along the curve, the per-kink apex cap over its window
-// (finer facets raise it), the tolerance cap on the filter's residual
-// after its lateral pre-compensation - and by the feed.  An arc's chords
-// and a CAM polyline then run at the feed the window and the tolerance
-// allow.  Programmed corners (a larger turn, a feed change, or two moves
-// long enough for the full blend) are blended or stopped as before; so is
-// the first or last junction of a curve to a neighbour at an angle, as
-// those are corners by the same rule, while a tangent entry (a small
-// angle to a short chord) joins the curve.  The exact path modes keep
-// their stops (TP3CornerNeedsStop runs first).  CurveFacetAngle <= 0
-// turns the rule off: every junction is blended as before.
+// Is the junction at w0 (wm1 -> w0 -> wp1) a facet of a curve rather than a
+// programmed corner?  Decided by geometry alone, with no angle threshold:
+// two moves of the same programmed feed (both rapid, or both at one F), at
+// least one of them too short to hold a tolerance-sized blend (the blend
+// TP3ComputeBlend would emit is clamped by that facet).  That is exactly
+// where a blend costs speed: a blend clamped to half a facet caps the
+// junction at 2L/Tw, one facet per filter window, whatever the angle or
+// the tolerance - 0.19 in/s on the 3 Link's 6.4 degree arc chords, slower
+// the finer the facets; and where the corner policy would rather stop, a
+// zigzag of tiny moves stopped at every vertex.  Such a junction is handed
+// to the planner as it is (no blend, no corner-speed clamp, the full
+// tolerance): the FIR filter smooths the kink and the speed is bounded by
+// the planner's own caps - each actuator's accel and jerk along the curve,
+// the tolerance cap on the filter's residual after its lateral
+// pre-compensation, the per-kink apex and velocity-step caps over the
+// kink's window (finer facets raise them; a sharp raw kink is a discrete
+// corner to the planner, DD_DISCRETE, with its plateau) - and by the feed.
+// An arc's chords and a CAM polyline run at the feed the window and the
+// tolerance allow; a 60 degree zigzag of 0.2 mm moves crawls through at
+// the kink cap instead of 21 stops (2.4x faster, within tolerance).
+// Programmed corners (a feed change, or two moves long enough for the
+// full blend) are blended or stopped as before; so is the first or last
+// junction of a curve to a long neighbour.  An earlier planner had an
+// angle window deciding what to blend and it caused constant trouble, so
+// no angle enters here: the planner's one split between curvature and
+// corner (15 degrees, TrajectoryPlanner3.cpp) is the only one.  The exact
+// path modes keep their stops at programmed vertices.  CurveFacets off
+// blends every junction as before.
 static bool TP3CurveFacet(const MOTION_PARAMS *MP, const TP3::Waypoint &w0,
 	const TP3::Waypoint &wp1, const TP3BlendGeom &g)
 {
-	if (MP->CurveFacetAngle <= 0.0) return false;
+	if (!MP->CurveFacets) return false;
 	if (g.L1 <= 0.0 || g.L2 <= 0.0 || g.dDw < 1e-9) return false;
-	if (g.theta > MP->CurveFacetAngle * PI / 180.0) return false;
 	// the same programmed feed on both sides (Fprog < 0 is a rapid)
 	if ((w0.Fprog < 0.0) != (wp1.Fprog < 0.0)) return false;
 	if (w0.Fprog >= 0.0)
@@ -1869,7 +1873,7 @@ static void TP3EmitFairedVertex(CCoordMotion *CM, CTP3FeedRun *r,
 			double cc = (n1 > 0 && n2 > 0) ? dot / sqrt(n1*n2) : 1.0;
 			if (cc > 1.0) cc = 1.0;
 			if (cc < -1.0) cc = -1.0;
-			TP3Log("FACET          seq=%d theta=%.2fdeg cad=%.2fdeg dDw=%.4f L1=%.5f L2=%.5f Lfull=%.5f",
+			TP3Log("FACET          seq=%d turn=%.2fdeg cad=%.2fdeg dDw=%.4f L1=%.5f L2=%.5f Lfull=%.5f",
 				w0.seq, g.theta * 180.0 / PI, acos(cc) * 180.0 / PI, g.dDw, g.L1, g.L2, g.Lfull);
 		}
 		TP3AddWaypointThrottled(CM, r, w, "facet");
@@ -2138,16 +2142,16 @@ double CCoordMotion::TP3WindowTime()
 // Chords of such a curve are facets to the planner (TP3CurveFacet) and cost
 // no speed, so finer costs only waypoints (about 0.5 ms of planning each
 // here).  The exact path modes take the machine's corner tolerance (the
-// chords of one move blend at it).  With CurveFacetAngle <= 0 (every
-// junction a corner, the old behavior) the limits stay the Collinear
-// Tolerance alone, as before
+// chords of one move blend at it).  With CurveFacets off (every junction
+// a corner, the old behavior) the limits stay the Collinear Tolerance
+// alone, as before
 #define TP3_CHORD_TOL_FRAC 0.125
 void CCoordMotion::TP3ChordLimits(double F, const double *P, const double *d1, const double *d2,
 	double *chordTol, double *angMax)
 {
 	MOTION_PARAMS *MP = &Kinematics->m_MotionParams;
 	*angMax = 1e30;
-	if (MP->CurveFacetAngle <= 0.0) return;
+	if (!MP->CurveFacets) return;
 	double tol = EffectiveCornerTol();
 	if (tol <= 0.0) tol = MP->CornerTol;
 	if (tol < 1e-5) tol = 1e-5;
@@ -2778,8 +2782,15 @@ int CCoordMotion::TP3AddFeedWaypoint(double x, double y, double z, double a, dou
 			{
 				double dDn, vcrawl, vseg;
 				// the vertex is raw1: a programmed one stops in the exact modes, an
-				// interior one (a piece boundary) is judged as in G64
-				if (TP3CornerNeedsStop(r, w, PathExact() && !r->raw1.interior, &dDn, &vcrawl, &vseg))
+				// interior one (a piece boundary) is judged as in G64.  A facet of a
+				// curve (TP3CurveFacet) is judged by the planner's own caps, not by
+				// the crawl a blend would have made: no stop, unless an exact mode
+				// stops at this programmed vertex anyway
+				bool exactHere = PathExact() && !r->raw1.interior;
+				TP3BlendGeom g;
+				TP3ComputeBlend(r->raw0, r->raw1, w, r->lim.dsFixed, r->Tw, &g);
+				bool facet = !exactHere && TP3CurveFacet(MP, r->raw1, w, g);
+				if (!facet && TP3CornerNeedsStop(r, w, exactHere, &dDn, &vcrawl, &vseg))
 				{
 					stopHere = true;
 					TP3Log("CORNER_STOP    seq=%d dDn=%.3f vcrawl=%.4g vseg=%.4g",

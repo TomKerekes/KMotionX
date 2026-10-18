@@ -2710,7 +2710,7 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
     MP->CollinearTol = cfg.collinear_tol;
     MP->CornerTol = cfg.corner_tol;
     MP->FacetAngle = cfg.facet_angle;
-    MP->CurveFacetAngle = cfg.curve_facet_angle;
+    MP->CurveFacets = cfg.curve_facets;
     MP->TPLookahead = cfg.lookahead;
     MP->MaxRapidFRO = 1.0;
     MP->DegreesA = MP->DegreesB = MP->DegreesC = true;

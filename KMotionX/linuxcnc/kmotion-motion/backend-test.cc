@@ -57,7 +57,11 @@
 //                         as 1 degree G1 facets) runs at the speed the filter window and the
 //                         tolerance allow, within the tolerance and the joints' limits, and a
 //                         90 degree corner is still blended; KM_3LINK=1 through the 3 Link
-//                         kinematics at the robot's joint limits (KM_ACT_VEL, KM_ACT_JERK vary them)
+//                         kinematics at the robot's joint limits (KM_ACT_VEL, KM_ACT_JERK vary them;
+//                         KM_CURVE_FACETS=0 the old planner, every junction a corner)
+//   backend-test zigzag   a zigzag of tiny moves at a sharp angle (60 degrees; KM_ZIG_DEG, KM_ZIG_LEN):
+//                         the planner's own caps carry it through where the corner policy stopped at
+//                         every vertex; within the tolerance and the joints' limits
 //   backend-test canon    replays a program from LinuxCNC's canon dump (rs274 -g file.ngc) given
 //                         as KM_CANON=<file>, at the work offset KM_OFFSET="x y z" (inches), and
 //                         prints the program's time and the arcs' speeds
@@ -1490,6 +1494,82 @@ static void scenario_curve(KmBackend &km, const KmConfig &cfg, const std::string
     check(f.messages.empty(), "no messages");
 }
 
+// A zigzag of tiny moves meeting at a sharp angle (60 degrees; KM_ZIG_DEG, KM_ZIG_LEN vary it):
+// the moves are too short to hold a blend of the tolerance, so the facet rule hands the
+// junctions to the planner raw and the planner's own corner caps bound them, where the blend
+// of old crawled or the corner policy stopped at every vertex. Measures the treatment the
+// settings select: the time over the zigzag, the deviation from the polyline, the stops, the
+// joints' limits
+static void scenario_zigzag(KmBackend &km, const KmConfig &cfg, const std::string &logdir)
+{
+    const double F = 2.5, Acc = 30, Rapid = 3.0, Z = 0.1, tol = cfg.corner_tol;
+    const double turn = (getenv("KM_ZIG_DEG") ? atof(getenv("KM_ZIG_DEG")) : 60) * M_PI / 180;
+    const double seg = getenv("KM_ZIG_LEN") ? atof(getenv("KM_ZIG_LEN")) : 0.008;
+    const int n = 20;
+    printf("  %d moves of %.4f in turning %.0f degrees at each vertex, F %.2f, tolerance %.4f, %s\n", n, seg, turn * 180 / M_PI, F, tol,
+           km.identity_kinematics() ? "identity" : cfg.kinematics);
+    double A[9] = {-0.5, -0.3, Z, 0, 0, 0, 0, 0, 0}, B[9] = {0, -0.3, Z, 0, 0, 0, 0, 0, 0};
+    PathGeom path;
+    path.line(A, B);
+    std::vector<std::array<double, 9>> pts;
+    std::array<double, 9> P = {0, -0.3, Z, 0, 0, 0, 0, 0, 0};
+    for (int k = 0; k < n; k++) {
+        double d = (k % 2 == 0 ? 1 : -1) * turn / 2;
+        std::array<double, 9> Q = P;
+        Q[0] += seg * cos(d); Q[1] += seg * sin(d);
+        path.line(P.data(), Q.data());
+        pts.push_back(Q);
+        P = Q;
+    }
+    double E[9] = {P[0] + 0.4, P[1], Z, 0, 0, 0, 0, 0, 0};
+    path.line(P.data(), E);
+    Follower f(km);
+    km.line(A, Rapid, Acc, true, 1);
+    f.run();
+    km.seglog_new_run();
+    int id = 2;
+    km.line(B, F, Acc, false, id++);
+    for (auto &q : pts) km.line(q.data(), F, Acc, false, id++);
+    km.line(E, F, Acc, false, id++);
+    f.t0 = std::chrono::steady_clock::now(); f.t = 0;
+    f.run();
+    check(f.at(E[0], E[1], E[2]), "the path ended at E");
+    KnotLog kl;
+    check(kl.load(km, logdir + "/TPSegLog.csv"), "the knot log was written");
+    double dev = 0, vmin = 1e9, zig_len = n * seg;
+    int on_zig = 0, stops = 0;
+    bool stopped = false;
+    for (size_t i = 0; i + 1 < kl.p.size(); i++) {
+        double d;
+        int el = path.nearest(kl.p[i].data(), &d);
+        if (d > dev) dev = d;
+        double v = kl.speed(i);
+        if (el >= 1 && el <= n) {
+            on_zig++;
+            if (v < vmin) vmin = v;
+            if (v < 0.005) { if (!stopped) stops++; stopped = true; } else stopped = false;
+        }
+    }
+    printf("  zigzag: %.2f s for %.3f in (mean %.3f in/s, slowest %.3f in/s), %d stop(s); deviation max %.5f in; whole path %.2f s\n",
+           on_zig * 0.001, zig_len, on_zig > 0 ? zig_len / (on_zig * 0.001) : 0, vmin, stops, dev, kl.total);
+    printf("    per joint max |v| %.2f %.2f %.2f  |a| %.1f %.1f %.1f  |j| %.0f %.0f %.0f\n",
+           kl.vmax[0], kl.vmax[1], kl.vmax[2], kl.amax[0], kl.amax[1], kl.amax[2], kl.jmax[0], kl.jmax[1], kl.jmax[2]);
+    for (int i = 0; i < 3; i++) {
+        const KmAxisParams &a = cfg.axis[i];
+        bool kin = cfg.kinematics[0] != 0;
+        double vl = kin ? a.act_max_vel : a.max_vel, al = kin ? a.act_max_accel : a.max_accel, jl = kin ? a.act_max_jerk : a.max_jerk;
+        char what[96];
+        snprintf(what, sizeof what, "joint %d within its limits", i);
+        check(kl.vmax[i] <= 1.02 * vl && kl.amax[i] <= 1.02 * al && kl.jmax[i] <= 1.1 * jl, what);
+    }
+    check(dev <= tol * 1.05, "the path stays within the tolerance");
+    if (cfg.curve_facets && km.identity_kinematics() && !getenv("KM_ZIG_DEG") && !getenv("KM_ZIG_LEN")) {
+        check(stops == 0, "no stop at the vertices (the corner policy stopped at all 21)");
+        check(on_zig > 0 && zig_len / (on_zig * 0.001) > 0.1, "faster than 0.1 in/s (was 0.05)");
+    }
+    check(f.messages.empty(), "no messages");
+}
+
 // replays a canon dump of a G-code program (LinuxCNC's rs274 -g file.ngc: STRAIGHT_FEED,
 // STRAIGHT_TRAVERSE, ARC_FEED in the XY plane, SET_FEED_RATE, USE_LENGTH_UNITS,
 // SET_MOTION_CONTROL_MODE) as task would hand it over: KM_CANON=<file>, KM_OFFSET="x y z" the
@@ -1591,8 +1671,8 @@ int main(int argc, char **argv)
             if (getenv("KM_ACT_JERK")) a.act_max_jerk = atof(getenv("KM_ACT_JERK"));
         }
     }
-    if (strcmp(scenario, "curve") == 0 || strcmp(scenario, "canon") == 0) { cfg.corner_tol = 0.002; cfg.collinear_tol = 0.0005; }   // the robot's
-    if (getenv("KM_CURVE_FACET_ANGLE")) cfg.curve_facet_angle = atof(getenv("KM_CURVE_FACET_ANGLE"));   // 0: every junction a corner, as before
+    if (strcmp(scenario, "curve") == 0 || strcmp(scenario, "canon") == 0 || strcmp(scenario, "zigzag") == 0) { cfg.corner_tol = 0.002; cfg.collinear_tol = 0.0005; }   // the robot's
+    if (getenv("KM_CURVE_FACETS")) cfg.curve_facets = atoi(getenv("KM_CURVE_FACETS")) != 0;   // 0: every junction a corner, as before
     if (getenv("KM_CORNER_TOL")) cfg.corner_tol = atof(getenv("KM_CORNER_TOL"));
     if (getenv("KM_COLLINEAR_TOL")) cfg.collinear_tol = atof(getenv("KM_COLLINEAR_TOL"));
     if (getenv("KM_JERK")) for (int i = 0; i < 3; i++) cfg.axis[i].max_jerk = atof(getenv("KM_JERK"));
@@ -1685,6 +1765,7 @@ int main(int argc, char **argv)
     else if (strcmp(scenario, "tapsegs") == 0) scenario_tapsegs(*km);
     else if (strcmp(scenario, "thread") == 0) scenario_thread(*km);
     else if (strcmp(scenario, "curve") == 0) scenario_curve(*km, cfg, logdir);
+    else if (strcmp(scenario, "zigzag") == 0) scenario_zigzag(*km, cfg, logdir);
     else if (strcmp(scenario, "canon") == 0) scenario_canon(*km, link3 ? 3.0 : cfg.axis[0].max_vel, link3 ? 30.0 : cfg.axis[0].max_accel);
     else scenario_program(*km);
     if (km) {

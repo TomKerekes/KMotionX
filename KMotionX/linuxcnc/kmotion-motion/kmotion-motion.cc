@@ -2449,7 +2449,7 @@ static bool read_kmotion_config(KmConfig &cfg)
     cfg.collinear_tol = ini.num(K, "COLLINEAR_TOL", cfg.collinear_tol);
     cfg.corner_tol = ini.num(K, "CORNER_TOL", cfg.corner_tol);
     cfg.facet_angle = ini.num(K, "FACET_ANGLE", cfg.facet_angle);
-    cfg.curve_facet_angle = ini.num(K, "CURVE_FACET_ANGLE", cfg.curve_facet_angle);
+    cfg.curve_facets = ini.num(K, "CURVE_FACETS", 1) != 0;
     cfg.lookahead = ini.num(K, "LOOKAHEAD", cfg.lookahead);
     const char *coords = ini.get("TRAJ", "COORDINATES");
     const char *channels = ini.get(K, "CHANNELS");
