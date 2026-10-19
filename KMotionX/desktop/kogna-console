@@ -1,0 +1,33 @@
+#!/bin/bash
+# kogna-console: the Kogna's virtual COM port (its USB serial console) in a terminal, from a
+# desktop launcher. The port is /dev/ttyACM<n> once the Kogna's USB is attached to this
+# machine (in a VM: Devices > USB in the VM window, or a USB filter on the VM); tio shows
+# what the board prints and sends what is typed. Quit tio with Ctrl-t then q.
+# (The port speaks over USB: the baud rate is irrelevant.)
+dev=""
+for d in /dev/serial/by-id/*Kogna* /dev/serial/by-id/*Dynomotion* /dev/ttyACM0 /dev/ttyACM1; do
+    [ -e "$d" ] && { dev=$d; break; }
+done
+if [ -z "$dev" ]; then
+    echo "No Kogna serial port found (no /dev/ttyACM*)."
+    echo "  - plug the Kogna's USB into this machine; in a VM, attach it with Devices > USB in the VM window"
+    echo "  - then start this again"
+    echo; read -r -p "press Enter to close " _; exit 1
+fi
+if [ ! -w "$dev" ]; then
+    echo "$dev is not writable by you: the install adds you to the 'dialout' group, which takes a log out and in."
+    echo; read -r -p "press Enter to close " _; exit 1
+fi
+term=""
+for t in tio picocom; do command -v $t >/dev/null && { term=$t; break; }; done
+if [ -z "$term" ]; then
+    echo "no serial terminal program: sudo apt install tio"; echo; read -r -p "press Enter to close " _; exit 1
+fi
+echo "Kogna console on $dev ($term). Quit: tio Ctrl-t q, picocom Ctrl-a Ctrl-x"
+echo
+case $term in
+    tio) tio "$dev";;
+    picocom) picocom -q "$dev";;
+esac
+rc=$?
+[ $rc -eq 0 ] || { echo; read -r -p "$term ended with $rc - press Enter to close " _; }

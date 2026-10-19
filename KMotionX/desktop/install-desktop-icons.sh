@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool linuxcnc-kmotion-kogna linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console linuxcnc-kmotion-kogna linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 sizes="16 32 48 64 128 256"
 
 note() { printf '%s\n' "$*"; }
@@ -92,6 +92,23 @@ StartupNotify=true
 StartupWMClass=kmotion-tool
 Categories=Science;Engineering;
 Keywords=kmotion;kflop;kogna;dynomotion;cnc;
+END
+
+# --- the Kogna's serial console ----------------------------------------------------------
+note "Kogna Console (the virtual COM port over USB, desktop/kogna-console)"
+command -v tio >/dev/null || command -v picocom >/dev/null ||
+    warn "no serial terminal program: the Kogna Console launcher needs   sudo apt install tio"
+write_launcher kogna-console <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Kogna Console
+Comment=The Kogna's virtual COM port (USB serial): what the board prints, for diagnostics
+Exec="$here/kogna-console"
+Icon=utilities-terminal
+Terminal=true
+Categories=Science;Engineering;
+Keywords=kmotion;kogna;dynomotion;console;serial;
 END
 
 # --- LinuxCNC --------------------------------------------------------------------------

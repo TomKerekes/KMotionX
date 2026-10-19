@@ -52,7 +52,7 @@ python3-pybind11 python3-tk python3-xlib python3-opengl python3-numpy python3-ma
 python3-cairo python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gtksource-4 python3-pyqt5
 python3-pyqt5.qsci python3-pyqt5.qtsvg python3-pyqt5.qtopengl python3-dbus python3-qtpy
 python3-zmq tcl tcl8.6-dev tclx tk8.6-dev yapps2 libftdi1-dev python3-pyside6.qtwidgets
-python3-pyside6.qtgui python3-pyside6.qtcore network-manager linux-headers-amd64 dkms"
+python3-pyside6.qtgui python3-pyside6.qtcore network-manager linux-headers-amd64 dkms tio"
 
 step "Debian"
 . /etc/os-release
