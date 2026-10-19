@@ -41,14 +41,14 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
    - Partition disks: **Guided - use entire disk**, the only disk, **All files in one partition**, **Finish partitioning**, then **Yes** to write the changes.
    - Package manager: the suggested mirror; proxy: empty.
    - Participate in the package usage survey: No.
-   - Software selection: tick **Debian desktop environment**, **Xfce** and **standard system utilities**; untick **GNOME**. Continue.
+   - Software selection: tick **Debian desktop environment**, **Xfce** and **standard system utilities**; untick **GNOME**. Continue. (Missed it? GNOME works too. After logging in, `sudo apt install -y task-xfce-desktop` adds Xfce, chosen with the gear icon on the login screen, and `sudo tasksel install standard` the utilities.)
    - Install GRUB: **Yes**, choose `/dev/sda`.
    - Finish: Continue. The VM reboots into the login screen.
 9. Log in. Open a terminal: Applications menu (top left) > Terminal Emulator.
 
 ## In the VM: everything else
 
-10. In the terminal, type these two lines (the second asks for your password; it takes 30 to 60 minutes and keeps a log in `install.log`):
+10. In the terminal, type these two lines (the second asks for your password; it takes 30 to 60 minutes and keeps a log in `install.log`). If the first says `curl: command not found`, run `sudo apt install -y curl` and try again:
 
         curl -fsSL https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/install-vm.sh -o install-vm.sh
         bash install-vm.sh 2>&1 | tee install.log
