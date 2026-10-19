@@ -157,6 +157,13 @@ run make -C "$KMOTIONX_DIR/KMotionX/tools/kmotion/shim"
 if [ $DO_ICONS = 1 ]; then
     step "desktop icons"
     run env LINUXCNC_DIR="$LINUXCNC_DIR" "$KMOTIONX_DIR/KMotionX/desktop/install-desktop-icons.sh"
+    # GNOME shows nothing on the desktop without its desktop-icons extension (Xfce needs none);
+    # the launchers are in its applications menu either way
+    if [ -d /usr/share/gnome-shell ]; then
+        run sudo apt-get install -y -q gnome-shell-extension-desktop-icons-ng
+        run gnome-extensions enable ding@rastersoft.com || note "the desktop-icons extension is enabled at the next login"
+        note "GNOME: the launchers are in the applications menu (the Windows key, type LinuxCNC); on the desktop after a log out and in"
+    fi
 fi
 
 step "the Kogna's network"

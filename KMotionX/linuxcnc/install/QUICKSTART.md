@@ -59,7 +59,7 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
         bash install-vm.sh 2>&1 | tee install.log
 
     It ends with a summary. If it stops with an error, send `install.log`.
-11. Log out (top right menu) and log in again.
+11. Log out (top right menu) and log in again. The launchers are then on the desktop; on GNOME also under the Windows key (type LinuxCNC).
 
 ## The board
 
