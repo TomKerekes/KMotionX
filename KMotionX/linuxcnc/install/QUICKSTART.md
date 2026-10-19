@@ -52,6 +52,7 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
    - Software selection: tick **Debian desktop environment**, **Xfce** and **standard system utilities**; untick **GNOME**. Continue. (Missed it? GNOME works too. After logging in, `sudo apt install -y task-xfce-desktop` adds Xfce, chosen with the gear icon on the login screen, and `sudo tasksel install standard` the utilities.)
    - Install the GRUB boot loader to your primary drive: **Yes** (older installers then ask which disk: `/dev/sda`). This is the VM's own virtual disk, the only disk the installer can see; Windows and the PC's disks are untouched.
    - Finish: Continue. The VM reboots into the login screen.
+   If instead the screen stops on kernel messages (white text, a "RETBleed" or similar warning) and no login screen comes within a minute: the VM's graphics controller does not suit this host (a VirtualBox 7.0 and Debian 13 problem). Power the VM off (close the window, Power off the machine), then Machine > Settings > Display: Graphics Controller **VBoxSVGA**, Video Memory 128 MB, OK, and start it again. Debian itself is fine; Ctrl+Alt+F2 in the frozen VM shows a text login.
 10. Log in. Open the VM's web browser (Firefox, in the applications menu) and go to this page, so the commands below can be copied instead of typed:
 
        https://github.com/TomKerekes/KMotionX/blob/master/KMotionX/linuxcnc/install/QUICKSTART.md
