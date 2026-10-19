@@ -13,11 +13,12 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
        curl.exe -fsSL -o vm-create.cmd https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/vm-create.cmd
 
    (Saving it from the browser works too, but the browser tends to add `.txt`; if that happened, `Rename-Item vm-create.cmd.txt vm-create.cmd`.)
-5. List the host's network adapters:
+5. Find the name of the adapter the Kogna is plugged into (with a KFLOP, skip this step). Power the Kogna and connect its cable to the PC, then:
 
-       & "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs
+       ipconfig /all
 
-   Each adapter is a block of lines. Find the block of the adapter that connects to the Kogna (its `IPAddress:` is 192.168.113.x when the Kogna is on) and copy the text after `Name:` in that block, for example `Intel(R) Ethernet Controller I226-V #2`. Not the `VBoxNetworkName:` line: that one carries a `HostInterfaceNetworking-` prefix and is not accepted. With a KFLOP there is none to note.
+   The PC's adapters are listed one by one, each with a `Description` line and, when connected, an `IPv4 Address` line. The Kogna gives the adapter it is plugged into an address starting `192.168.113.` (the Kogna is a DHCP server on that cable), so look for that address: the `Description` line of that adapter is the name to use, for example `Intel(R) Ethernet Controller I226-V #2`. The internet adapter (Wi-Fi, or another Ethernet port) is not it; the VM reaches the internet through the PC on its own.
+   The same names appear after `Name:` in `& "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs`; the `VBoxNetworkName:` lines there, with their `HostInterfaceNetworking-` prefix, are not accepted.
    If the name is wrong, the script makes nothing and prints the accepted names; run it again with one of those.
 6. Make the VM (one line; the ISO name exactly as downloaded, the adapter name in quotes, or leave it out for a KFLOP):
 
