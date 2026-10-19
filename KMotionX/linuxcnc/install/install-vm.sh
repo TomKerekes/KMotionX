@@ -156,6 +156,8 @@ else
         run sudo sh "$GA/VBoxLinuxAdditions.run" --nox11 || note "the Guest Additions installer ended with $? (a reboot wanted, or see /var/log/vboxadd-install.log)"
         case "$GA" in /tmp/*) sudo umount "$GA" 2>/dev/null; rmdir "$GA" 2>/dev/null;; esac
         note "in effect after a log out and in (a reboot for the display driver)"
+        # the vboxsf group (a shared folder's readers) exists only now: the groups step ran before
+        if getent group vboxsf > /dev/null && ! id -nG | grep -qw vboxsf; then run sudo usermod -aG vboxsf "$USER"; GROUPS_CHANGED=1; fi
     else
         note "no Guest Additions disc found: in the VM window, Devices > Insert Guest Additions CD Image, then run this script again"
     fi
