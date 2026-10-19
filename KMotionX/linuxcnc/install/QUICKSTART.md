@@ -52,8 +52,9 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 
 ## In the VM: everything else
 
-10. In the terminal, type these two lines (the second asks for your password; it takes 30 to 60 minutes and keeps a log in `install.log`). If the first says `curl: command not found`, run `sudo apt install -y curl` and try again:
+10. In the terminal, these three lines, one at a time (the first and third ask for your password; the third takes 30 to 60 minutes and keeps a log in `install.log`):
 
+        sudo apt install -y curl
         curl -fsSL https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/install-vm.sh -o install-vm.sh
         bash install-vm.sh 2>&1 | tee install.log
 
