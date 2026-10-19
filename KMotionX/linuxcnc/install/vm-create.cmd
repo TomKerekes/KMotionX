@@ -4,7 +4,7 @@ rem (vm-create.sh is the same for Linux/macOS). Needs VirtualBox 7 and the Debia
 rem Usage:   vm-create.cmd <debian-13 iso> [bridged host adapter] [shared folder]
 rem    e.g.  vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "Intel(R) Ethernet Controller I226-V #2" C:\kmotion-share
 rem The bridged adapter is the host's network connection to the Kogna, by the name VirtualBox
-rem shows ("VBoxManage list bridgedifs"); the Kogna is its own DHCP server on that link.
+rem shows ("VBoxManage list bridgedifs"): the Kogna's own cable (where it is the DHCP server) or the router's network it is on.
 rem Then start the VM and install Debian (INSTALL.md, step 2).
 setlocal
 set VBM="%ProgramFiles%\Oracle\VirtualBox\VBoxManage.exe"

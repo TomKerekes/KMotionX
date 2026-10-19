@@ -19,10 +19,14 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
 
        ipconfig /all
 
-   The PC's adapters are listed one by one, each with a `Description` line and, when connected, an `IPv4 Address` line. The Kogna gives the adapter it is plugged into an address starting `192.168.113.` (the Kogna is a DHCP server on that cable), so look for that address: the `Description` line of that adapter is the name to use, for example `Intel(R) Ethernet Controller I226-V #2`. The internet adapter (Wi-Fi, or another Ethernet port) is not it; the VM reaches the internet through the PC on its own.
+   The PC's adapters are listed one by one, each with a `Description` line and, when connected, an `IPv4 Address` line. The one to use is the adapter on the same network as the Kogna, and that depends on how the Kogna gets its address (its IP setting):
+   - **Kogna on its own cable** to a spare Ethernet port, IP setting 0, no router on that cable: the Kogna finds no DHCP server and becomes one, so that adapter gets an address starting `192.168.113.`. Use that adapter.
+   - **Kogna on your network** (a switch or the router), IP setting 0: the router's DHCP server gives the Kogna an address on your network. Use the Ethernet adapter that connects the PC to that network, the one whose `IPv4 Address` is on your network, for example `192.168.20.2`. That adapter may carry the PC's internet as well; that is fine.
+   - **A fixed IP address** set in the Kogna: the adapter on that address's network.
+
+   The `Description` line of that adapter is the name to use, for example `Intel(R) Ethernet Controller I226-V #2`. The VM gets its internet through the PC on its own, so the internet adapter matters only if the Kogna is on that same network.
    The same names appear after `Name:` in `& "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs`; the `VBoxNetworkName:` lines there, with their `HostInterfaceNetworking-` prefix, are not accepted.
    If the name is wrong, the script makes nothing and prints the accepted names; run it again with one of those.
-   The Kogna needs an Ethernet port of its own: it is a DHCP server on its cable and must not be on the same network as your router. An adapter whose `IPv4 Address` is your home or office network (it has a `Default Gateway`) is the internet's, not the Kogna's. A PC with a single Ethernet port uses Wi-Fi for the internet, or a USB-Ethernet adapter for the Kogna.
 6. Make the VM (one line; the ISO name exactly as downloaded, the adapter name in quotes, or leave it out for a KFLOP):
 
        .\vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "Intel(R) Ethernet Controller I226-V #2"
@@ -66,7 +70,7 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
 
 ## The board
 
-12. Kogna: in the VM window's menu, Devices > Network > Connect Network Adapter (adapter 2). In a terminal, `ip -4 addr show enp0s8` shows `inet 192.168.113.`something within a few seconds: the VM is on the Kogna's link. If no `inet` line appears, the link has no DHCP profile (a VM installed with an older script): make it with
+12. Kogna: in the VM window's menu, Devices > Network > Connect Network Adapter (adapter 2). In a terminal, `ip -4 addr show enp0s8` shows an `inet` address within a few seconds, on the Kogna's network (`192.168.113.`something with the Kogna on its own cable, your network's addresses with the Kogna on your router): the VM is on the Kogna's network. If no `inet` line appears, the link has no DHCP profile (a VM installed with an older script): make it with
 
         nmcli connection add type ethernet ifname enp0s8 con-name Kogna ipv4.method auto ipv6.method disabled autoconnect yes
 

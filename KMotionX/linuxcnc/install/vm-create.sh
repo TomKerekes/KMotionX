@@ -23,7 +23,7 @@ VBoxManage modifyvm "$NAME" --memory "$RAM" --cpus "$CPUS" --vram 64 --graphicsc
     --usb on --usbohci on --clipboard-mode bidirectional --draganddrop bidirectional --audio-enabled off \
     --nic1 nat
 if [ -n "$BRIDGE" ]; then
-    # adapter 2 bridged to the interface the Kogna is on: the Kogna is its own DHCP server
+    # adapter 2 bridged to the interface the Kogna is on (its own cable, where it is the DHCP server, or the router's network)
     VBoxManage modifyvm "$NAME" --nic2 bridged --bridgeadapter2 "$BRIDGE" --cableconnected2 on
 fi
 VBoxManage createmedium disk --filename "$VMDIR/$NAME.vdi" --size "$DISK"

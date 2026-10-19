@@ -198,7 +198,7 @@ if [ -n "$KOGNA_IF" ]; then
         run nmcli connection up Kogna
     fi
 else
-    note "no second wired interface found (KOGNA_IF not set): no profile made. The Kogna hands out 192.168.113.x on its own link;"
+    note "no second wired interface found (KOGNA_IF not set): no profile made. With the Kogna on the internet's network nothing is needed; on its own link"
     note "give the bridged interface a DHCP profile: nmcli connection add type ethernet ifname <IF> con-name Kogna ipv4.method auto autoconnect yes"
 fi
 
