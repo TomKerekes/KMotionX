@@ -30,6 +30,8 @@ VBoxManage createmedium disk --filename "$VMDIR/$NAME.vdi" --size "$DISK"
 VBoxManage storagectl "$NAME" --name SATA --add sata --controller IntelAhci
 VBoxManage storageattach "$NAME" --storagectl SATA --port 0 --device 0 --type hdd --medium "$VMDIR/$NAME.vdi"
 VBoxManage storageattach "$NAME" --storagectl SATA --port 1 --device 0 --type dvddrive --medium "$ISO"
+# VirtualBox's Guest Additions disc in a second drive: install-vm.sh installs them (shared clipboard, display)
+VBoxManage storageattach "$NAME" --storagectl SATA --port 2 --device 0 --type dvddrive --medium additions
 # a KFLOP on USB (FTDI 0403:6001, a full-speed device: the OHCI controller serves it) goes to the VM when it is plugged in
 VBoxManage usbfilter add 0 --target "$NAME" --name KFLOP --vendorid 0403 --productid 6001
 if [ -n "$SHARE" ]; then

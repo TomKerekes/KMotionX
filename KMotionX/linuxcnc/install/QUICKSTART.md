@@ -66,4 +66,4 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 14. Double-click the desktop icon **LinuxCNC (KMotion simulate)**: AXIS starts with the planner and no board. Load a program and run it.
 15. Then **LinuxCNC (Kogna)** or **LinuxCNC (3 Link)** with the board connected.
 
-Optional, for a shared folder and a resizable display: Devices > Insert Guest Additions CD, then in a terminal `sudo sh /media/cdrom/VBoxLinuxAdditions.run`, `sudo usermod -aG vboxsf $USER`, log out and in.
+The shared clipboard between Windows and the VM, drag and drop and a display that follows the window size come with VirtualBox's Guest Additions, which install-vm.sh installs from the disc the VM script attached (they work after step 11). For a VM made without that disc: in the VM window, Devices > Insert Guest Additions CD Image, then run install-vm.sh again.

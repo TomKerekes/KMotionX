@@ -30,7 +30,7 @@ By hand instead: New VM, type Linux / Debian (64-bit), 4 GB memory, 2 CPUs, a 40
 
 Then install Debian: start the VM, "Graphical install", your language and keyboard, hostname of your choice, a user (the scripts assume you work as that user, in its home), no root password (then the user gets sudo, which the scripts need), guided partitioning on the whole disk, and in the software selection tick "Debian desktop environment" and "Xfce" (the desktop icons support Xfce and GNOME; Xfce is what the existing VM runs), plus "standard system utilities". Reboot into the desktop. `UNATTENDED=1 bash vm-create.sh ...` lets VirtualBox do the install by itself instead (user `tk`, password `kmotion`, Debian's default desktop).
 
-Optional, for the shared folder and a better display: Devices > Insert Guest Additions CD, then in a terminal `sudo sh /media/cdrom/VBoxLinuxAdditions.run` (it needs `build-essential linux-headers-amd64 dkms`, which `install-vm.sh` installs, so run it after step 3 or install those first), and `sudo usermod -aG vboxsf $USER`, log out and in.
+The Guest Additions (the shared clipboard and folder, drag and drop, a display that follows the window) are installed by `install-vm.sh` from VirtualBox's own disc, which the VM script attaches as a second drive (`--medium additions`). A VM made by hand gets the disc with Devices > Insert Guest Additions CD Image before the script runs; by hand the install is `sudo sh /media/cdrom/VBoxLinuxAdditions.run` after step 3 (it needs `build-essential linux-headers-amd64 dkms`, which the script installs).
 
 ## 3. Everything else: `install-vm.sh`
 
@@ -45,7 +45,7 @@ In the VM, in a terminal:
 2. Clones KMotionX (`TomKerekes/KMotionX`, `master`) to `~/KMotionX`, `./configure`, `make` (plain, never `-j`), `sudo make install` (the libraries to `/usr/local/lib/kmx`, KMotionServer, tcc67 and the firmware images to `~/.kmotionx`), `make` once more as yourself (the install leaves `bin/` root-owned), `chown` of `~/.kmotionx`, the KFLOP udev rule, and adds you to `plugdev`, `dialout` and `vboxsf`.
 3. Clones LinuxCNC to `~/linuxcnc-dev`, checks out the pinned commit `514be4f657`, applies the patches, `apt build-dep`, `./autogen.sh && ./configure --with-realtime=uspace --disable-build-documentation`, `make -j$(nproc)`. No `make setuid`: not needed.
 4. Builds `kmotion-motion` and runs its tests (`make test`: the planner in simulate mode, every check prints ok or FAIL).
-5. Builds the KMotion tool's C shim and installs the desktop icons (KMotion, LinuxCNC on the Kogna, on the 3 Link, in simulate mode).
+5. Installs the VirtualBox Guest Additions from their disc when the machine is a VM and they are not in yet (skipped otherwise), builds the KMotion tool's C shim and installs the desktop icons (KMotion, LinuxCNC on the Kogna, on the 3 Link, in simulate mode).
 6. With `KOGNA_IF=<interface> bash install-vm.sh`, makes the DHCP profile for the bridged interface (`ip link` shows the names; the one without the internet). Without it, the command to do it by hand is printed.
 
 It can be run again at any time: each step skips what is already done, and after a `git pull` in `~/KMotionX` it rebuilds what changed (if a patch in `patches/` changed, `git -C ~/linuxcnc-dev checkout -- src lib` first, then run it again). `--dry-run` prints the commands without running anything; `--no-linuxcnc` and `--no-icons` leave those out. Log out and in once afterwards for the groups.

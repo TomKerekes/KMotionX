@@ -122,6 +122,35 @@ if [ $DO_LINUXCNC = 1 ]; then
     run make -C "$KMOTIONX_DIR/KMotionX/linuxcnc/kmotion-motion" LINUXCNC_DIR="$LINUXCNC_DIR" test
 fi
 
+step "VirtualBox Guest Additions (shared clipboard, drag and drop, a resizable display)"
+# from the disc vm-create attached (or one inserted by hand: Devices > Insert Guest Additions CD),
+# wherever the desktop mounted it or not mounted at all; the packages step put the headers and dkms in
+if ! grep -q '^flags.*hypervisor' /proc/cpuinfo 2>/dev/null; then note "not a VM: skipped"
+elif command -v VBoxClient >/dev/null 2>&1; then note "already installed ($(VBoxClient --version 2>/dev/null || echo installed))"
+else
+    GA=""
+    for d in /media/*/VBox_GAs* /media/cdrom* /run/media/*/VBox_GAs*; do [ -f "$d/VBoxLinuxAdditions.run" ] && { GA=$d; break; }; done
+    if [ -z "$GA" ]; then
+        for dev in /dev/sr0 /dev/sr1 /dev/sr2; do
+            [ -b "$dev" ] || continue
+            GAMNT=$(mktemp -d)
+            if sudo mount -o ro "$dev" "$GAMNT" 2>/dev/null; then
+                if [ -f "$GAMNT/VBoxLinuxAdditions.run" ]; then GA=$GAMNT; break; fi
+                sudo umount "$GAMNT"
+            fi
+            rmdir "$GAMNT" 2>/dev/null
+        done
+    fi
+    if [ -n "$GA" ]; then
+        # the installer returns 2 when it only asks for a reboot: not a failure
+        run sudo sh "$GA/VBoxLinuxAdditions.run" --nox11 || note "the Guest Additions installer ended with $? (a reboot wanted, or see /var/log/vboxadd-install.log)"
+        case "$GA" in /tmp/*) sudo umount "$GA" 2>/dev/null; rmdir "$GA" 2>/dev/null;; esac
+        note "in effect after a log out and in (a reboot for the display driver)"
+    else
+        note "no Guest Additions disc found: in the VM window, Devices > Insert Guest Additions CD Image, then run this script again"
+    fi
+fi
+
 step "the KMotion tool (tools/kmotion)"
 run make -C "$KMOTIONX_DIR/KMotionX/tools/kmotion/shim"
 
