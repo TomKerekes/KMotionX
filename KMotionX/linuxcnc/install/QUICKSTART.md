@@ -47,10 +47,10 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
    - Root password: leave both fields empty (your user then gets `sudo`, which the install script needs).
    - Full name, username (for example `tk`), password: yours. Remember them.
    - Partition disks: **Guided - use entire disk**, the only disk, **All files in one partition**, **Finish partitioning**, then **Yes** to write the changes.
-   - Package manager: the suggested mirror; proxy: empty.
+   - Package manager: the suggested mirror; proxy: empty. A warning "An attempt to configure apt to install additional packages from the media failed" can appear (the installer looked at the VM's second disc, the Guest Additions): Continue, the packages come from the internet.
    - Participate in the package usage survey: No.
    - Software selection: tick **Debian desktop environment**, **Xfce** and **standard system utilities**; untick **GNOME**. Continue. (Missed it? GNOME works too. After logging in, `sudo apt install -y task-xfce-desktop` adds Xfce, chosen with the gear icon on the login screen, and `sudo tasksel install standard` the utilities.)
-   - Install GRUB: **Yes**, choose `/dev/sda`.
+   - Install the GRUB boot loader to your primary drive: **Yes** (older installers then ask which disk: `/dev/sda`). This is the VM's own virtual disk, the only disk the installer can see; Windows and the PC's disks are untouched.
    - Finish: Continue. The VM reboots into the login screen.
 10. Log in. Open the VM's web browser (Firefox, in the applications menu) and go to this page, so the commands below can be copied instead of typed:
 
