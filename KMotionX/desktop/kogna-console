@@ -1,15 +1,21 @@
 #!/bin/bash
 # kogna-console: the Kogna's virtual COM port (its USB serial console) in a terminal, from a
-# desktop launcher. The port is /dev/ttyACM<n> once the Kogna's USB is attached to this
-# machine (in a VM: Devices > USB in the VM window, or a USB filter on the VM); tio shows
-# what the board prints and sends what is typed. Quit tio with Ctrl-t then q.
-# (The port speaks over USB: the baud rate is irrelevant.)
+# desktop launcher. The Kogna's port is an FTDI FT232R (USB 0403:6001, like the KFLOP's
+# FT245), which the kernel's ftdi_sio driver makes /dev/ttyUSB<n> once the Kogna's USB is
+# attached to this machine (in a VM: Devices > USB in the VM window, or a USB filter on the
+# VM); tio shows what the board prints and sends what is typed. Quit tio with Ctrl-t then q.
+# The baud rate: 115200 (tio's default).
 dev=""
-for d in /dev/serial/by-id/*Kogna* /dev/serial/by-id/*Dynomotion* /dev/ttyACM0 /dev/ttyACM1; do
+for d in /dev/serial/by-id/*Kogna* /dev/serial/by-id/*Dynomotion* /dev/serial/by-id/*FT232R* \
+         /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyACM0 /dev/ttyACM1; do
     [ -e "$d" ] && { dev=$d; break; }
 done
 if [ -z "$dev" ]; then
-    echo "No Kogna serial port found (no /dev/ttyACM*)."
+    echo "No Kogna serial port found (no /dev/ttyUSB* or /dev/ttyACM*)."
+    if command -v lsusb >/dev/null && lsusb | grep -q '0403:6001'; then
+        echo "  - an FTDI 0403:6001 device IS attached but has no serial port: the kernel's ftdi_sio driver"
+        echo "    did not take it (dmesg | tail says why; a device with manufacturer 'Dynomotion' is a KFLOP)"
+    fi
     echo "  - plug the Kogna's USB into this machine; in a VM, attach it with Devices > USB in the VM window"
     echo "  - then start this again"
     echo; read -r -p "press Enter to close " _; exit 1
