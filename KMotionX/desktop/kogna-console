@@ -23,7 +23,7 @@ for t in tio picocom; do command -v $t >/dev/null && { term=$t; break; }; done
 if [ -z "$term" ]; then
     echo "no serial terminal program: sudo apt install tio"; echo; read -r -p "press Enter to close " _; exit 1
 fi
-echo "Kogna console on $dev ($term). Quit: tio Ctrl-t q, picocom Ctrl-a Ctrl-x"
+echo "Kogna COM port on $dev ($term). Quit: tio Ctrl-t q, picocom Ctrl-a Ctrl-x"
 echo
 case $term in
     tio) tio "$dev";;

@@ -95,14 +95,14 @@ Keywords=kmotion;kflop;kogna;dynomotion;cnc;
 END
 
 # --- the Kogna's serial console ----------------------------------------------------------
-note "Kogna Console (the virtual COM port over USB, desktop/kogna-console)"
+note "Kogna COM Port (the virtual COM port over USB, desktop/kogna-console)"
 command -v tio >/dev/null || command -v picocom >/dev/null ||
-    warn "no serial terminal program: the Kogna Console launcher needs   sudo apt install tio"
+    warn "no serial terminal program: the Kogna COM Port launcher needs   sudo apt install tio"
 write_launcher kogna-console <<END
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Kogna Console
+Name=Kogna COM Port
 Comment=The Kogna's virtual COM port (USB serial): what the board prints, for diagnostics
 Exec="$here/kogna-console"
 Icon=utilities-terminal

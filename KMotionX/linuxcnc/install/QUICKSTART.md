@@ -82,6 +82,6 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
 
 15. Double-click the desktop icon **LinuxCNC (KMotion simulate)**: AXIS starts with the planner and no board. Load a program and run it.
 16. Then **LinuxCNC (Kogna)** or **LinuxCNC (3 Link)** with the board connected.
-17. For diagnostics, the Kogna's own console (what the board prints) is the **Kogna Console** icon. It needs the Kogna's USB cable in the PC and, in a VM, the device attached to the VM: VM window menu, Devices > USB, tick the Kogna. Quit the console with Ctrl-t then q.
+17. For diagnostics, the Kogna's own console (what the board prints) is the **Kogna COM Port** icon. It needs the Kogna's USB cable in the PC and, in a VM, the device attached to the VM: VM window menu, Devices > USB, tick the Kogna. Quit the console with Ctrl-t then q.
 
 The shared clipboard between Windows and the VM, drag and drop and a display that follows the window size come with VirtualBox's Guest Additions, which install-vm.sh installs from the disc the VM script attached (they work after step 12). For a VM made without that disc: in the VM window, Devices > Insert Guest Additions CD Image, then run install-vm.sh again.
