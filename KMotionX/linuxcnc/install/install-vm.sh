@@ -14,7 +14,7 @@
 # Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX),
 #     LINUXCNC_COMMIT (514be4f657), LINUXCNC_DIR (~/linuxcnc-dev),
 #     KOGNA_IF (the bridged interface to the Kogna, e.g. enp0s8: a DHCP profile is made for it)
-set -euo pipefail
+set -Eeuo pipefail   # -E: the ERR message below also fires for a command run inside a function
 
 KMOTIONX_REPO=${KMOTIONX_REPO:-https://github.com/TomKerekes/KMotionX.git}
 KMOTIONX_BRANCH=${KMOTIONX_BRANCH:-master}
@@ -34,6 +34,8 @@ for a in "$@"; do
     esac
 done
 run() { echo "+ $*"; [ $DRY = 1 ] || "$@"; }
+# a failed command stops the script (set -e): say so plainly, the output may be going through tee
+trap 'echo; echo "*** install-vm.sh STOPPED: the command above failed (line $LINENO). Fix what it says and run"; echo "*** the script again: the steps already done are skipped."' ERR
 step() { echo; echo "==== $*"; }
 note() { echo "   - $*"; }
 
@@ -109,6 +111,11 @@ if [ $DO_LINUXCNC = 1 ]; then
         else run git -C "$LINUXCNC_DIR" apply "$p"; fi
     done
     step "LinuxCNC build dependencies (apt build-dep; the documentation tools come along)"
+    # apt build-dep reads the tree's debian/control, which LinuxCNC does not ship: its
+    # debian/configure generates it (and lists what is missing, which build-dep then installs)
+    if [ ! -f "$LINUXCNC_DIR/debian/control" ]; then
+        run "$LINUXCNC_DIR/debian/configure"
+    else note "debian/control exists"; fi
     run sudo apt-get build-dep -y -q "$LINUXCNC_DIR"
     step "LinuxCNC build (--with-realtime=uspace, no documentation; a while)"
     if [ ! -f "$LINUXCNC_DIR/src/Makefile.inc" ]; then
