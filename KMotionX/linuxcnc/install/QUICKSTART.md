@@ -44,7 +44,11 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
    - Software selection: tick **Debian desktop environment**, **Xfce** and **standard system utilities**; untick **GNOME**. Continue. (Missed it? GNOME works too. After logging in, `sudo apt install -y task-xfce-desktop` adds Xfce, chosen with the gear icon on the login screen, and `sudo tasksel install standard` the utilities.)
    - Install GRUB: **Yes**, choose `/dev/sda`.
    - Finish: Continue. The VM reboots into the login screen.
-9. Log in. Open a terminal: Applications menu (top left) > Terminal Emulator.
+9. Log in. Open the VM's web browser (Firefox, in the applications menu) and go to this page, so the commands below can be copied instead of typed:
+
+       https://github.com/TomKerekes/KMotionX/blob/master/KMotionX/linuxcnc/install/QUICKSTART.md
+
+   Then open a terminal (Applications menu > Terminal Emulator, or Ctrl+Alt+T). Paste into a terminal with **Ctrl+Shift+V** (Ctrl+V alone does nothing there).
 
 ## In the VM: everything else
 
