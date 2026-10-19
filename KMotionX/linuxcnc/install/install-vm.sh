@@ -34,6 +34,9 @@ for a in "$@"; do
     esac
 done
 run() { echo "+ $*"; [ $DRY = 1 ] || "$@"; }
+# apt-get runs with DEBIAN_FRONTEND=noninteractive: a package's configuration question (which
+# login manager when GNOME's and Xfce's are both in, say) keeps the current choice instead of
+# stopping the install for an answer
 # a failed command stops the script (set -e): say so plainly, the output may be going through tee
 trap 'echo; echo "*** install-vm.sh STOPPED: the command above failed (line $LINENO). Fix what it says and run"; echo "*** the script again: the steps already done are skipped."' ERR
 step() { echo; echo "==== $*"; }
@@ -66,11 +69,11 @@ if [ -f /etc/apt/sources.list.d/debian.sources ]; then
 elif [ -f /etc/apt/sources.list ] && ! grep -q '^deb-src' /etc/apt/sources.list; then
     run sudo sh -c "grep '^deb ' /etc/apt/sources.list | sed 's/^deb /deb-src /' >> /etc/apt/sources.list"
 else note "already on"; fi
-run sudo apt-get update -q
+run sudo DEBIAN_FRONTEND=noninteractive apt-get update -q
 
 step "packages"
 # shellcheck disable=SC2086
-run sudo apt-get install -y -q $PACKAGES
+run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q $PACKAGES
 
 step "KMotionX: $KMOTIONX_REPO ($KMOTIONX_BRANCH) in $KMOTIONX_DIR"
 if [ ! -d "$KMOTIONX_DIR/.git" ]; then
@@ -116,7 +119,7 @@ if [ $DO_LINUXCNC = 1 ]; then
     if [ ! -f "$LINUXCNC_DIR/debian/control" ]; then
         run "$LINUXCNC_DIR/debian/configure"
     else note "debian/control exists"; fi
-    run sudo apt-get build-dep -y -q "$LINUXCNC_DIR"
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get build-dep -y -q "$LINUXCNC_DIR"
     step "LinuxCNC build (--with-realtime=uspace, no documentation; a while)"
     if [ ! -f "$LINUXCNC_DIR/src/Makefile.inc" ]; then
         run bash -c "cd '$LINUXCNC_DIR/src' && ./autogen.sh && ./configure --with-realtime=uspace --disable-build-documentation"
@@ -167,7 +170,7 @@ if [ $DO_ICONS = 1 ]; then
     # GNOME shows nothing on the desktop without its desktop-icons extension (Xfce needs none);
     # the launchers are in its applications menu either way
     if [ -d /usr/share/gnome-shell ]; then
-        run sudo apt-get install -y -q gnome-shell-extension-desktop-icons-ng
+        run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q gnome-shell-extension-desktop-icons-ng
         run gnome-extensions enable ding@rastersoft.com || note "the desktop-icons extension is enabled at the next login"
         note "GNOME: the launchers are in the applications menu (the Windows key, type LinuxCNC); on the desktop after a log out and in"
     fi
