@@ -33,6 +33,7 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 
 8. In the installer menu choose **Graphical install**. Then, screen by screen:
    - Language, location, keyboard: yours.
+   - Primary network interface (asked when the VM has the Kogna adapter): **enp0s3**, the NAT adapter with the internet. enp0s8 is the bridge to the Kogna, set up later.
    - Hostname: `kmotion`. Domain name: leave empty.
    - Root password: leave both fields empty (your user then gets `sudo`, which the install script needs).
    - Full name, username (for example `tk`), password: yours. Remember them.
