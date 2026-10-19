@@ -4,6 +4,8 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 
 ## On the Windows PC
 
+Nothing else is installed on Windows: no Python, no compiler. Everything else goes into the VM in step 10.
+
 1. Make a folder `C:\InstallLinuxCNC`.
 2. If VirtualBox is not installed: open https://www.virtualbox.org/wiki/Downloads, click **Windows hosts**, run the downloaded installer, keep every default.
 3. Open https://www.debian.org/download, click the **debian-13.x.x-amd64-netinst.iso** link, save the file to `C:\InstallLinuxCNC`. Note its exact name: the version number changes (13.7.0 in October 2026).
@@ -20,6 +22,7 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
    The PC's adapters are listed one by one, each with a `Description` line and, when connected, an `IPv4 Address` line. The Kogna gives the adapter it is plugged into an address starting `192.168.113.` (the Kogna is a DHCP server on that cable), so look for that address: the `Description` line of that adapter is the name to use, for example `Intel(R) Ethernet Controller I226-V #2`. The internet adapter (Wi-Fi, or another Ethernet port) is not it; the VM reaches the internet through the PC on its own.
    The same names appear after `Name:` in `& "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs`; the `VBoxNetworkName:` lines there, with their `HostInterfaceNetworking-` prefix, are not accepted.
    If the name is wrong, the script makes nothing and prints the accepted names; run it again with one of those.
+   The Kogna needs an Ethernet port of its own: it is a DHCP server on its cable and must not be on the same network as your router. An adapter whose `IPv4 Address` is your home or office network (it has a `Default Gateway`) is the internet's, not the Kogna's. A PC with a single Ethernet port uses Wi-Fi for the internet, or a USB-Ethernet adapter for the Kogna.
 6. Make the VM (one line; the ISO name exactly as downloaded, the adapter name in quotes, or leave it out for a KFLOP):
 
        .\vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "Intel(R) Ethernet Controller I226-V #2"

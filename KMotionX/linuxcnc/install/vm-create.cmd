@@ -44,8 +44,14 @@ if not "%~2"=="" %VBM% modifyvm "%NAME%" --nic2 bridged --bridgeadapter2 "%~2" -
 %VBM% storagectl "%NAME%" --name SATA --add sata --controller IntelAhci || exit /b 1
 %VBM% storageattach "%NAME%" --storagectl SATA --port 0 --device 0 --type hdd --medium "%VMDIR%%NAME%.vdi" || exit /b 1
 %VBM% storageattach "%NAME%" --storagectl SATA --port 1 --device 0 --type dvddrive --medium "%~1" || exit /b 1
-rem VirtualBox's Guest Additions disc in a second drive: install-vm.sh installs them (shared clipboard, display)
-%VBM% storageattach "%NAME%" --storagectl SATA --port 2 --device 0 --type dvddrive --medium additions || exit /b 1
+rem VirtualBox's Guest Additions disc in a second drive: install-vm.sh installs them (shared clipboard, display).
+rem The file ships with VirtualBox; an install without it only loses the automatic step
+set GAISO=%ProgramFiles%\Oracle\VirtualBox\VBoxGuestAdditions.iso
+if exist "%GAISO%" (
+    %VBM% storageattach "%NAME%" --storagectl SATA --port 2 --device 0 --type dvddrive --medium "%GAISO%" || exit /b 1
+) else (
+    echo note: no %GAISO% - the Guest Additions are inserted later from the VM window: Devices ^> Insert Guest Additions CD Image
+)
 rem a KFLOP on USB (FTDI 0403:6001, a full-speed device: the OHCI controller serves it) goes to the VM when it is plugged in
 %VBM% usbfilter add 0 --target "%NAME%" --name KFLOP --vendorid 0403 --productid 6001 || exit /b 1
 if not "%~3"=="" (
