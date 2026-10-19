@@ -32,7 +32,7 @@ fi
 echo "Kogna COM port on $dev ($term). Quit: tio Ctrl-t q, picocom Ctrl-a Ctrl-x"
 echo
 case $term in
-    tio) tio "$dev";;
+    tio) tio --local-echo "$dev";;
     picocom) picocom -q "$dev";;
 esac
 rc=$?
