@@ -74,6 +74,11 @@ run sudo DEBIAN_FRONTEND=noninteractive apt-get update -q
 step "packages"
 # shellcheck disable=SC2086
 run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q $PACKAGES
+# brltty (the Braille display daemon every Debian desktop brings) claims FTDI 0403:6001 USB
+# devices - some Braille displays use that chip - and takes the Kogna's COM port (an FT232R)
+# away from the serial driver seconds after it appears; a KFLOP would lose its port the same way
+if dpkg -s brltty >/dev/null 2>&1; then run sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y -q brltty
+else note "brltty not installed"; fi
 
 step "KMotionX: $KMOTIONX_REPO ($KMOTIONX_BRANCH) in $KMOTIONX_DIR"
 if [ ! -d "$KMOTIONX_DIR/.git" ]; then
