@@ -24,9 +24,18 @@ if not "%~2"=="" (
     )
 )
 
+%VBM% showvminfo "%NAME%" >nul 2>&1 && (
+    echo a VM named "%NAME%" exists already. Remove it first ^(this deletes its disk too^):
+    echo     %VBM% unregistervm "%NAME%" --delete
+    exit /b 2
+)
 %VBM% createvm --name "%NAME%" --ostype Debian_64 --register || exit /b 1
-rem (the whole command in one more pair of quotes: cmd strips the outer pair, and the path with its space survives)
-for /f "tokens=1,* delims==" %%a in ('"%VBM% showvminfo "%NAME%" --machinereadable ^| findstr /b CfgFile"') do set CFG=%%~b
+rem where VirtualBox put it: read from a file (a command inside for /f loses the quotes around a path with a space)
+set INFO=%TEMP%\kmotion-vm-info.txt
+%VBM% showvminfo "%NAME%" --machinereadable > "%INFO%"
+set CFG=
+for /f "usebackq tokens=1,* delims==" %%a in ("%INFO%") do if "%%a"=="CfgFile" set CFG=%%~b
+del "%INFO%"
 if "%CFG%"=="" ( echo could not find where VirtualBox put the VM ^(showvminfo gave no CfgFile^) & exit /b 1 )
 for %%f in ("%CFG%") do set VMDIR=%%~dpf
 %VBM% modifyvm "%NAME%" --memory %RAM% --cpus %CPUS% --vram 64 --graphicscontroller vmsvga --usb on --usbohci on --clipboard-mode bidirectional --draganddrop bidirectional --audio-enabled off --nic1 nat || exit /b 1
