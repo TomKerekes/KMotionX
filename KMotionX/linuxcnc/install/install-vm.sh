@@ -177,6 +177,18 @@ if [ $DO_ICONS = 1 ]; then
 fi
 
 step "the Kogna's network"
+# KOGNA_IF not given: the wired interface that is not the internet's (in the VM, enp0s8, the
+# bridge to the Kogna; adapter 1, enp0s3, carries the default route)
+if [ -z "$KOGNA_IF" ]; then
+    inet_if=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+    for i in /sys/class/net/*; do
+        i=$(basename "$i")
+        [ "$i" = lo ] || [ "$i" = "$inet_if" ] && continue
+        [ -d "/sys/class/net/$i/wireless" ] && continue
+        [ -e "/sys/class/net/$i/device" ] || continue
+        KOGNA_IF=$i; note "the Kogna's interface: $i (the wired one without the default route)"; break
+    done
+fi
 if [ -n "$KOGNA_IF" ]; then
     if nmcli -t -f NAME connection show 2>/dev/null | grep -qx Kogna; then note "profile 'Kogna' exists"
     else
@@ -184,7 +196,7 @@ if [ -n "$KOGNA_IF" ]; then
         run nmcli connection up Kogna
     fi
 else
-    note "KOGNA_IF not set: no profile made. The Kogna hands out 192.168.113.x on its own link;"
+    note "no second wired interface found (KOGNA_IF not set): no profile made. The Kogna hands out 192.168.113.x on its own link;"
     note "give the bridged interface a DHCP profile: nmcli connection add type ethernet ifname <IF> con-name Kogna ipv4.method auto autoconnect yes"
 fi
 

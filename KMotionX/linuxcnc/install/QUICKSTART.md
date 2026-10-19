@@ -63,7 +63,11 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 
 ## The board
 
-12. Kogna: in the VM window's menu, Devices > Network > Connect Network Adapter (adapter 2); the Kogna link is up within seconds. KFLOP: plug it in; Devices > USB shows it ticked.
+12. Kogna: in the VM window's menu, Devices > Network > Connect Network Adapter (adapter 2). In a terminal, `ip -4 addr show enp0s8` shows `inet 192.168.113.`something within a few seconds: the VM is on the Kogna's link. If no `inet` line appears, the link has no DHCP profile (a VM installed with an older script): make it with
+
+        nmcli connection add type ethernet ifname enp0s8 con-name Kogna ipv4.method auto ipv6.method disabled autoconnect yes
+
+    KFLOP: plug it in; Devices > USB shows it ticked.
 13. The board's firmware must be the one this tree carries. If Machine on is refused with a message naming two builds: desktop icon **KMotion**, Config & Flash, flash `~/.kmotionx/DSP_KOGNA/DSPKOGNA.out` (or `DSP_KFLOP/DSPKFLOP.out`), then press Machine on again.
 
 ## First run
