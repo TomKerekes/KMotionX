@@ -77,11 +77,11 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
         nmcli connection add type ethernet ifname enp0s8 con-name Kogna ipv4.method auto ipv6.method disabled autoconnect yes
 
     KFLOP: plug it in; Devices > USB shows it ticked.
-14. The board's firmware must be the one this tree carries. If Machine on is refused with a message naming two builds: desktop icon **KMotion**, Config & Flash, flash `~/.kmotionx/DSP_KOGNA/DSPKOGNA.out` (or `DSP_KFLOP/DSPKFLOP.out`), then press Machine on again.
+14. The board's firmware must be the build this tree carries, which is not the same as the Windows 5.5.1 release even when both say 5.5.1 (the module compares the build stamp, date and time). The first Machine on in LinuxCNC (Kogna) will therefore be refused with a message naming the board's build and the file's. Then: desktop icon **KMotion**, Config & Flash, flash `~/.kmotionx/DSP_KOGNA/DSPKOGNA.out` (or `DSP_KFLOP/DSPKFLOP.out`), and press Machine on again. Going back to Windows later means flashing the Windows release's image from KMotion there, the same way.
 
 ## First run
 
-15. Double-click the desktop icon **LinuxCNC (KMotion simulate)**: AXIS starts with the planner and no board. Load a program and run it.
+15. Double-click the desktop icon **LinuxCNC (KMotion simulate)**: AXIS starts with the planner and no board. LinuxCNC starts in E-stop, so first the two round buttons at the top left of the toolbar, in order: E-stop off (F1), then Machine on (F2). Then **Home All** on the Manual Control tab (Ctrl+Home). The Run button (the blue arrow, R) is grey until then. Load a program (File > Open; the examples are under ~/linuxcnc-dev/nc_files) and run it.
 16. Then **LinuxCNC (Kogna)** or **LinuxCNC (3 Link)** with the board connected.
 17. For diagnostics, the Kogna's own console (what the board prints) is the **Kogna COM Port** icon. It needs the Kogna's USB cable in the PC and, in a VM, the device attached to the VM: VM window menu, Devices > USB, tick the Kogna. Quit the console with Ctrl-t then q.
 
