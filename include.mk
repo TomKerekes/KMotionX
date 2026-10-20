@@ -25,7 +25,7 @@ endif
 endif
 LDFLAGS+=$(addprefix -l,$(LD_LIBS))
 LDFLAGS+=$(addprefix -L,$(LD_LIB_PATH))
-LDFLAGS+=-Wl,-rpath,$(realpath $(kmxdir))
+LDFLAGS+=-Wl,-rpath,$(abspath $(kmxdir))   # abspath, not realpath: realpath is empty while the install dir does not exist yet (a clean machine before make install) - the binaries then had no runpath and KMotionServer could not find libKMotionX.so
 #LDFLAGS+=-Wl,-rpath $(realpath $(BINDIR))
 #LDFLAGS+=-Wl,-rpath,$$ORIGIN
 #LDFLAGS+=-Wl,-z,origin
