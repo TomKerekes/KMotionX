@@ -38,7 +38,7 @@ for /f "usebackq tokens=1,* delims==" %%a in ("%INFO%") do if "%%a"=="CfgFile" s
 del "%INFO%"
 if "%CFG%"=="" ( echo could not find where VirtualBox put the VM ^(showvminfo gave no CfgFile^) & exit /b 1 )
 for %%f in ("%CFG%") do set VMDIR=%%~dpf
-%VBM% modifyvm "%NAME%" --memory %RAM% --cpus %CPUS% --vram 64 --graphicscontroller vmsvga --usb on --usbohci on --clipboard-mode bidirectional --draganddrop bidirectional --audio-enabled off --nic1 nat || exit /b 1
+%VBM% modifyvm "%NAME%" --memory %RAM% --cpus %CPUS% --vram 128 --graphicscontroller vboxsvga --usb on --usbohci on --clipboard-mode bidirectional --draganddrop bidirectional --audio-enabled off --nic1 nat || exit /b 1
 if not "%~2"=="" %VBM% modifyvm "%NAME%" --nic2 bridged --bridgeadapter2 "%~2" --cableconnected2 on || exit /b 1
 %VBM% createmedium disk --filename "%VMDIR%%NAME%.vdi" --size %DISK% || exit /b 1
 %VBM% storagectl "%NAME%" --name SATA --add sata --controller IntelAhci || exit /b 1

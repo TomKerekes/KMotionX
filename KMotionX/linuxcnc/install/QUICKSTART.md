@@ -52,12 +52,12 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
    - Software selection: tick **Debian desktop environment**, **Xfce** and **standard system utilities**; untick **GNOME**. Continue. (Missed it? GNOME works too. After logging in, `sudo apt install -y task-xfce-desktop` adds Xfce, chosen with the gear icon on the login screen, and `sudo tasksel install standard` the utilities.)
    - Install the GRUB boot loader to your primary drive: **Yes** (older installers then ask which disk: `/dev/sda`). This is the VM's own virtual disk, the only disk the installer can see; Windows and the PC's disks are untouched.
    - Finish: Continue. The VM reboots into the login screen.
-   If instead the screen stops on kernel messages (white text, a "RETBleed" or similar warning) and no login screen comes within a minute: the VM's graphics controller does not suit this host (a VirtualBox 7.0 and Debian 13 problem). Power the VM off (close the window, Power off the machine), then Machine > Settings > Display: Graphics Controller **VBoxSVGA**, Video Memory 128 MB, OK, and start it again. Debian itself is fine; Ctrl+Alt+F2 in the frozen VM shows a text login.
+   If instead the screen stops on kernel messages (white text, a "RETBleed" or similar warning) and no login screen comes within a minute: the VM's graphics controller does not suit this host (a VirtualBox 7.0 and Debian 13 problem; the VM script now chooses VBoxSVGA, which worked where VMSVGA did not). Power the VM off (close the window, Power off the machine), then Machine > Settings > Display: Graphics Controller **VBoxSVGA**, Video Memory 128 MB, OK, and start it again.
 10. Log in. Open the VM's web browser (Firefox, in the applications menu) and go to this page, so the commands below can be copied instead of typed:
 
        https://github.com/TomKerekes/KMotionX/blob/master/KMotionX/linuxcnc/install/QUICKSTART.md
 
-   Then open a terminal (Applications menu > Terminal Emulator, or Ctrl+Alt+T). Paste into a terminal with **Ctrl+Shift+V** (Ctrl+V alone does nothing there).
+   Then open a terminal (Applications menu > Terminal Emulator, or Ctrl+Alt+T). Paste into a terminal with **Ctrl+Shift+V** (Ctrl+V alone does nothing there), or right-click in the terminal and choose Paste.
 
 ## In the VM: everything else
 
@@ -67,7 +67,7 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
         curl -fsSL https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/install-vm.sh -o install-vm.sh
         bash install-vm.sh 2>&1 | tee install.log
 
-    It ends with a summary. If it stops with an error, send `install.log`.
+    It ends with a summary ("==== done" and what to do next). A red line "gdm.service is not active, cannot reload" on the way is harmless. If it stops with `*** install-vm.sh STOPPED`, send `install.log`.
 12. Log out (top right menu) and log in again. The launchers are then on the desktop; on GNOME also under the Windows key (type LinuxCNC).
 
 ## The board

@@ -19,7 +19,7 @@ if [ -z "$BRIDGE" ]; then echo "host interfaces for the bridge to the Kogna (giv
 
 VBoxManage createvm --name "$NAME" --ostype Debian_64 --register ${VM_DIR:+--basefolder "$VM_DIR"}
 VMDIR=$(VBoxManage showvminfo "$NAME" --machinereadable | sed -n 's/^CfgFile="\(.*\)\/[^/]*"$/\1/p')
-VBoxManage modifyvm "$NAME" --memory "$RAM" --cpus "$CPUS" --vram 64 --graphicscontroller vmsvga \
+VBoxManage modifyvm "$NAME" --memory "$RAM" --cpus "$CPUS" --vram 128 --graphicscontroller vboxsvga \
     --usb on --usbohci on --clipboard-mode bidirectional --draganddrop bidirectional --audio-enabled off \
     --nic1 nat
 if [ -n "$BRIDGE" ]; then
