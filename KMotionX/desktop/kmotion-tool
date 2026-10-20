@@ -20,7 +20,7 @@ The tool needs python3 with PySide6 (sudo apt install python3-pyside6.qtwidgets
 python3-pyside6.qtgui) and bin/libkmx_c.so (make -C KMotionX/tools/kmotion/shim);
 see KMotionX/tools/kmotion/README.md."
 if command -v zenity >/dev/null; then
-    zenity --error --width=600 --title="KMotion" --text="$msg" 2>/dev/null
+    zenity --error --no-markup --width=600 --title="KMotion" --text="$msg" 2>/dev/null   # no-markup: a traceback's <module> is not markup (zenity then showed only "An error has occurred.")
 elif command -v xmessage >/dev/null; then
     xmessage -center -title "KMotion" "$msg"
 elif command -v notify-send >/dev/null; then
