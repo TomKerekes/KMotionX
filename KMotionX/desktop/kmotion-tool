@@ -8,17 +8,34 @@ tool="$here/../tools/kmotion/kmotion_tool.py"
 log="${XDG_CACHE_HOME:-$HOME/.cache}/kmotionx/kmotion-tool.log"
 mkdir -p "$(dirname "$log")"
 
-python3 "$tool" "$@" >"$log" 2>&1
+# -u: unbuffered, so the tool's own messages reach the log in order and before an exit
+python3 -u "$tool" "$@" >"$log" 2>&1
 rc=$?
 [ $rc -eq 0 ] && exit 0
 
-msg="KMotion did not start (exit code $rc). The end of $log:
+# what the failure is NOT, checked rather than guessed, and the one hint that fits
+why=""
+if ! command -v python3 >/dev/null; then why="python3 is not installed."
+elif ! python3 -c 'import PySide6.QtWidgets' 2>/dev/null; then
+    why="python3 has no PySide6: sudo apt install python3-pyside6.qtwidgets python3-pyside6.qtgui"
+elif [ ! -e "$here/../../bin/libkmx_c.so" ]; then
+    why="bin/libkmx_c.so (the tool's C interface) is missing: make -C KMotionX/tools/kmotion/shim"
+else
+    why="Python, PySide6 and the tool's library are all in place."
+    srv=$(pgrep -x KMotionServer | head -1)
+    if [ -n "$srv" ]; then
+        why="$why A KMotionServer is running (pid $srv): if it is hung from an earlier session,
+    killall KMotionServer
+and start KMotion again."
+    fi
+    why="$why To see every message, run from a terminal:
+    python3 $tool"
+fi
+msg="KMotion ended with exit code $rc. The end of $log:
 
 $(tail -n 12 "$log")
 
-The tool needs python3 with PySide6 (sudo apt install python3-pyside6.qtwidgets
-python3-pyside6.qtgui) and bin/libkmx_c.so (make -C KMotionX/tools/kmotion/shim);
-see KMotionX/tools/kmotion/README.md."
+$why"
 if command -v zenity >/dev/null; then
     zenity --error --no-markup --width=600 --title="KMotion" --text="$msg" 2>/dev/null   # no-markup: a traceback's <module> is not markup (zenity then showed only "An error has occurred.")
 elif command -v xmessage >/dev/null; then
