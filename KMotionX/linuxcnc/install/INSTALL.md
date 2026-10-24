@@ -61,7 +61,7 @@ It can be run again at any time: each step skips what is already done, and after
 
 1. Desktop icon **LinuxCNC (KMotion simulate)**: AXIS with the planner and no board. Load a program and run it; this proves LinuxCNC and the planner.
 2. **KMotion** (the tool): the board's console, I/O, axes, config: proves the board link.
-3. **LinuxCNC (Kogna)**: Tom's bench configuration (`configs/kmotion-kogna`: step/dir channels 0-2, `MinirouterInit.c`, homing through `Home.c` with simulated switches). The GUI is gmoccapy. **LinuxCNC (3 Link)** is the pen robot.
+3. **LinuxCNC (Kogna)**: Tom's bench configuration (`configs/kmotion-kogna`: step/dir channels 0-2, `MinirouterInit.c`, homing through `Home.c` with simulated switches). The GUI is gmoccapy. **LinuxCNC (KFLOP)** is the same bench on a bare KFLOP (`configs/kmotion-kflop`: nothing wired, the switches simulated on the board's virtual bits; it homes, probes and runs programs with no motors attached). **LinuxCNC (3 Link)** is the pen robot.
 4. From a terminal instead: `source ~/linuxcnc-dev/scripts/rip-environment`, then `linuxcnc -v -d <ini>`; the motion module's log is `/tmp/kmotion-motion.log`.
 
 For your own machine, copy `configs/kmotion-kogna` and change the channels, the init program, the scales and limits, the homing and the spindle (the ini's comments say what each key does; `README.md` the details); a copy of a LinuxCNC launcher with the new ini path makes its icon.

@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool kogna-console linuxcnc-kmotion-kogna linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 sizes="16 32 48 64 128 256"
 
 note() { printf '%s\n' "$*"; }
@@ -156,6 +156,19 @@ Terminal=false
 StartupNotify=false
 Categories=Science;Engineering;X-CNC;
 Keywords=cnc;linuxcnc;kmotion;kogna;
+END
+    write_launcher linuxcnc-kmotion-kflop <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LinuxCNC (KFLOP)
+Comment=LinuxCNC with KMotion's trajectory planner on a KFLOP, a bare board on the desk (kmotion-kflop.ini)
+Exec="$linuxcnc" "$lcnc_tree/configs/kmotion-kflop/kmotion-kflop.ini"
+Icon=linuxcncicon
+Terminal=false
+StartupNotify=false
+Categories=Science;Engineering;X-CNC;
+Keywords=cnc;linuxcnc;kmotion;kflop;
 END
     write_launcher linuxcnc-kmotion-sim <<END
 [Desktop Entry]
