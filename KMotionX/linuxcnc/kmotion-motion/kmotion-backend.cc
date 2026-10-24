@@ -916,7 +916,7 @@ bool km_status_has_bit(int bit)
     return status_bit(z, bit) >= 0;
 }
 
-// the probe watcher's persist variables (configs/kmotion-kogna/probe/ProbeService.c)
+// the probe watcher's persist variables (configs/kmotion-minirouter/probe/ProbeService.c)
 enum { P_ARM = 69, P_STATUS = 70, P_BIT = 71, P_LEVEL = 72, P_AWAY = 73, P_POS = 74 };
 
 static void w_poll_board(KmBackend::Impl *d)
@@ -1864,7 +1864,7 @@ static void w_spindle(KmBackend::Impl *d, const Cmd &c)
 }
 
 // G38.2-G38.5 (PROBE_BIT): the probe watcher, ServiceProbe() in the board's forever loop
-// (configs/kmotion-kogna/probe/ProbeService.c has the persist layout), is armed with the probe
+// (configs/kmotion-minirouter/probe/ProbeService.c has the persist layout), is armed with the probe
 // bit, its contact level and the direction, and says whether the probe already is in the state
 // sought (then nothing moves) or that it is watching. The move then goes to the planner like any
 // line, flushed at once, so any kinematics apply. When the probe trips, the watcher records
@@ -1915,7 +1915,7 @@ static void w_probe(KmBackend::Impl *d, const Cmd &c)
     if (s == 1) { finish(KM_PROBE_ALREADY); return; }
     if (s != 0) {
         d->message("the probe watcher did not answer: ServiceProbe() must run in the board's forever loop "
-                   "(configs/kmotion-kogna/probe/ProbeService.c, BenchLoop.c)");
+                   "(configs/kmotion-minirouter/probe/ProbeService.c, BenchLoop.c)");
         disarm();
         finish(KM_PROBE_FAILED);
         return;

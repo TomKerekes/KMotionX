@@ -1,6 +1,6 @@
 // PCCommTest.c - exercises kmotion-motion's service of the board's commands to the PC
 // (PC_COMM, persist 100-107; kmotion-motion/kmotion-pccomm.cc) with KMotionCNC's own helpers
-// (C Programs/KflopToKMotionCNCFunctions.c), against LinuxCNC on the kmotion-kflop (or kmotion-kogna) config.
+// (C Programs/KflopToKMotionCNCFunctions.c), against LinuxCNC on the kmotion-minirouter (or kmotion-kogna) config.
 //
 // Run from LinuxCNC: MDI "M101" ([KMOTION] MCODE_101 = PROGRAM 6 12 pccomm/PCCommTest.c starts
 // this on thread 6 without waiting, so task is idle again when the commands arrive), or

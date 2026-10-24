@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Run PCCommTest.c on the board (MDI M101) against a running LinuxCNC on kmotion-kogna and
+"""Run PCCommTest.c on the board (MDI M101) against a running LinuxCNC on kmotion-minirouter and
 check what its status shows afterwards; the per-command ok/FAIL lines come from the board's
 console on kmotion-motion's stderr (the terminal LinuxCNC was started from with -v -d), and
 the commands and their results are in /tmp/kmotion-motion.log ("pccomm:" lines).
 
 Start LinuxCNC first (source linuxcnc-dev's rip-environment, then `linuxcnc -v -d
-kmotion-kogna.ini`), then run this. Turns the machine on and homes it if needed."""
+kmotion-minirouter.ini`), then run this. Turns the machine on and homes it if needed."""
 import linuxcnc, time
 
 c = linuxcnc.command()

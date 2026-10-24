@@ -1,4 +1,4 @@
-// M100 on the kmotion-kflop bench, run by [KMOTION] MCODE_100 = PROGRAM_WAIT 5 10 mcodes/M100.c:
+// M100 on the kmotion-minirouter bench, run by [KMOTION] MCODE_100 = PROGRAM_WAIT 5 10 mcodes/M100.c:
 // LinuxCNC's P and Q arrive as floats in persist variables 10 and 11 (-1 for a word not given).
 // Sets the KFLOP's virtual bit 63 when P is not 0, clears it otherwise, and prints both.
 #include "KMotionDef.h"

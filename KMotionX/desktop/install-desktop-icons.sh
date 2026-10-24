@@ -22,7 +22,8 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool kogna-console linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+stale="linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop"   # earlier names of the bench launcher, removed on an install
 sizes="16 32 48 64 128 256"
 
 note() { printf '%s\n' "$*"; }
@@ -34,7 +35,7 @@ refresh() {
 }
 
 if [ "${1:-}" = "--remove" ]; then
-    for l in $launchers; do rm -f "$apps/$l.desktop" "$desktop/$l.desktop"; done
+    for l in $launchers $stale; do rm -f "$apps/$l.desktop" "$desktop/$l.desktop"; done
     for n in $sizes; do rm -f "$icons/${n}x${n}/apps/kmotion-tool.png"; done
     rm -f "$icons/scalable/apps/linuxcncicon.svg" "$icons/48x48/apps/linuxcncicon.png"
     refresh
@@ -144,31 +145,19 @@ if [ -n "$linuxcnc" ]; then
     png="$lcnc_dir/linuxcncicon.png"
     [ -e "$png" ] || png=/usr/share/linuxcnc/linuxcncicon.png
     [ -e "$png" ] && install -Dm644 "$png" "$icons/48x48/apps/linuxcncicon.png"
-    write_launcher linuxcnc-kmotion-kogna <<END
+    for l in $stale; do rm -f "$apps/$l.desktop" "$desktop/$l.desktop"; done
+    write_launcher linuxcnc-kmotion-minirouter <<END
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=LinuxCNC (Kogna)
-Comment=LinuxCNC with KMotion's trajectory planner on a Kogna (kmotion-kogna.ini)
-Exec="$linuxcnc" "$lcnc_tree/configs/kmotion-kogna/kmotion-kogna.ini"
+Name=LinuxCNC (Minirouter)
+Comment=LinuxCNC with KMotion's trajectory planner on a KFLOP or Kogna: the Minirouter bench, a bare board on the desk (kmotion-minirouter.ini)
+Exec="$linuxcnc" "$lcnc_tree/configs/kmotion-minirouter/kmotion-minirouter.ini"
 Icon=linuxcncicon
 Terminal=false
 StartupNotify=false
 Categories=Science;Engineering;X-CNC;
-Keywords=cnc;linuxcnc;kmotion;kogna;
-END
-    write_launcher linuxcnc-kmotion-kflop <<END
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=LinuxCNC (KFLOP)
-Comment=LinuxCNC with KMotion's trajectory planner on a KFLOP, a bare board on the desk (kmotion-kflop.ini)
-Exec="$linuxcnc" "$lcnc_tree/configs/kmotion-kflop/kmotion-kflop.ini"
-Icon=linuxcncicon
-Terminal=false
-StartupNotify=false
-Categories=Science;Engineering;X-CNC;
-Keywords=cnc;linuxcnc;kmotion;kflop;
+Keywords=cnc;linuxcnc;kmotion;kflop;kogna;minirouter;
 END
     write_launcher linuxcnc-kmotion-sim <<END
 [Desktop Entry]

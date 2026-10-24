@@ -1,4 +1,4 @@
-# kmotion-kogna: LinuxCNC with kmotion-motion in the motion module's place.
+# kmotion-minirouter: LinuxCNC with kmotion-motion in the motion module's place.
 # kmotion-motion is a userspace process (see ../../README.md); it attaches to the
 # task<->motion shared memory like motmod does and creates the motion.*, joint.N.*,
 # axis.L.* and spindle.N.* pins a GUI expects. The path is relative to this folder.
@@ -10,9 +10,9 @@ net estop-loop iocontrol.0.user-enable-out iocontrol.0.emc-enable-in
 net tool-change iocontrol.0.tool-change iocontrol.0.tool-changed
 net tool-prep iocontrol.0.tool-prepare iocontrol.0.tool-prepared
 
-# coolant on the board's virtual bits ([KMOTION] OUTPUT_BITS): mist (M7) 1026, flood (M8) 1029;
+# coolant on the KFLOP's virtual bits ([KMOTION] OUTPUT_BITS): mist (M7) 60, flood (M8) 61;
 # M9 turns both off
-net coolant-mist iocontrol.0.coolant-mist => kmotion.out.1026
-net coolant-flood iocontrol.0.coolant-flood => kmotion.out.1029
-# M64 P0 sets virtual bit 1028, M65 P0 clears it (an example of an M code driving any board bit)
-net dout-0 motion.digital-out-00 => kmotion.out.1028
+net coolant-mist iocontrol.0.coolant-mist => kmotion.out.60
+net coolant-flood iocontrol.0.coolant-flood => kmotion.out.61
+# M64 P0 sets virtual bit 62, M65 P0 clears it (an example of an M code driving any board bit)
+net dout-0 motion.digital-out-00 => kmotion.out.62

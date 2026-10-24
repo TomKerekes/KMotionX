@@ -1,6 +1,6 @@
 #include "KMotionDef.h"
 
-// The bench spindle axis for LinuxCNC (kmotion-kogna.ini runs this after MinirouterInit.c):
+// The bench spindle axis for LinuxCNC (kmotion-minirouter.ini runs this after MinirouterInit.c; the same channels on a KFLOP or a Kogna):
 // channel 3, which Dynomotion's Spindle Using Jogs programs in this folder jog when LinuxCNC
 // runs M3, M4, M5 and S. Speed in counts/s is RPM x FACTOR (MySpindleDefs.h, 1000 counts/rev):
 // 600 RPM = 10000 counts/s. Tom's bench trick for a spindle without an encoder: step/dir

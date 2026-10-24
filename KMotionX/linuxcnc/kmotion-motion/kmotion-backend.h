@@ -98,11 +98,11 @@ struct KmConfig {
     // loops on the board, e.g. Dynomotion's ServiceCSS() for G96
     std::vector<std::pair<int, std::string>> start_programs;
     double status_period = 0.02;  // board status poll period, seconds
-    char home_program[512] = "";  // C program that homes (see configs/kmotion-kogna/Home.c), "" = none:
+    char home_program[512] = "";  // C program that homes (see configs/kmotion-minirouter/Home.c), "" = none:
                                   // joints are then declared homed where they stand
     int home_thread = 2;
     // rigid tapping (G33.1): a C program on the board turns the spindle the revolutions for
-    // the depth, reverses and brings it back (see configs/kmotion-kogna/Tap.c), while the
+    // the depth, reverses and brings it back (see configs/kmotion-minirouter/Tap.c), while the
     // planner's move runs in the board's spindle-sync mode (TrigThread): every actuator
     // follows the spindle encoder, through any kinematics. "" = G33.1 is refused
     char tap_program[512] = "";
@@ -137,7 +137,7 @@ struct KmConfig {
     // LinuxCNC's user M codes M100-M199 (index n - 100): KMotionCNC's M-code actions; P and Q
     // go to the action's persist variable and the next one, as floats
     KmAction mcode[100];
-    // G38.2-G38.5: the probe watcher ServiceProbe() (configs/kmotion-kogna/probe/ProbeService.c)
+    // G38.2-G38.5: the probe watcher ServiceProbe() (configs/kmotion-minirouter/probe/ProbeService.c)
     // runs in the board's forever loop; armed for each probe move, which the planner runs like
     // any move (so any kinematics apply), it records the axes' Dests on the trip and stops the
     // coordinated motion. probe_bit -1 = probe moves run as plain moves that never trip

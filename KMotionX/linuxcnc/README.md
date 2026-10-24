@@ -52,7 +52,7 @@ installation from scratch, with its scripts.
     board shows the axis done (`AxisDone`) or disabled: releasing a jog button stops the
     board, and the slow-down to rest is part of the jog.
   - **Homing** (board mode) runs a C program on the board, `[KMOTION] HOME_PROGRAM`
-    (`configs/kmotion-kogna/Home.c`, after Dynomotion's `SimpleHomeIndexFunction.c`: jog to
+    (`configs/kmotion-minirouter/Home.c`, after Dynomotion's `SimpleHomeIndexFunction.c`: jog to
     the switch, back off, latch slowly, optionally on to the index, set the position, move to
     HOME). LinuxCNC's `[JOINT_n]` homing parameters, as task sends them (`HOME_SEARCH_VEL`
     with its sign as the direction, `HOME_LATCH_VEL`, `HOME_OFFSET`, `HOME`, `HOME_FINAL_VEL`,
@@ -119,7 +119,7 @@ installation from scratch, with its scripts.
     deceleration, at pitch x spindle speed, launched in the board's spindle-sync mode
     (`TrigThread`, KMotionCNC's threading mode): the board slaves the coordinated motion's
     time base to the spindle encoder, so every actuator follows through any kinematics and
-    the spindle's reversal runs the path backwards. `TAP_PROGRAM` (`configs/kmotion-kogna/
+    the spindle's reversal runs the path backwards. `TAP_PROGRAM` (`configs/kmotion-minirouter/
     Tap.c`, on `TAP_THREAD`) drives the spindle: it waits for the launch, lets the spindle
     turn the revolutions for the depth, reverses it at G33.1's I times the speed, stops it
     once the encoder is back at the start and reports through persist 192-196; the module
@@ -197,8 +197,8 @@ installation from scratch, with its scripts.
     CSSJog.c`) then sets the spindle's speed from X every 50 ms; Dynomotion's CSS spindle
     programs leave the speed to it in mode 2. LinuxCNC's own display (`spindle.0.speed-out`)
     follows X as motmod's does. No D: KMotionCNC's 10^9 RPM, within the `[SPINDLE_0]` limit.
-  - The kmotion-kogna bench uses Dynomotion's Spindle Using Jogs programs, the CSS set
-    (`configs/kmotion-kogna/spindle/`, `MySpindleDefs.h` set for channel 3, which
+  - The kmotion-minirouter bench uses Dynomotion's Spindle Using Jogs programs, the CSS set
+    (`configs/kmotion-minirouter/spindle/`, `MySpindleDefs.h` set for channel 3, which
     `SpindleAxis.c` sets up), with `ServiceCSS()` (`CSSJog.c`) called from `BenchLoop.c`, the
     bench's forever loop in thread 1. One fix in the copies: `OnCWJog.c` and `OnCCWJog.c`
     clear the spindle state
@@ -213,7 +213,7 @@ installation from scratch, with its scripts.
     ramps, no encoder needed) or its encoder `Position` (`SPINDLE_SPEED_FROM = DEST|POSITION`),
     over the board's own clock, in `SPINDLE_COUNTS_PER_REV`, low-pass filtered with
     `SPINDLE_SPEED_TAU` seconds, onto the HAL pins `kmotion.spindle-rpm` (signed),
-    `kmotion.spindle-rpm-abs` and `kmotion.spindle-rps`. The kmotion-kogna config runs
+    `kmotion.spindle-rpm-abs` and `kmotion.spindle-rps`. The kmotion-minirouter config runs
     gmoccapy, whose spindle bar shows it (`gmoccapy-postgui.hal`); a spin-down shows as it
     happens, where the commanded speed drops to 0 at once. On the bench, `SpindleAxis.c` also
     feeds channel 3's step/dir output back into encoder 4 as quadrature, so `POSITION` works too
@@ -231,7 +231,7 @@ installation from scratch, with its scripts.
     rapid, the next feed move and everything after it wait until the spindle is at speed. A
     reading only counts from a status read made after the spindle command was done, and three
     in a row with the board idle let the moves go, so a read from before the spin-up (or before
-    `ServiceCSS()`'s next update) cannot. `kmotion.spindle-at-speed` shows it (the kmotion-kogna
+    `ServiceCSS()`'s next update) cannot. `kmotion.spindle-at-speed` shows it (the kmotion-minirouter
     config lights gmoccapy's at-speed LED with it); the bench uses `AXIS 3`.
     `SPINDLE_AT_SPEED_TOLERANCE` (default 0.01) is the fraction of the commanded speed within
     which `AXIS` counts as at speed; it leaves again at twice that, so the LED does not
@@ -240,7 +240,7 @@ installation from scratch, with its scripts.
     `kmotion.out.<bit>` (HAL in) per bit, which the board bit follows (`SetStateBit`, set once
     at start, then on every change); `INPUT_BITS` makes `kmotion.in.<bit>` (HAL out) from the
     status read every `STATUS_PERIOD_MS`. Any HAL signal can then drive a board output: the
-    kmotion-kogna config nets `iocontrol.0.coolant-mist` (M7) and `-flood` (M8) to virtual bits
+    kmotion-minirouter config nets `iocontrol.0.coolant-mist` (M7) and `-flood` (M8) to virtual bits
     1026 and 1029 (M9 clears both). LinuxCNC's digital outputs `motion.digital-out-NN`
     (`[KMOTION] NUM_DIO`, default 4) follow M64/M65 P<n> at once; the config nets
     `motion.digital-out-00` to virtual bit 1028. M62/M63, which switch in step with the next
@@ -251,12 +251,12 @@ installation from scratch, with its scripts.
     code, P and Q to kmotion-motion on a Unix socket (abstract name `kmotion-motion`);
     kmotion-motion carries out `[KMOTION] MCODE_<n>` (the spindle actions' syntax; P and Q go
     to `<var>` and `<var>+1` as floats) through the backend, in order with its other board
-    work, and answers when it is over; an error stops the program. The kmotion-kogna bench has
+    work, and answers when it is over; an error stops the program. The kmotion-minirouter bench has
     `mcodes/M100` and `mcodes/M100.c` (thread 5, P and Q in persist 10 and 11: virtual bit 1027
     on when P is not 0). `KM_BOARD=1 ./build/backend-test io` checks the bits and M100.
   - **Probing, G38.2-G38.5** (`[KMOTION] PROBE_BIT`, `PROBE_ACTIVE`): the planner runs the
     probe move like any move, so any kinematics apply (3Link included), while the probe
-    watcher, `ServiceProbe()` (`configs/kmotion-kogna/probe/ProbeService.c`, after Dynomotion's
+    watcher, `ServiceProbe()` (`configs/kmotion-minirouter/probe/ProbeService.c`, after Dynomotion's
     `NotifyProbeMach3.c`), called from the board's forever loop (the bench's `BenchLoop.c`),
     watches the probe bit. kmotion-motion arms it for each probe move (persist 69; the layout
     is in ProbeService.c). When the probe makes contact (G38.2/.3) or loses it (G38.4/.5) it
@@ -368,7 +368,7 @@ installation from scratch, with its scripts.
     show the command, so the next command is taken only from a read two counts later; a
     command already present in the first read is refused with -2 (left over by an earlier
     session), as KMotionCNC does; one command runs at a time. Every command and result goes
-    to the `-l` log. Test, with the Kogna and LinuxCNC on kmotion-kogna: `pccomm/pccomm-test.py`
+    to the `-l` log. Test, with the Kogna and LinuxCNC on kmotion-minirouter: `pccomm/pccomm-test.py`
     starts `pccomm/PCCommTest.c` on the board (MDI `M101`) and checks the override and the
     touch-off from LinuxCNC's side; the program's own ok/FAIL lines are on the board's
     console (kmotion-motion's stderr).
@@ -379,7 +379,7 @@ installation from scratch, with its scripts.
 - `configs/kmotion-sim/` – a LinuxCNC configuration that loads `kmotion-motion` instead of
   `motmod` in simulate mode (the sim/axis config, inches, 3 joints, trivkins), plus
   `drive.py`, which runs the whole thing from the command line.
-- `configs/kmotion-kogna/` – the same for Tom's Kogna: board mode, 2540 counts/inch,
+- `configs/kmotion-minirouter/` – the same for Tom's Kogna: board mode, 2540 counts/inch,
   250 mm/s, 2500 mm/s², jerk 25000 mm/s³ in inches, `MinirouterInit.c` as the init program,
   homing through `Home.c`, the bench spindle on channel 3 (`spindle/`), gmoccapy as the GUI.
 
@@ -394,7 +394,7 @@ files of its tree (the motion error ring buffer helpers) are compiled in.
     linuxcnc -v -d ~/KMotionX/KMotionX/linuxcnc/configs/kmotion-sim/kmotion-sim.ini
     python3 ~/KMotionX/KMotionX/linuxcnc/configs/kmotion-sim/drive.py   # in another terminal
 
-A desktop icon that starts LinuxCNC with the kmotion-kogna or the kmotion-sim config:
+A desktop icon that starts LinuxCNC with the kmotion-minirouter or the kmotion-sim config:
 `../desktop/install-desktop-icons.sh` (see `../desktop/README.md`).
 
 `-v -d` keeps LinuxCNC's output on the console instead of its error dialog. The command
@@ -413,7 +413,7 @@ more; `KM_KOGNA=1` selects the Kogna settings, `KM_3LINK=1` the 3 Link's, `KM_CO
 prints its time and the arcs' speeds). Each check prints ok or FAIL. The harness sends the
 planner's logs, `TPSegLog.csv` and `TP3_Timeline.log`, to `/tmp/backend-test` (or to
 `KMX_LOG_DIR`), never to `/tmp` where a LinuxCNC running beside it writes its own.
-With `KM_BOARD=1` the harness runs against the Kogna with the kmotion-kogna settings
+With `KM_BOARD=1` the harness runs against the Kogna with the kmotion-minirouter settings
 (`abort` then measures the real stop and the move after it; `KM_DEBUG_STOP=1` prints the
 timeline; `home`, `spindle` and `jog` run homing, the spindle actions and jogs on the board).
 Never do that while a LinuxCNC or kmxWeb is connected to the board: the init

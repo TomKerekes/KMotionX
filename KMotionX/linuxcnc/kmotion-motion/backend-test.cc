@@ -16,7 +16,7 @@
 //                         and the result is "failed", which exercises the whole path;
 //                         KM_HOME_ABORT=1 aborts the homing after a second instead
 //   backend-test spindle  LinuxCNC's spindle through the bench's Spindle Using Jogs programs
-//                         (configs/kmotion-kogna/spindle; KM_BOARD=1): channel 3 turns at
+//                         (configs/kmotion-minirouter/spindle; KM_BOARD=1): channel 3 turns at
 //                         RPM x 1000/60 counts/s, CW positive, CCW negative; then G96 through
 //                         Dynomotion's ServiceCSS() in BenchLoop.c (thread 1) as X moves, its
 //                         D cap, and G97; at speed (SPINDLE_AT_SPEED = AXIS 3) only once each
@@ -41,7 +41,7 @@
 //   backend-test atbit    (KM_BOARD=1 only) SPINDLE_AT_SPEED = BIT 1030 1: the at-speed state
 //                         follows virtual bit 1030 as the test sets and clears it
 //   backend-test io       (KM_BOARD=1 only) an output bit (set_bit 1026) read back as an input
-//                         bit, and the user M code M100 (configs/kmotion-kogna/mcodes/M100.c in
+//                         bit, and the user M code M100 (configs/kmotion-minirouter/mcodes/M100.c in
 //                         thread 5, P and Q in persist 10 and 11), which sets virtual bit 1027
 //                         when P is not 0
 //   backend-test probe    (KM_BOARD=1 only) G38.x through the planner, with ServiceProbe()
@@ -49,7 +49,7 @@
 //                         watching virtual bit 1031 (contact = 1), which the test sets and
 //                         clears during the moves: a trip toward, a trip away, the probe
 //                         already in the state sought, and a move without contact
-//   backend-test letters  the first moves of LinuxCNC's axis.ngc on the kmotion-kogna settings
+//   backend-test letters  the first moves of LinuxCNC's axis.ngc on the kmotion-minirouter settings
 //                         (KM_KOGNA=1 selects those settings in simulate mode; KM_CORNER_TOL,
 //                         KM_BREAK_ANGLE override the planner's corner settings)
 //   backend-test arcspeed how fast the planner lets a circle of r=1 run
@@ -67,7 +67,7 @@
 //                         prints the program's time and the arcs' speeds
 // Each check prints ok/FAIL; the exit status is the number of failures. The planner's logs
 // (TPSegLog.csv, TP3_Timeline.log) go to /tmp/backend-test, or to KMX_LOG_DIR when set.
-// KM_BOARD=1 in the environment runs the backend in board mode with the kmotion-kogna
+// KM_BOARD=1 in the environment runs the backend in board mode with the kmotion-minirouter
 // settings (2540 counts/in, 9.84 in/s, the config's MinirouterInit.c): "abort" then measures the real
 // stop on the Kogna, with KM_JOG0=1 adding the Jog<ch>=0 the protocol side used to send.
 #include "kmotion-backend.h"
@@ -370,16 +370,16 @@ static void scenario_home(KmBackend &km)
     check(f.messages.find("home program failed") == std::string::npos, "the program compiled and ran");
 }
 
-// configs/kmotion-kogna, found from where this program is (kmotion-motion/build/backend-test)
+// configs/kmotion-minirouter, found from where this program is (kmotion-motion/build/backend-test)
 static std::string kogna_config_dir()
 {
     char exe[4096];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
-    if (n <= 0) return "../configs/kmotion-kogna";
+    if (n <= 0) return "../configs/kmotion-minirouter";
     exe[n] = 0;
     std::string p = exe;
     for (int up = 0; up < 3; up++) p = p.substr(0, p.rfind('/'));     // the file, build, kmotion-motion
-    return p + "/configs/kmotion-kogna";
+    return p + "/configs/kmotion-minirouter";
 }
 
 static void scenario_spindle(KmBackend &km)
@@ -1657,7 +1657,7 @@ int main(int argc, char **argv)
     KmConfig cfg;
     cfg.log_segments = true;
     for (int i = 0; i < 3; i++) { cfg.axis[i].counts_per_unit = 4000; cfg.axis[i].max_vel = 4; cfg.axis[i].max_accel = 100; cfg.axis[i].max_jerk = 1000; }
-    if (getenv("KM_KOGNA")) {               // the kmotion-kogna settings, simulate mode
+    if (getenv("KM_KOGNA")) {               // the kmotion-minirouter settings, simulate mode
         for (int i = 0; i < 3; i++) { cfg.axis[i].counts_per_unit = 2540; cfg.axis[i].max_vel = 9.84; cfg.axis[i].max_accel = 98.4; cfg.axis[i].max_jerk = 984; }
     }
     const bool link3 = getenv("KM_3LINK") || strcmp(scenario, "kins3link") == 0 || strcmp(scenario, "tapsegs") == 0;
@@ -1683,7 +1683,7 @@ int main(int argc, char **argv)
     if (getenv("KM_BOARD")) {
         cfg.simulate = false;
         const std::string kogna = kogna_config_dir();
-        cfg.init_programs.push_back(kogna + "/MinirouterInit.c");   // the bench's copy, as kmotion-kogna.ini runs it
+        cfg.init_programs.push_back(kogna + "/MinirouterInit.c");   // the bench's copy, as kmotion-minirouter.ini runs it
         cfg.init_thread = 1;
         snprintf(cfg.home_program, sizeof cfg.home_program, "%s", (kogna + "/Home.c").c_str());
         if (strcmp(scenario, "tap") == 0) {               // Tap.c on thread 4, the bench's spindle below
@@ -1691,7 +1691,7 @@ int main(int argc, char **argv)
             cfg.tap_thread = 4;
             cfg.tap_overshoot_revs = 6;
         }
-        if (strcmp(scenario, "spindle") == 0 || strcmp(scenario, "tap") == 0) {   // as kmotion-kogna.ini sets it up
+        if (strcmp(scenario, "spindle") == 0 || strcmp(scenario, "tap") == 0) {   // as kmotion-minirouter.ini sets it up
             cfg.init_programs.push_back(kogna + "/spindle/SpindleAxis.c");
             cfg.start_programs.emplace_back(1, kogna + "/BenchLoop.c");   // ServiceCSS() in thread 1
             cfg.spindle_css = true;
@@ -1710,12 +1710,12 @@ int main(int argc, char **argv)
                 snprintf(cfg.spindle[i].file, sizeof cfg.spindle[i].file, "%s/spindle/%s", kogna.c_str(), file[i]);
             }
         }
-        if (strcmp(scenario, "probe") == 0) {         // as kmotion-kogna.ini sets probing up
+        if (strcmp(scenario, "probe") == 0) {         // as kmotion-minirouter.ini sets probing up
             cfg.start_programs.emplace_back(1, kogna + "/BenchLoop.c");   // ServiceProbe() in thread 1
             cfg.probe_bit = 1031;                     // not the ini's 1032, which Tom's probe simulator may drive
             cfg.probe_level = 1;
         }
-        if (strcmp(scenario, "io") == 0) {            // as kmotion-kogna.ini sets M100 up
+        if (strcmp(scenario, "io") == 0) {            // as kmotion-minirouter.ini sets M100 up
             cfg.input_bits = {1026, 1027};
             KmAction &a = cfg.mcode[0];
             a.type = KM_ACTION_PROGRAM_WAIT;

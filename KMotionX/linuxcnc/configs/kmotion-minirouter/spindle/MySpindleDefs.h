@@ -1,7 +1,7 @@
-// Spindle Using Jogs settings for the kmotion-kflop bench: Dynomotion's
+// Spindle Using Jogs settings for the kmotion-minirouter bench: Dynomotion's
 // C Programs/SpindleUsingJogs/CSS/MySpindleDefs.h, edited as its help page says
 // ("KMotionCNC Spindle Control"). LinuxCNC's M3, M4, M5 and S run OnCWJog.c, OnCCWJog.c,
-// OffJog.c and SpindleJog.c ([KMOTION] SPINDLE_* in kmotion-kflop.ini), which jog channel 3.
+// OffJog.c and SpindleJog.c ([KMOTION] SPINDLE_* in kmotion-minirouter.ini), which jog channel 3.
 #define SPINDLEAXIS 3			// Axis Channel to Jog to rotate Spindle (set up by SpindleAxis.c)
 #define FACTOR (1000/60.0)  	// to convert RPM to counts/sec (counts/rev / 60.0sec): 1000 counts/rev
 #define SPINDLECW_BIT 58   	// bit to activate to cause CW rotation (a KFLOP virtual bit on the bench)

@@ -9,8 +9,7 @@ run as yourself, nothing outside your home directory:
 It puts four launchers on the desktop and in the menu (Science / Engineering):
 
 - **KMotion** – the Linux KMotion tool (Digital I/O, Axis, C Programs, Config, Console).
-- **LinuxCNC (Kogna)** – LinuxCNC with `configs/kmotion-kogna/kmotion-kogna.ini`.
-- **LinuxCNC (KFLOP)** – LinuxCNC with `configs/kmotion-kflop/kmotion-kflop.ini`, a bare KFLOP on the desk.
+- **LinuxCNC (Minirouter)** – LinuxCNC with `configs/kmotion-minirouter/kmotion-minirouter.ini`: the bench, a KFLOP or a Kogna with nothing attached.
 - **Kogna COM Port** – the Kogna's virtual COM port in a terminal (`desktop/kogna-console`: tio on /dev/ttyACM0; the Kogna's USB attached to the machine, or to the VM with Devices > USB).
 - **LinuxCNC (3 Link)** – LinuxCNC on the 3 Link pen robot, `configs/kmotion-3link/kmotion-3link.ini`.
 - **LinuxCNC (KMotion simulate)** – the same planner with no board,

@@ -1,4 +1,4 @@
-// The kmotion-kflop bench's forever loop. kmotion-motion starts it in thread 1 once the init
+// The kmotion-minirouter bench's forever loop. kmotion-motion starts it in thread 1 once the init
 // programs have run ([KMOTION] START_PROGRAM = 1 BenchLoop.c). Everything that has to run
 // continuously is serviced here, in one thread, because every thread running slows down
 // thread 0; each part is #included and does its work only when enabled:

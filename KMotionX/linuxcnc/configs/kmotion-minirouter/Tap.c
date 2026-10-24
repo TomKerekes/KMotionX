@@ -24,7 +24,7 @@
 // What this program knows about the machine - EDIT FOR YOURS: how the spindle is driven
 // (spindle_run below) and the Spindle Using Jogs state variable it shares with the M3/M4/M5
 // programs (MySpindleDefs.h). The spindle's channel and its encoder's counts per revolution
-// come from the ini (persist 197, 198). Bench (kmotion-kogna): the spindle is axis 3, a
+// come from the ini (persist 197, 198). Bench (kmotion-minirouter): the spindle is axis 3, a
 // step/dir axis jogged by the Spindle Using Jogs programs, whose quadrature is looped into
 // encoder 4 = axis 3's input (spindle/SpindleAxis.c), so axis 3's Position is the encoder
 // and Jog(3, ...) drives it.

@@ -1,6 +1,6 @@
 # LinuxCNC on KMotion: supported features
 
-What LinuxCNC can do with `kmotion-motion` in place of its real-time motion module: the planning on the PC by KMotion's 3rd Order trajectory planner, the execution on a KFLOP or Kogna. The G and M codes are LinuxCNC's own (its interpreter is untouched but for one optional patch, below); this lists what reaches the board and how. `README.md` has the details and the ini keys of each item, `configs/` the four configurations (`kmotion-sim`, `kmotion-kogna`, `kmotion-kflop`, `kmotion-3link`).
+What LinuxCNC can do with `kmotion-motion` in place of its real-time motion module: the planning on the PC by KMotion's 3rd Order trajectory planner, the execution on a KFLOP or Kogna. The G and M codes are LinuxCNC's own (its interpreter is untouched but for one optional patch, below); this lists what reaches the board and how. `README.md` has the details and the ini keys of each item, `configs/` the three configurations (`kmotion-sim`, `kmotion-minirouter`, `kmotion-3link`).
 
 ## Motion
 
@@ -28,7 +28,7 @@ What LinuxCNC can do with `kmotion-motion` in place of its real-time motion modu
 
 ## Homing
 
-- `[JOINT_n]` homing as LinuxCNC specifies it (`HOME_SEARCH_VEL`, `HOME_LATCH_VEL`, `HOME_OFFSET`, `HOME`, `HOME_FINAL_VEL`, `HOME_USE_INDEX`, `HOME_SEQUENCE`), carried out by a C program on the board (`[KMOTION] HOME_PROGRAM`, `configs/kmotion-kogna/Home.c`: search, back off, latch, index, set position, move to HOME); the switch and index bits are the program's table. A joint with `HOME_SEARCH_VEL = 0` is homed where it stands.
+- `[JOINT_n]` homing as LinuxCNC specifies it (`HOME_SEARCH_VEL`, `HOME_LATCH_VEL`, `HOME_OFFSET`, `HOME`, `HOME_FINAL_VEL`, `HOME_USE_INDEX`, `HOME_SEQUENCE`), carried out by a C program on the board (`[KMOTION] HOME_PROGRAM`, `configs/kmotion-minirouter/Home.c`: search, back off, latch, index, set position, move to HOME); the switch and index bits are the program's table. A joint with `HOME_SEARCH_VEL = 0` is homed where it stands.
 - **Absolute feedback**: `[KMOTION] ALWAYS_HOMED = 1` (homed whenever the machine is on), `HOMED_PERSIST = <n>` (the homed joints remembered on the board across sessions).
 - **Sessions**: `[EMC] KEEP_ENABLED_ON_EXIT = 1` (two patches to LinuxCNC) leaves the axes enabled when LinuxCNC exits, and a start that finds them enabled can come up with Machine on and no init (`configs/kmotion-3link/autostart.py`); an **enable program** (`ENABLE_PROGRAM`) can do the machine on itself (serial servos' torque and set-up).
 
@@ -73,7 +73,7 @@ The board's channels are configured by the init program, as in KMotionCNC; Linux
 ## Boards and modes
 
 - **Kogna** (Ethernet) and **KFLOP** (USB) through KMotionServer, like KMotionCNC and kmxWeb; one board per LinuxCNC. No real-time kernel on the PC.
-- The 3 Link pen robot (`configs/kmotion-3link`, three serial servos, 3Link kinematics) and the bench (`configs/kmotion-kogna`, step/dir, a spindle axis with a looped encoder) are the two machines the above has run on; `kmotion-sim` runs it all without a board. `configs/kmotion-kflop` is the bench carried over to a bare KFLOP on the desk: the same step/dir axes and jogged spindle, the home, limit and probe switches simulated on the KFLOP's virtual bits 48-63 by its bench loop, no tapping or threading (no spindle encoder).
+- The 3 Link pen robot (`configs/kmotion-3link`, three serial servos, 3Link kinematics) and the bench (`configs/kmotion-minirouter`: a Minirouter-type machine, three step/dir axes and a jogged spindle axis with a looped-back encoder, on a KFLOP or a Kogna with nothing attached, the home, limit and probe switches simulated on the board's virtual bits 48-63 by its bench loop) are the two machines the above has run on; `kmotion-sim` runs it all without a board.
 
 ## Not done
 
