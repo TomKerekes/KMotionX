@@ -109,8 +109,10 @@ run sudo make -C "$KMOTIONX_DIR" install
 # the install relinks bin/ as root: one more make as yourself makes the files yours again
 run make -C "$KMOTIONX_DIR"
 run sudo chown -R "$USER:" "$HOME/.kmotionx"
-if [ ! -f /etc/udev/rules.d/10.kflop.rules ]; then
-    run sudo cp "$KMOTIONX_DIR/KMotionX/usb/etc/udev/rules.d/10.kflop.rules" /etc/udev/rules.d/
+if [ ! -f /etc/udev/rules.d/90-kflop.rules ]; then
+    # (90-: after Debian's 50-udev-default, which overrode the old 10.kflop.rules' mode)
+    run sudo cp "$KMOTIONX_DIR/KMotionX/usb/etc/udev/rules.d/90-kflop.rules" /etc/udev/rules.d/
+    [ -f /etc/udev/rules.d/10.kflop.rules ] && run sudo rm -f /etc/udev/rules.d/10.kflop.rules
     run sudo udevadm control --reload-rules
     run sudo udevadm trigger
 else note "KFLOP udev rule already installed"; fi

@@ -1,0 +1,9 @@
+# Dynomotion KFLOP on USB: the user may open it (KMotionServer drives it through libusb).
+# Numbered after Debian's 50-udev-default.rules, which sets USB devices to 0664 and would
+# override an earlier rule's mode (the old 10.kflop.rules lost its 0666 that way, and a user
+# not in plugdev could not open the board); MODE:= cannot be overridden, and TAG+="uaccess"
+# gives the logged-in desktop user access through an ACL whatever the groups.
+# A KFLOP has its own id 0403:f231, or FTDI's default 0403:6001 (an older EEPROM; the
+# manufacturer string tells it from an FTDI serial port such as the Kogna's COM port).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="f231", GROUP="plugdev", MODE:="0666", TAG+="uaccess", SYMLINK+="kflop", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{manufacturer}=="Dynomotion", GROUP="plugdev", MODE:="0666", TAG+="uaccess", SYMLINK+="kflop", ENV{ID_MM_DEVICE_IGNORE}="1"

@@ -71,7 +71,7 @@ sudo make install
 This will install a rule that tell your system to grant read and write access to the kflop device for users in group "plugdev"
 If your user is not in that group fix users groups or change the rule before pluging the device in.
 ```
-sudo cp KMotionX/usb/etc/udev/rules.d/10.kflop.rules /etc/udev/rules.d/
+sudo cp KMotionX/usb/etc/udev/rules.d/90-kflop.rules /etc/udev/rules.d/
 ```
 Reload rules
 ```
