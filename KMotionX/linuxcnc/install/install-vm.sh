@@ -16,6 +16,15 @@
 #     KOGNA_IF (the bridged interface to the Kogna, e.g. enp0s8: a DHCP profile is made for it)
 set -Eeuo pipefail   # -E: the ERR message below also fires for a command run inside a function
 
+# everything also goes to ~/install.log (appended: a rerun follows the first run), so the
+# command to type is just "bash install-vm.sh" - a mistyped "| tee install-vm.sh" once
+# overwrote the script with its own output
+if [ -z "${INSTALL_VM_LOGGING:-}" ]; then
+    export INSTALL_VM_LOGGING=1
+    echo "(the output is also kept in $HOME/install.log)"
+    exec > >(tee -a "$HOME/install.log") 2>&1
+fi
+
 KMOTIONX_REPO=${KMOTIONX_REPO:-https://github.com/TomKerekes/KMotionX.git}
 KMOTIONX_BRANCH=${KMOTIONX_BRANCH:-master}
 KMOTIONX_DIR=${KMOTIONX_DIR:-$HOME/KMotionX}

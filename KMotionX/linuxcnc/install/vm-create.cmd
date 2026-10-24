@@ -52,8 +52,11 @@ if exist "%GAISO%" (
 ) else (
     echo note: no %GAISO% - the Guest Additions are inserted later from the VM window: Devices ^> Insert Guest Additions CD Image
 )
-rem a KFLOP on USB (FTDI 0403:6001, a full-speed device: the OHCI controller serves it) goes to the VM when it is plugged in
-%VBM% usbfilter add 0 --target "%NAME%" --name KFLOP --vendorid 0403 --productid 6001 || exit /b 1
+rem a KFLOP on USB goes to the VM when it is plugged in (and comes back after a flash or a power cycle, when it
+rem re-enumerates): its own id 0403:f231, or FTDI's default 0403:6001 (an older EEPROM; also the Kogna's COM port).
+rem Full-speed devices: the OHCI controller serves them
+%VBM% usbfilter add 0 --target "%NAME%" --name KFLOP --vendorid 0403 --productid f231 || exit /b 1
+%VBM% usbfilter add 1 --target "%NAME%" --name "KFLOP (FTDI id) / Kogna COM port" --vendorid 0403 --productid 6001 || exit /b 1
 if not "%~3"=="" (
     if not exist "%~3" mkdir "%~3"
     %VBM% sharedfolder add "%NAME%" --name kmotion --hostpath "%~3" --automount --auto-mount-point /mnt/kmotion || exit /b 1

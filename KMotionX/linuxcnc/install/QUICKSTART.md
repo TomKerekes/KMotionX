@@ -7,6 +7,7 @@ Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 Nothing else is installed on Windows: no Python, no compiler. Everything else goes into the VM in step 11.
 
 1. Check that the processor's virtualization is on, which VirtualBox needs: Task Manager (Ctrl+Shift+Esc), Performance tab, CPU; at the bottom right, "Virtualization: Enabled". If it says Disabled, it is switched off in the BIOS: restart, enter the BIOS setup (F1, F2, F10, F12 or Del while the PC starts, by maker), find "Intel Virtualization Technology" or "VT-x" (under Advanced > CPU, or on Lenovo under Security > Virtualization; a page that shows it in a different colour and skips it with the arrow keys only displays it, the switch is on the other page), set it to Enabled, save with F10. Without it the VM stops at once with "VT-x is disabled in the BIOS".
+   Also on Windows: if VirtualBox shows a green turtle icon at the bottom right of the VM window, or the Debian installer is extremely slow (minutes on "Starting up the partitioner"), Windows' own hypervisor has the processor and VirtualBox is running on top of it. It is switched on by Virtual Machine Platform, Hyper-V or Windows Hypervisor Platform (used by WSL2, Docker Desktop and the Windows Subsystem for Android). Untick those in "Turn Windows features on or off", run `bcdedit /set hypervisorlaunchtype off` in an administrator PowerShell, and restart. (A later "Windows Subsystem for Android couldn't start" message is that feature missing its hypervisor; uninstall it if unused.)
 2. Make a folder `C:\InstallLinuxCNC`.
 3. If VirtualBox is not installed: open https://www.virtualbox.org/wiki/Downloads, click **Windows hosts**, run the downloaded installer, keep every default.
 4. Open https://www.debian.org/download, click the **debian-13.x.x-amd64-netinst.iso** link, save the file to `C:\InstallLinuxCNC`. Note its exact name: the version number changes (13.7.0 in October 2026).
@@ -61,13 +62,14 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
 
 ## In the VM: everything else
 
-11. In the terminal, these three lines, one at a time (the first and third ask for your password; the third takes 30 to 60 minutes and keeps a log in `install.log`):
+11. In the terminal, these three lines, one at a time (the first and third ask for your password, typed without anything showing; the third takes 30 to 60 minutes and keeps its own log in `~/install.log`):
 
         sudo apt install -y curl
         curl -fsSL https://raw.githubusercontent.com/TomKerekes/KMotionX/master/KMotionX/linuxcnc/install/install-vm.sh -o install-vm.sh
-        bash install-vm.sh 2>&1 | tee install.log
+        bash install-vm.sh
 
-    It ends with a summary ("==== done" and what to do next). A red line "gdm.service is not active, cannot reload" on the way is harmless. If it stops with `*** install-vm.sh STOPPED`, send `install.log`.
+    Copy them from Firefox inside the VM (step 10); text copied on Windows cannot be pasted into the VM until the install is done, since the shared clipboard is part of what it installs. If a paste leaves junk like `^[[200~` on the line, press Ctrl+C and type the line.
+    It ends with a summary ("==== done" and what to do next). A red line "gdm.service is not active, cannot reload" on the way is harmless. If it stops with `*** install-vm.sh STOPPED`, send `~/install.log`.
 12. Log out (top right menu) and log in again. The launchers are then on the desktop; on GNOME also under the Windows key (type LinuxCNC).
 
 ## The board
@@ -76,13 +78,13 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
 
         nmcli connection add type ethernet ifname enp0s8 con-name Kogna ipv4.method auto ipv6.method disabled autoconnect yes
 
-    KFLOP: plug it in; Devices > USB shows it ticked.
+    KFLOP: close KMotion on Windows if it is open, plug the board in, and Devices > USB in the VM window shows it ticked (the VM script's USB filter takes it, and takes it back after a firmware flash or a power cycle). If it is not ticked, tick it.
 14. The board's firmware must be the build this tree carries, which is not the same as the Windows 5.5.1 release even when both say 5.5.1 (the module compares the build stamp, date and time). The first Machine on in LinuxCNC (Kogna) will therefore be refused with a message naming the board's build and the file's. Then: desktop icon **KMotion**, Config & Flash, flash `~/.kmotionx/DSP_KOGNA/DSPKOGNA.out` (or `DSP_KFLOP/DSPKFLOP.out`), and press Machine on again. Going back to Windows later means flashing the Windows release's image from KMotion there, the same way.
 
 ## First run
 
-15. Double-click the desktop icon **LinuxCNC (KMotion simulate)**: AXIS starts with the planner and no board. LinuxCNC starts in E-stop, so first the two round buttons at the top left of the toolbar, in order: E-stop off (F1), then Machine on (F2). Then **Home All** on the Manual Control tab (Ctrl+Home). The Run button (the blue arrow, R) is grey until then. Load a program (File > Open; the examples are under ~/linuxcnc-dev/nc_files) and run it.
-16. Then **LinuxCNC (Kogna)** or **LinuxCNC (3 Link)** with the board connected.
+15. Double-click the desktop icon **LinuxCNC (KMotion simulate)**: AXIS starts with the planner and no board. LinuxCNC starts in E-stop, so first the two round buttons at the top left of the toolbar, in order: E-stop off (F1), then Machine on (F2); on a laptop whose F keys are media keys, click the buttons or hold Fn. Then **Home All** on the Manual Control tab (Ctrl+Home). The Run button (the blue arrow, R) is grey until then. Load a program (File > Open; the examples are under ~/linuxcnc-dev/nc_files) and run it.
+16. Then **LinuxCNC (Kogna)** or **LinuxCNC (3 Link)** with the board connected. Both are configurations for a Kogna: Tom's bench machine and the 3 Link pen robot. There is no KFLOP configuration yet; a bare KFLOP with the Kogna configuration reports a limit switch and will not switch on, because its unconnected inputs read as tripped. Until a KFLOP configuration ships, the simulate configuration is the test for a KFLOP install; the KMotion icon verifies the board link and flashes the firmware.
 17. For diagnostics, the Kogna's own console (what the board prints) is the **Kogna COM Port** icon. It needs the Kogna's USB cable in the PC and, in a VM, the device attached to the VM: VM window menu, Devices > USB, tick the Kogna. Quit the console with Ctrl-t then q.
 
 The shared clipboard between Windows and the VM, drag and drop and a display that follows the window size come with VirtualBox's Guest Additions, which install-vm.sh installs from the disc the VM script attached (they work after step 12). For a VM made without that disc: in the VM window, Devices > Insert Guest Additions CD Image, then run install-vm.sh again.

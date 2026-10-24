@@ -43,7 +43,10 @@ else
     echo "note: no VBoxGuestAdditions.iso found - insert it later from the VM window: Devices > Insert Guest Additions CD Image"
 fi
 # a KFLOP on USB (FTDI 0403:6001, a full-speed device: the OHCI controller serves it) goes to the VM when it is plugged in
-VBoxManage usbfilter add 0 --target "$NAME" --name KFLOP --vendorid 0403 --productid 6001
+# the KFLOP's own id 0403:f231, or FTDI's default 0403:6001 (an older EEPROM; also the Kogna's COM port); the
+# filter brings the board back after a flash or a power cycle, when it re-enumerates
+VBoxManage usbfilter add 0 --target "$NAME" --name KFLOP --vendorid 0403 --productid f231
+VBoxManage usbfilter add 1 --target "$NAME" --name "KFLOP (FTDI id) / Kogna COM port" --vendorid 0403 --productid 6001
 if [ -n "$SHARE" ]; then
     mkdir -p "$SHARE"
     VBoxManage sharedfolder add "$NAME" --name kmotion --hostpath "$SHARE" --automount --auto-mount-point /mnt/kmotion
