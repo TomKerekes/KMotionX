@@ -8,18 +8,23 @@ extern int ParametricIndex;
 
 //Step and Dir on JP7 pin 15-20, IO bits 8-13
 // JP7 pin 7-14, IO bits 0-7 available for end limit switches 5v tolerant
+// the bench's fictitious machine: the ini's joint limits (INPUT_SCALE 2540 counts/in, 10 in/s,
+// 100 in/s^2, 10000 in/s^3) as the channels' own, so a jog or a home search runs within them and
+// the firmware's worst-case stop is 0.1 s (a channel limited to 4000 counts/s^2 from 64000
+// counts/s, as it was, took 16 s to stop, and the planner capped the feed and warned about it)
 #define STEPS_INCH 2540
-#define STEPS_MM 160
-#define STEPS_MM_Z 80
+#define CH_VEL (10.0 * STEPS_INCH)
+#define CH_ACCEL (100.0 * STEPS_INCH)
+#define CH_JERK (10000.0 * STEPS_INCH)
 
 #define CLOCK 16.6666e6
 main()
 {
   ch0->InputMode=NO_INPUT_MODE;
   ch0->OutputMode=STEP_DIR_MODE;
-  ch0->Vel=STEPS_MM*400; // 400 mm/s;
-  ch0->Accel=4000; // was 150000;
-  ch0->Jerk=4e+004; // was 4e+006;
+  ch0->Vel=CH_VEL;
+  ch0->Accel=CH_ACCEL;
+  ch0->Jerk=CH_JERK;
   ch0->P=0;
   ch0->I=0.01;
   ch0->D=0;
@@ -76,9 +81,9 @@ main()
 
   ch1->InputMode=NO_INPUT_MODE;
   ch1->OutputMode=STEP_DIR_MODE;
-  ch1->Vel=STEPS_MM*400; // 400 mm/s;
-  ch1->Accel=4000; // was 150000;
-  ch1->Jerk=4e+004; // was 4e+006;
+  ch1->Vel=CH_VEL;
+  ch1->Accel=CH_ACCEL;
+  ch1->Jerk=CH_JERK;
   ch1->P=0;
   ch1->I=0.01;
   ch1->D=0;
@@ -135,9 +140,9 @@ main()
 
   ch2->InputMode=NO_INPUT_MODE;
   ch2->OutputMode=STEP_DIR_MODE;
-  ch2->Vel=STEPS_MM_Z*20; // 20 mm/s;
-  ch2->Accel=4000;
-  ch2->Jerk=4e+004;
+  ch2->Vel=CH_VEL;
+  ch2->Accel=CH_ACCEL;
+  ch2->Jerk=CH_JERK;
   ch2->P=0;
   ch2->I=0.01;
   ch2->D=0;
