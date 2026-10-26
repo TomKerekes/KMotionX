@@ -45,6 +45,8 @@ fi
 # a KFLOP on USB (FTDI 0403:6001, a full-speed device: the OHCI controller serves it) goes to the VM when it is plugged in
 # the KFLOP's own id 0403:f231, or FTDI's default 0403:6001 (an older EEPROM; also the Kogna's COM port); the
 # filter brings the board back after a flash or a power cycle, when it re-enumerates
+# Ids only - no revision, serial or strings: a filter pinned to them (what the GUI's "add filter from device"
+# makes) can fail to match and leaves the device "Busy", to be ticked by hand at every start
 VBoxManage usbfilter add 0 --target "$NAME" --name KFLOP --vendorid 0403 --productid f231
 VBoxManage usbfilter add 1 --target "$NAME" --name "KFLOP (FTDI id) / Kogna COM port" --vendorid 0403 --productid 6001
 # the game pad for jogging (a Logitech F310: c21d with its switch on X, c216 on D)

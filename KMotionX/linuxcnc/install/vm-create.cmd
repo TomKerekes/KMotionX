@@ -55,6 +55,8 @@ if exist "%GAISO%" (
 rem a KFLOP on USB goes to the VM when it is plugged in (and comes back after a flash or a power cycle, when it
 rem re-enumerates): its own id 0403:f231, or FTDI's default 0403:6001 (an older EEPROM; also the Kogna's COM port).
 rem Full-speed devices: the OHCI controller serves them
+rem Ids only - no revision, serial or strings: a filter pinned to them (what the GUI's "add filter from device"
+rem makes) can fail to match and leaves the device "Busy", to be ticked by hand at every start
 %VBM% usbfilter add 0 --target "%NAME%" --name KFLOP --vendorid 0403 --productid f231 || exit /b 1
 %VBM% usbfilter add 1 --target "%NAME%" --name "KFLOP (FTDI id) / Kogna COM port" --vendorid 0403 --productid 6001 || exit /b 1
 rem the game pad for jogging (a Logitech F310: c21d with its switch on X, c216 on D)
