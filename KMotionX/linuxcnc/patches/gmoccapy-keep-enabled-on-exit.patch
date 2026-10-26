@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..b265c20267 100644
+index cae34386ee..730bf15e78 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -29,6 +29,7 @@
@@ -83,7 +83,7 @@ index cae34386ee..b265c20267 100644
          error = self.error_channel.poll()
          if error:
              self._show_error(error)
-@@ -2820,31 +2880,54 @@ class gmoccapy(object):
+@@ -2820,33 +2880,67 @@ class gmoccapy(object):
  # button handlers Start
  
      # toggle emergency button
@@ -142,9 +142,23 @@ index cae34386ee..b265c20267 100644
 -            if self.stat.task_state != linuxcnc.STATE_ON:
 +            if not self._task_state_becomes(lambda st: st == linuxcnc.STATE_ON):
                  widget.set_active(False)
-                 self._show_error((linuxcnc.OPERATOR_DISPLAY, _("Could not switch the machine on, is limit switch activated?")))
+-                self._show_error((linuxcnc.OPERATOR_DISPLAY, _("Could not switch the machine on, is limit switch activated?")))
++                # the refusal's own reason first, if motion sent one (kmotion-motion: no board,
++                # a firmware mismatch, the enable program...); the limit-switch guess only
++                # when nothing explained it
++                explained = False
++                while True:
++                    error = self.error_channel.poll()
++                    if not error:
++                        break
++                    self._show_error(error)
++                    explained = True
++                if not explained:
++                    self._show_error((linuxcnc.OPERATOR_DISPLAY, _("Could not switch the machine on, is limit switch activated?")))
                  self._update_widgets(False)
-@@ -3039,6 +3122,7 @@ class gmoccapy(object):
+                 return
+             self._update_widgets(True)
+@@ -3039,6 +3133,7 @@ class gmoccapy(object):
          self.command.mode(linuxcnc.MODE_MANUAL)
  
      def on_hal_status_state_estop_reset(self, widget=None):
@@ -152,7 +166,7 @@ index cae34386ee..b265c20267 100644
          self.widgets.tbtn_estop.set_active(False)
          self.widgets.tbtn_estop.set_image(self.widgets.img_emergency_off)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_off)
-@@ -3071,7 +3155,21 @@ class gmoccapy(object):
+@@ -3071,7 +3166,21 @@ class gmoccapy(object):
          self.widgets.ntb_info.set_current_page(0)
          self.widgets.ntb_jog.set_current_page(0)
  
@@ -174,7 +188,7 @@ index cae34386ee..b265c20267 100644
          widgetlist = ["rbt_manual", "btn_homing", "btn_touch", "btn_tool",
                        "ntb_jog", "spc_feed", "btn_feed_100", "rbt_forward",
                        "rbt_reverse", "rbt_stop", "tbtn_flood", "tbtn_mist",
-@@ -3081,7 +3179,9 @@ class gmoccapy(object):
+@@ -3081,7 +3190,9 @@ class gmoccapy(object):
          if not self.widgets.tbtn_on.get_active():
              self.widgets.tbtn_on.set_active(True)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_on)
@@ -185,7 +199,7 @@ index cae34386ee..b265c20267 100644
          if self.widgets.ntb_main.get_current_page() != 0:
              self.command.mode(linuxcnc.MODE_MANUAL)
              self.command.wait_complete()
-@@ -3364,14 +3464,33 @@ class gmoccapy(object):
+@@ -3364,14 +3475,33 @@ class gmoccapy(object):
          self.initialized = True
  
      # kill keyboard and estop machine before closing
