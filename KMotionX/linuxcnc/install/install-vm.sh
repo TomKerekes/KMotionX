@@ -61,7 +61,10 @@ python3-pybind11 python3-tk python3-xlib python3-opengl python3-numpy python3-ma
 python3-cairo python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gtksource-4 python3-pyqt5
 python3-pyqt5.qsci python3-pyqt5.qtsvg python3-pyqt5.qtopengl python3-dbus python3-qtpy
 python3-zmq tcl tcl8.6-dev tclx tk8.6-dev yapps2 libftdi1-dev python3-pyside6.qtwidgets
-python3-pyside6.qtgui python3-pyside6.qtcore network-manager linux-headers-amd64 dkms tio"
+python3-pyside6.qtgui python3-pyside6.qtcore network-manager dkms tio"
+# the Guest Additions build against the running kernel: its headers, not the metapackage (which
+# brought the standard kernel along onto a VM running the real-time one, and made it the default)
+PACKAGES="$PACKAGES linux-headers-$(uname -r)"
 
 step "Debian"
 . /etc/os-release
@@ -201,7 +204,9 @@ if [ $DO_ICONS = 1 ]; then
     run env LINUXCNC_DIR="$LINUXCNC_DIR" "$KMOTIONX_DIR/KMotionX/desktop/install-desktop-icons.sh"
     # GNOME shows nothing on the desktop without its desktop-icons extension (Xfce needs none);
     # the launchers are in its applications menu either way
-    if [ -d /usr/share/gnome-shell ]; then
+    # a GNOME desktop: gnome-shell installed (the /usr/share/gnome-shell directory alone is
+    # there on an Xfce install too, and once pulled the whole GNOME shell in)
+    if dpkg -s gnome-shell >/dev/null 2>&1; then
         run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q gnome-shell-extension-desktop-icons-ng
         run gnome-extensions enable ding@rastersoft.com || note "the desktop-icons extension is enabled at the next login"
         note "GNOME: the launchers are in the applications menu (the Windows key, type LinuxCNC); on the desktop after a log out and in"
