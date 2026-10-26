@@ -36,6 +36,7 @@ refresh() {
 
 if [ "${1:-}" = "--remove" ]; then
     for l in $launchers $stale; do rm -f "$apps/$l.desktop" "$desktop/$l.desktop"; done
+    rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/clipboard-png.desktop"; pkill -f '[c]lipboard-png$' || true
     for n in $sizes; do rm -f "$icons/${n}x${n}/apps/kmotion-tool.png"; done
     rm -f "$icons/scalable/apps/linuxcncicon.svg" "$icons/48x48/apps/linuxcncicon.png"
     refresh
@@ -138,6 +139,31 @@ Terminal=true
 Categories=Science;Engineering;
 Keywords=kmotion;linuxcnc;update;install;rebuild;
 END
+
+# --- the clipboard helper: a Windows bitmap pasted in is offered as PNG too -----------------
+# VirtualBox's shared clipboard brings a Windows screenshot into the guest as image/bmp only;
+# browser-based programs (Claude Code, Firefox, Chromium) paste PNG and see nothing. The
+# helper runs in the session (XDG autostart: Xfce and GNOME both honour it) and re-offers
+# such an image with a PNG form. Started now as well, so there is no need to log out and in
+note "clipboard-png (a bitmap on the shared clipboard is offered as PNG too, desktop/clipboard-png)"
+autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+mkdir -p "$autostart"
+cat >"$autostart/clipboard-png.desktop" <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Clipboard PNG
+Comment=An image arriving on the shared clipboard as a Windows bitmap is offered as PNG too (KMotionX desktop/clipboard-png)
+Exec="$here/clipboard-png"
+Icon=edit-paste
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+END
+note "  $autostart/clipboard-png.desktop"
+if [ -n "${DISPLAY:-}" ] && ! pgrep -f '[c]lipboard-png$' >/dev/null; then
+    setsid "$here/clipboard-png" >/dev/null 2>&1 </dev/null &
+fi
 
 # --- LinuxCNC --------------------------------------------------------------------------
 note "LinuxCNC with KMotion's planner (linuxcnc/)"

@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""clipboard-png: an image that arrives on the clipboard as a Windows bitmap only is offered as
+PNG as well, so programs that ask for PNG (Chromium, Electron apps such as Claude Code, Firefox)
+can paste it. VirtualBox's shared clipboard brings a Windows screenshot into the guest as
+image/bmp and nothing else; GTK programs take that, the browser-based ones do not.
+
+Runs in the X session (started by ~/.config/autostart/clipboard-png.desktop, which
+install-desktop-icons.sh puts there). On every clipboard change: if image/bmp is offered and
+image/png is not, the image is read and the clipboard re-set with it through GTK, which offers
+image/png beside image/bmp (any text that came with the bitmap is dropped: a screenshot has
+none worth keeping). The host takes the new contents back as a bitmap and offers them again;
+the same pixels coming round are recognised and left alone, so there is no loop."""
+import hashlib
+import signal
+import sys
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib   # noqa: E402
+
+class Republisher:
+    def __init__(self):
+        self.cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        self.last = None          # the pixels last republished: the host hands the same image back as a bitmap
+        self.cb.connect("owner-change", self.on_change)
+        GLib.idle_add(self.on_change, self.cb, None)   # what is on the clipboard already
+
+    def on_change(self, cb, event):
+        ok, targets = cb.wait_for_targets()
+        if not ok:
+            return
+        names = [str(t) for t in targets]
+        if "image/bmp" not in names or "image/png" in names:
+            return                # no bitmap, or PNG offered already (our own contents included)
+        pixbuf = cb.wait_for_image()
+        if pixbuf is None:
+            return
+        digest = hashlib.md5(pixbuf.get_pixels()).hexdigest() + f"{pixbuf.get_width()}x{pixbuf.get_height()}"
+        if digest == self.last:
+            return                # our image, back from the host as a bitmap
+        self.last = digest
+        cb.set_image(pixbuf)      # GTK offers image/png, image/bmp, image/tiff, image/jpeg...
+        print(f"clipboard-png: {pixbuf.get_width()}x{pixbuf.get_height()} bitmap offered as PNG too", flush=True)
+
+
+def main():
+    if not Gdk.Display.get_default():
+        print("clipboard-png: no display", file=sys.stderr)
+        return 1
+    Republisher()
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, lambda *_: Gtk.main_quit())
+    Gtk.main()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
