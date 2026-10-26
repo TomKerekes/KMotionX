@@ -1231,7 +1231,9 @@ static void urgent_main(KmBackend::Impl *d)
         }
         double t0 = now_s();
         bool hold = cmd == "StopImmediate0";
-        if (d->lost) { if (hold) d->holds_sent++; continue; }
+        // no board (never connected, or lost): nothing to send and nothing to say - a start
+        // without a board reported every stop and output bit as "board command failed"
+        if (d->lost || !d->connected) { if (hold) d->holds_sent++; if (jog_axis >= 0) d->jog_written[jog_axis]++; continue; }
         if (d->km->WriteLine(cmd.c_str())) d->message(std::string("board command failed: ") + cmd);
         if (hold) d->holds_sent++;
         if (jog_axis >= 0) d->jog_written[jog_axis]++;
@@ -2599,7 +2601,7 @@ static bool board_connect(KmBackend::Impl *d)
         { std::lock_guard<std::mutex> lock(g_msg_mutex); lib = g_message; g_message.clear(); }
         char board[MAX_LINE + 1] = "";
         if (d->km->WriteLineReadLine("Version", board) || !board[0]) {
-            std::string why = "no KFLOP or Kogna answers: is the board powered, and on the network (a Kogna) or on USB (a KFLOP)?";
+            std::string why = "no board detected: no KFLOP on USB and no Kogna on the network answers (is it powered, attached to this machine, and not held by another program?)";
             size_t nl = lib.find_first_of("\r\n");
             if (!lib.empty()) why += " (" + lib.substr(0, nl) + ")";
             return problem(why);
@@ -2614,6 +2616,11 @@ static bool board_connect(KmBackend::Impl *d)
                        "\" (" + path + "): they must match. Flash the board with this image (the KMotion tool: Config & Flash, "
                        "re-flash from the .out image), or put the board's own build of that file there");
     }
+    // the version check passes without a board when the library could not even lock one
+    // (type stays unknown): that is no board, not a KFLOP
+    if (type != BOARD_TYPE_KFLOP && type != BOARD_TYPE_KOGNA)
+        return problem("no board detected: no KFLOP on USB and no Kogna on the network answers (is it powered, "
+                       "attached to this machine, and not held by another program?)");
     fprintf(stderr, "kmotion-motion: connected to a %s\n", type == BOARD_TYPE_KOGNA ? "Kogna" : "KFLOP");
     d->board_type = type;
     d->km->SetConsoleCallback(console_handler);     // registers with the server: board mode only

@@ -2586,9 +2586,17 @@ static void update_io()
 {
     hold_jog_buttons();
     measure_buttons();
+    // the output bits go to the board when their pins change, and all of them again whenever
+    // the board connects (the start, a Machine on that finds it): a board that was not there
+    // at the start gets its bits then, and nothing is sent, or reported, while there is none
+    static int bits_connect_serial = -1;
+    if (km && km->is_board() && m.ks.connected && m.ks.connect_serial != bits_connect_serial) {
+        bits_connect_serial = m.ks.connect_serial;
+        for (size_t i = 0; i < output_bits.size(); i++) out_sent[i] = -1;
+    }
     for (size_t i = 0; i < output_bits.size(); i++) {
         int v = hal_get_bool(out_pins[i]) ? 1 : 0;
-        if (v != out_sent[i] && km && km->is_board()) {
+        if (v != out_sent[i] && km && km->is_board() && m.ks.connected) {
             km->set_bit(output_bits[i], v);
             log_print("bit %d = %d\n", output_bits[i], v);
             out_sent[i] = v;
