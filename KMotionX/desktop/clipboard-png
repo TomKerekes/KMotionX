@@ -9,7 +9,8 @@ install-desktop-icons.sh puts there). On every clipboard change: if image/bmp is
 image/png is not, the image is read and the clipboard re-set with it through GTK, which offers
 image/png beside image/bmp (any text that came with the bitmap is dropped: a screenshot has
 none worth keeping). The host takes the new contents back as a bitmap and offers them again;
-the same pixels coming round are recognised and left alone, so there is no loop."""
+the same pixels coming round again (copied once more, or re-announced at login) are re-offered
+too, up to three times running, so a host that bounced an image straight back could not loop."""
 import hashlib
 import signal
 import sys
@@ -22,7 +23,9 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib   # noqa: E402
 class Republisher:
     def __init__(self):
         self.cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        self.last = None          # the pixels last republished: the host hands the same image back as a bitmap
+        self.last = None          # the pixels last republished, and how often in a row: the same image
+        self.repeats = 0          # comes back as a bitmap (copied again, re-announced) and is re-offered,
+                                  # but not without end, in case a host ever bounced it straight back
         self.cb.connect("owner-change", self.on_change)
         GLib.idle_add(self.on_change, self.cb, None)   # what is on the clipboard already
 
@@ -38,8 +41,11 @@ class Republisher:
             return
         digest = hashlib.md5(pixbuf.get_pixels()).hexdigest() + f"{pixbuf.get_width()}x{pixbuf.get_height()}"
         if digest == self.last:
-            return                # our image, back from the host as a bitmap
-        self.last = digest
+            self.repeats += 1
+            if self.repeats > 3:
+                return            # the same image for the fourth time running: a bounce, not a copy
+        else:
+            self.last, self.repeats = digest, 0
         cb.set_image(pixbuf)      # GTK offers image/png, image/bmp, image/tiff, image/jpeg...
         print(f"clipboard-png: {pixbuf.get_width()}x{pixbuf.get_height()} bitmap offered as PNG too", flush=True)
 
