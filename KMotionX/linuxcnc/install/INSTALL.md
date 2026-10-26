@@ -66,6 +66,32 @@ It can be run again at any time: each step skips what is already done, and after
 
 For your own machine, copy `configs/kmotion-minirouter` and change the channels, the init program, the scales and limits, the homing and the spindle (the ini's "For your own machine" comment and the key comments say what each does; `README.md` the details). The bench's home and limit switches are simulated by `BenchLoop.c` for a board with nothing attached: set its `SIMULATE_SWITCHES` to 0, and either name your real switches' input bits or do without (`HOME_SEARCH_VEL = 0` homes a joint where it stands; `-1` in `LIMIT_NEG_BITS` / `LIMIT_POS_BITS` is no limit switch, soft limits only). A copy of a LinuxCNC launcher with the new ini path makes its icon.
 
+## Updating an installed VM
+
+Fixes land in the GitHub repository; an installed VM takes them in three commands. Close
+LinuxCNC and the KMotion tool first (they keep the old libraries and server running until
+restarted):
+
+```bash
+cd ~/KMotionX && git pull
+```
+
+```bash
+bash ~/KMotionX/KMotionX/linuxcnc/install/install-vm.sh
+```
+
+The script skips what is already done and rebuilds what changed: KMotionX and its install
+(`sudo` asks for your password), the LinuxCNC patches (a patch that changed replaces its earlier
+version), LinuxCNC itself, kmotion-motion and its tests, the desktop icons, the udev rules. Then
+start LinuxCNC from its icon as usual.
+
+If `git pull` refuses because of local changes, they are files LinuxCNC rewrote while running
+(`sim.var`, the G-code parameters, is the usual one): put the repository's copy back and pull again:
+
+```bash
+cd ~/KMotionX && git checkout -- KMotionX/linuxcnc/configs/kmotion-minirouter/sim.var && git pull
+```
+
 ## 6. Things that went wrong on the existing VM, so you recognise them
 
 - `make -j` in `~/KMotionX` stops partway: the subdirectories race. Plain `make`.

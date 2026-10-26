@@ -133,9 +133,15 @@ if [ $DO_LINUXCNC = 1 ]; then
     else note "already cloned"; fi
     run git -C "$LINUXCNC_DIR" checkout -q "$LINUXCNC_COMMIT"
     step "LinuxCNC patches ($KMOTIONX_DIR/KMotionX/linuxcnc/patches)"
+    # a patch that changed since the last run: its earlier version is in the tree, so the
+    # files it touches go back to the pinned commit first (each patch has files of its own)
     for p in "$KMOTIONX_DIR"/KMotionX/linuxcnc/patches/*.patch; do
         if git -C "$LINUXCNC_DIR" apply --reverse --check "$p" 2>/dev/null; then note "$(basename "$p"): already applied"
-        else run git -C "$LINUXCNC_DIR" apply "$p"; fi
+        else
+            # shellcheck disable=SC2046
+            run git -C "$LINUXCNC_DIR" checkout -q -- $(sed -n 's|^+++ b/||p' "$p")
+            run git -C "$LINUXCNC_DIR" apply "$p"
+        fi
     done
     step "LinuxCNC build dependencies (apt build-dep; the documentation tools come along)"
     # apt build-dep reads the tree's debian/control, which LinuxCNC does not ship: its
