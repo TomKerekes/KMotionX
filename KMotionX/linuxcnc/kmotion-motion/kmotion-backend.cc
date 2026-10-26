@@ -931,7 +931,7 @@ static void w_poll_board(KmBackend::Impl *d)
     int tok = d->km->WaitToken(false, 100, "kmotion-motion");
     if (tok == KMOTION_IN_USE) return;      // another client holds the board (a download, say): no loss
     if (tok != KMOTION_LOCKED) {
-        if (d->connected) { fprintf(stderr, "kmotion-motion: lost the board: no answer\n"); d->lost = true; }
+        if (d->connected) { fprintf(stderr, "kmotion-motion: lost the board: no answer\n"); d->lost = true; d->board_init_done = false; }
         d->connected = false;
         return;
     }
@@ -950,6 +950,10 @@ static void w_poll_board(KmBackend::Impl *d)
         if (d->connected) {
             fprintf(stderr, "kmotion-motion: lost the board: %s\n", r < 0 ? "a status record of the wrong size" : "GetStatus failed");
             d->lost = true;
+            // the board that comes back may be another one, or this one rebooted (a KFLOP
+            // swapped for a Kogna, a power cycle): the next Machine on runs the init and
+            // start programs again, as the session's first one did
+            d->board_init_done = false;
             // as KMotionCNC does on any communication error: drop the connection, so that the
             // next command connects afresh with the buffers flushed on both ends (the server
             // sends an abort and waits for its acknowledge before anything else)
