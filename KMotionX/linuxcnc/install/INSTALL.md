@@ -68,9 +68,10 @@ For your own machine, copy `configs/kmotion-minirouter` and change the channels,
 
 ## Updating an installed VM
 
-Fixes land in the GitHub repository; an installed VM takes them in three commands. Close
-LinuxCNC and the KMotion tool first (they keep the old libraries and server running until
-restarted):
+Fixes land in the GitHub repository; an installed VM takes them with two desktop icons, **Pull
+KMotionX** and then **Re-install LinuxCNC** (each opens a terminal window and shows what it did),
+or with the same two commands. Close LinuxCNC and the KMotion tool first (they keep the old
+libraries and server running until restarted):
 
 ```bash
 cd ~/KMotionX && git pull

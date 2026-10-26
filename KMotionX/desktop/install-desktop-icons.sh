@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool kogna-console linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console pull-kmotionx reinstall-linuxcnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 stale="linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop"   # earlier names of the bench launcher, removed on an install
 sizes="16 32 48 64 128 256"
 
@@ -110,6 +110,33 @@ Icon=utilities-terminal
 Terminal=true
 Categories=Science;Engineering;
 Keywords=kmotion;kogna;dynomotion;console;serial;
+END
+
+# --- updating: pull, then re-install -----------------------------------------------------
+note "Pull KMotionX and Re-install LinuxCNC (desktop/pull-kmotionx, desktop/reinstall-linuxcnc)"
+write_launcher pull-kmotionx <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Pull KMotionX
+Comment=Bring the KMotionX checkout up to date from GitHub (git pull); then Re-install LinuxCNC
+Exec="$here/pull-kmotionx"
+Icon=folder-download
+Terminal=true
+Categories=Science;Engineering;
+Keywords=kmotion;linuxcnc;update;git;pull;
+END
+write_launcher reinstall-linuxcnc <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Re-install LinuxCNC
+Comment=Run the installer again: builds and installs what changed since the last run (asks for your password)
+Exec="$here/reinstall-linuxcnc"
+Icon=system-software-update
+Terminal=true
+Categories=Science;Engineering;
+Keywords=kmotion;linuxcnc;update;install;rebuild;
 END
 
 # --- LinuxCNC --------------------------------------------------------------------------

@@ -6,11 +6,13 @@ run as yourself, nothing outside your home directory:
 
     ~/KMotionX/KMotionX/desktop/install-desktop-icons.sh
 
-It puts four launchers on the desktop and in the menu (Science / Engineering):
+It puts six launchers on the desktop and in the menu (Science / Engineering):
 
 - **KMotion** – the Linux KMotion tool (Digital I/O, Axis, C Programs, Config, Console).
 - **LinuxCNC (Minirouter)** – LinuxCNC with `configs/kmotion-minirouter/kmotion-minirouter.ini`: the bench, a KFLOP or a Kogna with nothing attached.
 - **Kogna COM Port** – the Kogna's virtual COM port in a terminal (`desktop/kogna-console`: tio on /dev/ttyACM0; the Kogna's USB attached to the machine, or to the VM with Devices > USB).
+- **Pull KMotionX** – brings this checkout up to date from GitHub in a terminal window (`desktop/pull-kmotionx`: git pull, and what came in).
+- **Re-install LinuxCNC** – runs the installer again (`desktop/reinstall-linuxcnc`: `linuxcnc/install/install-vm.sh`, which skips what is done and rebuilds and installs what changed; asks for your password). Close LinuxCNC and the KMotion tool first.
 - **LinuxCNC (3 Link)** – LinuxCNC on the 3 Link pen robot, `configs/kmotion-3link/kmotion-3link.ini`.
 - **LinuxCNC (KMotion simulate)** – the same planner with no board,
   `configs/kmotion-sim/kmotion-sim.ini`.

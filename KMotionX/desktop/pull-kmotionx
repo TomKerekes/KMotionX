@@ -1,0 +1,24 @@
+#!/bin/bash
+# pull-kmotionx: bring this checkout up to date from GitHub, from a desktop launcher (a
+# terminal window: what git says stays on screen until Enter). The code is pulled only;
+# "Re-install LinuxCNC" (desktop/reinstall-linuxcnc) rebuilds and installs what changed.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # .../KMotionX/KMotionX/desktop
+root=$(cd "$here/../.." && pwd)                        # the checkout
+cd "$root" || exit 1
+echo "git pull in $root ($(git rev-parse --abbrev-ref HEAD 2>/dev/null) from $(git remote get-url origin 2>/dev/null))"
+echo
+before=$(git rev-parse HEAD 2>/dev/null)
+if git pull; then
+    echo
+    if [ "$before" = "$(git rev-parse HEAD)" ]; then echo "Nothing new: the checkout was already up to date."
+    else
+        echo "New since before the pull:"; git --no-pager log --oneline "$before..HEAD" | sed 's/^/  /'
+        echo; echo "Now run \"Re-install LinuxCNC\" to build and install what changed."
+    fi
+else
+    echo
+    echo "The pull did not go through. If git refuses over local changes, they are usually files LinuxCNC"
+    echo "rewrote while running (sim.var); put the repository's copy back and pull again:"
+    echo "    cd $root && git checkout -- KMotionX/linuxcnc/configs/kmotion-minirouter/sim.var && git pull"
+fi
+echo; read -r -p "press Enter to close " _

@@ -1,0 +1,22 @@
+#!/bin/bash
+# reinstall-linuxcnc: run the installer again (linuxcnc/install/install-vm.sh) from a desktop
+# launcher, in a terminal window: it skips what is already done and rebuilds and installs
+# what changed since the last run - after "Pull KMotionX" brought new code in. It asks for
+# your password (sudo) a few times. Close LinuxCNC and the KMotion tool first: they keep the
+# old libraries and server until restarted.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # .../KMotionX/KMotionX/desktop
+root=$(cd "$here/../.." && pwd)                        # the checkout
+if pgrep -x milltask >/dev/null || pgrep -f tools/kmotion/kmotion_tool.py >/dev/null; then
+    echo "LinuxCNC or the KMotion tool is running: close it first, then start this again."
+    echo "(they keep the old libraries and KMotionServer until restarted)"
+    echo; read -r -p "press Enter to close " _; exit 1
+fi
+echo "Re-installing from $root (the installer skips what is done and rebuilds what changed)"
+echo "sudo asks for your password a few times."
+echo
+if bash "$root/KMotionX/linuxcnc/install/install-vm.sh"; then
+    echo; echo "Done. Start LinuxCNC from its icon as usual."
+else
+    echo; echo "The installer stopped with an error: the output above (and ~/install.log) says where."
+fi
+echo; read -r -p "press Enter to close " _
