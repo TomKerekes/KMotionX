@@ -234,6 +234,8 @@ struct KmBackend::Impl {
     int connect_serial = 0;         // attempts to connect: the start, then each Machine on while not connected
     std::string board_problem;      // why the board cannot be used (under smx); empty when connected
     bool board_init_done = false;   // the init programs and the start programs have run (the session's first Machine on)
+    unsigned init_done_count = 0;   // status_count when they had: the start programs show in the statuses after it
+    unsigned start_stopped = 0;     // poller: START_PROGRAM threads reported as not running (bit = thread), until they run again
     std::atomic<unsigned> ever_enabled{0};   // poller: axes seen enabled since the board came (bit = axis). A
                                     // board fresh from power-up reads Dest 0 on channels nothing has
                                     // set up, which through a kinematics is some far-away point: its
@@ -1056,6 +1058,23 @@ static void w_poll_board(KmBackend::Impl *d)
         d->pos_limits = pos;
     }
     if (d->cfg.probe_bit >= 0) d->probe_contact = status_bit(status, d->cfg.probe_bit) == d->cfg.probe_level;
+    // the START_PROGRAM threads are to keep running: one found stopped is reported once (the
+    // status read concurrent with its Execute may predate it: only the statuses after the
+    // next one are judged). A KMotion tool's Halt or a program loaded into that thread, or a
+    // board reset, ends it; Machine off and on runs the programs again after a board loss only
+    if (d->board_init_done && d->status_count > d->init_done_count + 1) {
+        for (const auto &sp : d->cfg.start_programs) {
+            int t = sp.first;
+            if (t < 1 || t > 7) continue;
+            bool running = (status.ThreadActive >> t) & 1;
+            if (!running && !(d->start_stopped & (1u << t))) {
+                d->start_stopped |= 1u << t;
+                d->message("START_PROGRAM " + sp.second + " in thread " + std::to_string(t) + " is not running on the board");
+            } else if (running) {
+                d->start_stopped &= ~(1u << t);
+            }
+        }
+    }
     // a probe trip while the worker still plans or downloads the probe move: the watcher's
     // feed hold freezes the board's execution, and the planner's download pacing would wait
     // for it forever. Its abort flag gets the worker out; w_probe then finishes the stop.
@@ -1273,7 +1292,12 @@ static int run_program(KmBackend::Impl *d, const char *path, int thread)
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); return 1; }
-        if (strcmp(reply, "0") == 0) return 0;
+        if (strcmp(reply, "0") == 0) {
+            char t[600];
+            snprintf(t, sizeof t, "init program %s ran in thread %d (%.1f s)", path, thread, now_s() - t0);
+            d->trace(t);
+            return 0;
+        }
         if (now_s() - t0 > 30) { d->message("the init program did not finish within 30 s"); return 1; }
     }
 }
@@ -1295,6 +1319,7 @@ static int start_program(KmBackend::Impl *d, const char *path, int thread)
     char cmd[64];
     snprintf(cmd, sizeof cmd, "Execute%d", thread);
     if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    d->trace(std::string("start program ") + path + " started in thread " + std::to_string(thread));
     return 0;
 }
 
@@ -2684,6 +2709,8 @@ static bool board_init_programs(KmBackend::Impl *d)
         if (run_program(d, prog.c_str(), cfg.init_thread)) return false;
     for (const auto &sp : cfg.start_programs)
         if (start_program(d, sp.second.c_str(), sp.first)) return false;
+    d->init_done_count = d->status_count;
+    d->start_stopped = 0;
     d->board_init_done = true;
     return true;
 }
