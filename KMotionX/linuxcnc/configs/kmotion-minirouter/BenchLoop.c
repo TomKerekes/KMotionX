@@ -6,8 +6,9 @@
 //                      persist 110 is 2 (kmotion-motion sets it for G96, as KMotionCNC does)
 //   ServiceProbe()     the probe watcher for G38.2-G38.5 (probe/ProbeService.c), on while
 //                      kmotion-motion has it armed during a probe move
-//   SimulateSwitches() the bare board's home and limit switches, on the KFLOP's virtual I/O
-//                      bits (48-63), from the axes' commanded positions (Dynomotion's
+//   SimulateSwitches() BENCH ONLY: stand-ins for the home and limit switches, so the config can
+//                      be exercised on a board with nothing attached. On the board's virtual
+//                      I/O bits (48-63), from the axes' commanded positions (Dynomotion's
 //                      C Programs/SimulateHomes.c, with the bits this config uses):
 //                        48 49 50  home switch of channel 0 1 2: made below -1000/-2000/-3000 counts
 //                                  (Home.c reads them; all three home searches go negative)
@@ -15,6 +16,14 @@
 //                                  (500 past the home switch, so a home search stops before it)
 //                        54 55 56  positive limit switch: made above +2000 counts
 //                      ([KMOTION] LIMIT_NEG_BITS = 51 52 53, LIMIT_POS_BITS = 54 55 56)
+//                      A real machine sets SIMULATE_SWITCHES 0 below and in the ini either names
+//                      its real switches' input bits (Home.c and the limit watch read whatever
+//                      bits the ini names) or does without: HOME_SEARCH_VEL = 0 homes a joint
+//                      where it stands (the GUI's Home button sets the position), and -1 in
+//                      LIMIT_NEG_BITS / LIMIT_POS_BITS is no limit switch, the soft limits
+//                      (MIN_LIMIT / MAX_LIMIT) alone. See "For your own machine" in the ini.
+#define SIMULATE_SWITCHES 1     // 1 on the bench; 0 on a machine with real switches, or none
+
 #include "KMotionDef.h"
 #include "spindle/MySpindleDefs.h"
 #include "spindle/CSSJog.c"
@@ -40,7 +49,9 @@ int main()
 	for (;;)
 	{
 		WaitNextTimeSlice();
+#if SIMULATE_SWITCHES
 		SimulateSwitches();
+#endif
 		ServiceCSS();
 		ServiceProbe();
 	}

@@ -64,7 +64,7 @@ It can be run again at any time: each step skips what is already done, and after
 3. **LinuxCNC (Minirouter)**: Tom's bench configuration (`configs/kmotion-minirouter`: step/dir channels 0-2, `MinirouterInit.c`, a jogged spindle axis, homing through `Home.c` on switches the bench loop simulates), for a KFLOP or a Kogna with nothing wired: it switches on, homes, probes and runs programs with no motors attached. The GUI is gmoccapy. **LinuxCNC (3 Link)** is the pen robot.
 4. From a terminal instead: `source ~/linuxcnc-dev/scripts/rip-environment`, then `linuxcnc -v -d <ini>`; the motion module's log is `/tmp/kmotion-motion.log`.
 
-For your own machine, copy `configs/kmotion-minirouter` and change the channels, the init program, the scales and limits, the homing and the spindle (the ini's comments say what each key does; `README.md` the details); a copy of a LinuxCNC launcher with the new ini path makes its icon.
+For your own machine, copy `configs/kmotion-minirouter` and change the channels, the init program, the scales and limits, the homing and the spindle (the ini's "For your own machine" comment and the key comments say what each does; `README.md` the details). The bench's home and limit switches are simulated by `BenchLoop.c` for a board with nothing attached: set its `SIMULATE_SWITCHES` to 0, and either name your real switches' input bits or do without (`HOME_SEARCH_VEL = 0` homes a joint where it stands; `-1` in `LIMIT_NEG_BITS` / `LIMIT_POS_BITS` is no limit switch, soft limits only). A copy of a LinuxCNC launcher with the new ini path makes its icon.
 
 ## 6. Things that went wrong on the existing VM, so you recognise them
 
