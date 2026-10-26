@@ -665,7 +665,8 @@ Timer.Start();
 			}
 			*/
 
-			if (FlushInputBuffer())
+			int flushed = FlushInputBuffer();
+			if (flushed)
 			{
 				log_info("FAIL: FlushInputBuffer for device %d",Actual_ID);
 				//This is the key to why it works on second attempt
@@ -674,6 +675,13 @@ Timer.Start();
 				//Try to recover from this action when initialising this class.
 				if(_ftdi_usb_close(ftdi) < FT_OK){
 					log_info("_ftdi_usb_close failed: %d (%s)", ftStatus, ftdi_get_error_string(ftdi));
+				}
+				// out of sync (it answered, but not with the acknowledge): a close and a
+				// fresh open puts it right, so try again while the open budget lasts
+				if (flushed == 2 && Timer.Elapsed_Seconds() < TIME_TO_TRY_TO_OPEN)
+				{
+					Sleep(100);
+					continue;
 				}
 				Mutex->Unlock();
 				return 1;
@@ -1391,21 +1399,33 @@ int CKMotionIO::FlushInputBuffer()
 		if (TxBytes != 0) return 1;
 */		
 
-    // wait for a fixed time for the abort acknowledge
-    // to come back which is exactly 3 characters ESC C \r
-	
+	// wait for a fixed time for the abort acknowledge to come back: exactly the
+	// 3 characters ESC C \r. A board that was just plugged in (its first open since
+	// it appeared) can hand over a stray byte or two before them, so anything ahead
+	// of the acknowledge is skipped: a stray byte used to fail the connect, and only
+	// the second attempt (after a close) worked.
+
 	Timer.Start();
 
+	int total = 0;    // bytes read so far
+	int ack = -1;     // where ESC C \r starts in RxBuffer, once seen
+
 	do
-    {
-      BytesReceived = ftStatus = ftdi_read_data(ftdi,RxBuffer,3);
-      usleep(CONNECT_TIMEOUT_USEC/10);
-    }
-    while (BytesReceived == 0 && Timer.Elapsed_Seconds() < CONNECT_TIMEOUT);
+	{
+		BytesReceived = ftStatus = ftdi_read_data(ftdi, RxBuffer + total, 3);
+		if (ftStatus < 0)
+		{
+			log_info("FAIL: ftdi_read_data status: %d (%s)", ftStatus, ftdi_get_error_string(ftdi));
+			return 1;
+		}
+		total += BytesReceived;
+		for (int i = 0; ack < 0 && i + 2 < total; i++)
+			if (RxBuffer[i] == '\x1b' && RxBuffer[i + 1] == 'C' && RxBuffer[i + 2] == '\r') ack = i;
+		if (ack < 0) usleep(CONNECT_TIMEOUT_USEC/10);
+	}
+	while (ack < 0 && total + 3 <= (int)sizeof(RxBuffer) && Timer.Elapsed_Seconds() < CONNECT_TIMEOUT);
 
-
-
-		if (BytesReceived == 0)
+		if (total == 0)
 		{
 			// KMotion seems to be present but not responding
 			// after several attemps flag as non responsive and
@@ -1423,11 +1443,15 @@ int CKMotionIO::FlushInputBuffer()
 
 		NonRespondingCount=0;
 
-		if (BytesReceived != 3){log_info("Expected bytes is 3. Received bytes %d", BytesReceived); return 1;}
-
-		if (RxBuffer[0] != '\x1b'){log_info("Received byte[0] 1b != %x", RxBuffer[0]); return 1;}
-		if (RxBuffer[1] != 'C'){log_info("Received byte[1] C != %c", RxBuffer[1]); return 1;}
-		if (RxBuffer[2] != '\r'){log_info("Received byte[2] \\r != %c", RxBuffer[2]); return 1;}
+		if (ack < 0)
+		{
+			log_info("No abort acknowledge (ESC C \\r) in the %d byte(s) received, first byte %02x: the connect is retried", total, RxBuffer[0]);
+			return 2;   // the board answers but is out of sync: worth another open
+		}
+		if (ack > 0)
+			log_info("Skipped %d stray byte(s) ahead of the abort acknowledge (first byte %02x)", ack, RxBuffer[0]);
+		if (total > ack + 3)
+			log_info("%d byte(s) follow the abort acknowledge", total - ack - 3);
 
 	}
 
