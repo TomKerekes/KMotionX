@@ -57,6 +57,9 @@ rem re-enumerates): its own id 0403:f231, or FTDI's default 0403:6001 (an older 
 rem Full-speed devices: the OHCI controller serves them
 %VBM% usbfilter add 0 --target "%NAME%" --name KFLOP --vendorid 0403 --productid f231 || exit /b 1
 %VBM% usbfilter add 1 --target "%NAME%" --name "KFLOP (FTDI id) / Kogna COM port" --vendorid 0403 --productid 6001 || exit /b 1
+rem the game pad for jogging (a Logitech F310: c21d with its switch on X, c216 on D)
+%VBM% usbfilter add 2 --target "%NAME%" --name "Logitech F310 game pad (X)" --vendorid 046d --productid c21d || exit /b 1
+%VBM% usbfilter add 3 --target "%NAME%" --name "Logitech F310 game pad (D)" --vendorid 046d --productid c216 || exit /b 1
 if not "%~3"=="" (
     if not exist "%~3" mkdir "%~3"
     %VBM% sharedfolder add "%NAME%" --name kmotion --hostpath "%~3" --automount --auto-mount-point /mnt/kmotion || exit /b 1

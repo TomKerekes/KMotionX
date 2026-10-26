@@ -47,6 +47,9 @@ fi
 # filter brings the board back after a flash or a power cycle, when it re-enumerates
 VBoxManage usbfilter add 0 --target "$NAME" --name KFLOP --vendorid 0403 --productid f231
 VBoxManage usbfilter add 1 --target "$NAME" --name "KFLOP (FTDI id) / Kogna COM port" --vendorid 0403 --productid 6001
+# the game pad for jogging (a Logitech F310: c21d with its switch on X, c216 on D)
+VBoxManage usbfilter add 2 --target "$NAME" --name "Logitech F310 game pad (X)" --vendorid 046d --productid c21d
+VBoxManage usbfilter add 3 --target "$NAME" --name "Logitech F310 game pad (D)" --vendorid 046d --productid c216
 if [ -n "$SHARE" ]; then
     mkdir -p "$SHARE"
     VBoxManage sharedfolder add "$NAME" --name kmotion --hostpath "$SHARE" --automount --auto-mount-point /mnt/kmotion
