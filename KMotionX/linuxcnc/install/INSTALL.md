@@ -96,6 +96,8 @@ cd ~/KMotionX && git checkout -- KMotionX/linuxcnc/configs/kmotion-minirouter/si
 
 ## 6. Things that went wrong on the existing VM, so you recognise them
 
+- **The VM was killed during a build (a Windows restart, a power cut) and the rerun fails oddly**, for example `sed: can't read ../docs/build/man/man1/thermistor.1` while `halcompile --document` reports no error: a file being written at that instant was left empty, and an empty script runs and "succeeds". Remove the empty files and run the installer again; it rebuilds only those:
+  `find ~/linuxcnc-dev/bin ~/linuxcnc-dev/rtlib ~/linuxcnc-dev/src/objects ~/linuxcnc-dev/docs/build ~/KMotionX/bin -type f -size 0 -print -delete`
 - `make -j` in `~/KMotionX` stops partway: the subdirectories race. Plain `make`.
 - After `sudo make install` the files in `~/KMotionX/bin` are root's: `make` once more as yourself (the script does).
 - `apt build-dep` needs `deb-src` sources (the script turns them on).
