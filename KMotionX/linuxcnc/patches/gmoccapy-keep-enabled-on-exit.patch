@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..730bf15e78 100644
+index cae34386ee..678b5a8e3d 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -29,6 +29,7 @@
@@ -235,3 +235,17 @@ index cae34386ee..730bf15e78 100644
          Gtk.main_quit()
  
      def on_focus_out(self, widget, data=None):
+@@ -4369,6 +4499,13 @@ class gmoccapy(object):
+ 
+     def on_chk_ignore_limits_toggled(self, widget, data=None):
+         if self.widgets.chk_ignore_limits.get_active():
++           # task passes the override to motion in manual mode only: a limit tripped while a
++           # program ran leaves task in auto, and the override would be dropped unheard, so
++           # Machine on trips again at once (AXIS switches the mode the same way)
++           self.stat.poll()
++           if self.stat.task_mode != linuxcnc.MODE_MANUAL:
++               self.command.mode(linuxcnc.MODE_MANUAL)
++               self.command.wait_complete()
+            self.command.override_limits()
+ 
+     def on_tbtn_fullsize_preview_toggled(self, widget, data=None):
