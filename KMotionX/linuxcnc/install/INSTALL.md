@@ -96,8 +96,8 @@ cd ~/KMotionX && git checkout -- KMotionX/linuxcnc/configs/kmotion-minirouter/si
 
 ## 6. Things that went wrong on the existing VM, so you recognise them
 
-- **The VM was killed during a build (a Windows restart, a power cut) and the rerun fails oddly**, for example `sed: can't read ../docs/build/man/man1/thermistor.1` while `halcompile --document` reports no error: a file being written at that instant was left empty, and an empty script runs and "succeeds". Remove the empty files and run the installer again; it rebuilds only those:
-  `find ~/linuxcnc-dev/bin ~/linuxcnc-dev/rtlib ~/linuxcnc-dev/src/objects ~/linuxcnc-dev/docs/build ~/KMotionX/bin -type f -size 0 -print -delete`
+- **The VM was killed during a build (a Windows restart, a power cut) and the rerun fails oddly**, for example `sed: can't read ../docs/build/man/man1/thermistor.1` while `halcompile --document` reports no error, or `undefined reference to hal_init` linking halstreamer: the files being written at that instant were left empty or cut short (an empty script runs and "succeeds"; a cut-short library links and lacks its symbols). Find the minute of the crash (`ls -la ~/linuxcnc-dev/bin/halcompile` shows it when that file is the empty one), remove everything the build wrote in it, and run the installer again; it rebuilds only those:
+  `find ~/linuxcnc-dev ~/KMotionX/bin -type f ! -path '*/.git/*' -newermt '2026-10-26 18:10' ! -newermt '2026-10-26 18:15' -print -delete` (with the crash's date and minutes)
 - `make -j` in `~/KMotionX` stops partway: the subdirectories race. Plain `make`.
 - After `sudo make install` the files in `~/KMotionX/bin` are root's: `make` once more as yourself (the script does).
 - `apt build-dep` needs `deb-src` sources (the script turns them on).
