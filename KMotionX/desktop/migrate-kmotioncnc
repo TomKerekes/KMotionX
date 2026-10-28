@@ -1,0 +1,16 @@
+#!/bin/bash
+# migrate-kmotioncnc: the KMotionCNC-to-LinuxCNC converter (linuxcnc/tools/migrate-kmotioncnc) from a
+# desktop launcher, in a terminal window that stays until Enter. It looks for a KMotion installation
+# on the shared folder (/mnt/kmotion/KMotion*: the Windows install, copied or shared), asks for the
+# new configuration's name, writes linuxcnc/configs/<name>/ with MIGRATION.md, and makes its icon.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # .../KMotionX/KMotionX/desktop
+tool="$here/../linuxcnc/tools/migrate-kmotioncnc"
+echo "KMotionCNC -> LinuxCNC: a configuration from a KMotion installation's Tool Setup"
+echo "(the install folder: on a VM, the Windows one through the shared folder, e.g. /mnt/kmotion/KMotion5.5.1)"
+echo
+python3 "$tool" "$@"
+rc=$?
+echo
+if [ $rc -ne 0 ]; then echo "the conversion did not finish (see above)"; fi
+read -r -p "press Enter to close " _
+exit $rc

@@ -6,13 +6,14 @@ run as yourself, nothing outside your home directory:
 
     ~/KMotionX/KMotionX/desktop/install-desktop-icons.sh
 
-It puts six launchers on the desktop and in the menu (Science / Engineering):
+It puts seven launchers on the desktop and in the menu (Science / Engineering):
 
 - **KMotion** – the Linux KMotion tool (Digital I/O, Axis, C Programs, Config, Console).
 - **LinuxCNC (Minirouter)** – LinuxCNC with `configs/kmotion-minirouter/kmotion-minirouter.ini`: the bench, a KFLOP or a Kogna with nothing attached.
 - **Kogna COM Port** – the Kogna's virtual COM port in a terminal (`desktop/kogna-console`: tio on /dev/ttyACM0; the Kogna's USB attached to the machine, or to the VM with Devices > USB).
 - **Pull KMotionX** – brings this checkout up to date from GitHub in a terminal window (`desktop/pull-kmotionx`: git pull, and what came in).
 - **Re-install LinuxCNC** – runs the installer again (`desktop/reinstall-linuxcnc`: `linuxcnc/install/install-vm.sh`, which skips what is done and rebuilds and installs what changed; asks for your password). Close LinuxCNC and the KMotion tool first.
+- **Migrate from KMotionCNC** – a LinuxCNC configuration from a KMotion installation's KMotionCNC Tool Setup, in a terminal window (`desktop/migrate-kmotioncnc` runs `linuxcnc/tools/migrate-kmotioncnc`; the Windows install through the shared folder).
 
 It also puts `desktop/clipboard-png` into the session's autostart (`~/.config/autostart`): VirtualBox's shared clipboard brings a Windows screenshot in as a bitmap only, which browser-based programs (Claude Code, Firefox, Chromium) cannot paste; the helper re-offers such an image as PNG too. `--remove` takes it away with the launchers.
 - **LinuxCNC (3 Link)** – LinuxCNC on the 3 Link pen robot, `configs/kmotion-3link/kmotion-3link.ini`.

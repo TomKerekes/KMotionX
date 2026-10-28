@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool kogna-console pull-kmotionx reinstall-linuxcnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 stale="linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop"   # earlier names of the bench launcher, removed on an install
 sizes="16 32 48 64 128 256"
 
@@ -164,6 +164,21 @@ note "  $autostart/clipboard-png.desktop"
 if [ -n "${DISPLAY:-}" ] && ! pgrep -f '[c]lipboard-png$' >/dev/null; then
     setsid "$here/clipboard-png" >/dev/null 2>&1 </dev/null &
 fi
+
+# --- migrating a KMotionCNC setup ---------------------------------------------------------
+note "Migrate from KMotionCNC (linuxcnc/tools/migrate-kmotioncnc)"
+write_launcher migrate-kmotioncnc <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Migrate from KMotionCNC
+Comment=A LinuxCNC configuration from a KMotion installation's KMotionCNC Tool Setup (the Windows install on the shared folder)
+Exec="$here/migrate-kmotioncnc"
+Icon=document-open
+Terminal=true
+Categories=Science;Engineering;
+Keywords=kmotion;kmotioncnc;linuxcnc;migrate;convert;
+END
 
 # --- LinuxCNC --------------------------------------------------------------------------
 note "LinuxCNC with KMotion's planner (linuxcnc/)"

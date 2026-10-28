@@ -383,6 +383,29 @@ installation from scratch, with its scripts.
   250 mm/s, 2500 mm/s², jerk 25000 mm/s³ in inches, `MinirouterInit.c` as the init program,
   homing through `Home.c`, the bench spindle on channel 3 (`spindle/`), gmoccapy as the GUI.
 
+## Migrating a KMotionCNC setup
+
+`tools/migrate-kmotioncnc` (the desktop icon "Migrate from KMotionCNC") writes `configs/<name>/`
+from a KMotion installation's KMotionCNC Tool Setup: on a VM, the Windows install through the
+shared folder (`/mnt/kmotion/KMotion*`). A simplified conversion, for a setup with an INIT button,
+maybe a Home button, the spindle on M3/M4/M5/S actions, coolant on bits, user M codes:
+
+- the coordinate system from the INIT program's `DefineCoordSystem`; per axis the counts per
+  unit (`m_CountsPerInch`, per mm for a metric setup), velocity, acceleration, the INIT
+  program's jerk and soft limits (placeholders flagged when it has none), its limit switches;
+- the INIT program copied as `INIT_PROGRAM`, with its `#include`s; the M3/M4/M5/S actions as
+  `SPINDLE_*` in the same grammar, their programs copied; M7/M8 set-bit actions as the coolant
+  bits; M100-M119 as `MCODE_*` with the M1xx wrappers; the other buttons as M120 upward;
+- homing: a Home program made of `SimpleHomeIndexFunction` calls becomes the joints' `HOME_*`
+  keys and a `Home.c` on the bench protocol (switch and index bits); any other Home program is
+  kept whole and wrapped (one run homes every joint asked for);
+- G96 when the S program is the Spindle Using Jogs CSS set (`Loop.c` with `ServiceCSS()`);
+- the tool table, the fixture offsets (`emc.var`), the recent G-code files, the game pad;
+- `MIGRATION.md` in the folder: every value taken, every guess, what was not converted (M6's
+  tool-change program, the special actions, tapping, probing).
+
+Every program is compile-checked with tcc67 for the KFLOP image.
+
 ## Build and run
 
 Needs a LinuxCNC run-in-place build (`~/linuxcnc-dev` here; `LINUXCNC_DIR` in the makefile

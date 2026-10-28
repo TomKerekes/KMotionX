@@ -1,0 +1,834 @@
+#!/usr/bin/env python3
+"""migrate-kmotioncnc: a LinuxCNC configuration for kmotion-motion from a KMotionCNC setup.
+
+Reads a Windows KMotion installation (through the VM's shared folder, /mnt/kmotion/KMotion*,
+or any folder with KMotion/Data/GCodeConfigCNC.txt and C Programs/) and writes
+configs/<name>/ in this tree: the ini, the HAL files, the programs the setup names (with
+their #includes), a Home.c, the tool table, the fixture offsets, the recent G-code files,
+and MIGRATION.md listing every value taken, every guess and everything not converted.
+Then a desktop launcher for it. A simplified conversion: an INIT button, maybe a Home
+button, the spindle's M3/M4/M5/S actions, coolant bits, M100-M119, the other buttons as
+M120 upward.
+
+    migrate-kmotioncnc [--install DIR] [--name NAME] [--force] [--no-icon] [--yes]
+
+Without --name it asks (the install folder's name is the default). An existing
+configs/<name> is left alone unless --force."""
+import argparse
+import datetime
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent            # KMotionX/linuxcnc/tools
+LCNC = HERE.parent                                 # KMotionX/linuxcnc
+ROOT = LCNC.parent.parent                          # the checkout
+BENCH = LCNC / "configs" / "kmotion-minirouter"    # the bench configuration: templates and the home protocol
+THREELINK = LCNC / "configs" / "kmotion-3link"     # the game pad wiring
+AXES = "XYZABCUV"
+MM = 25.4
+
+ACTION = {0: "NONE", 1: "SETBIT", 2: "SETTWOBITS", 3: "DAC", 4: "PROGRAM", 5: "PROGRAM_WAIT",
+          6: "PROGRAM_WAIT_SYNC", 7: "PC program", 8: "callback", 9: "WAITBIT", 10: "screen script"}
+# KMotionCNC's action table: M0-M9 at 0-9, S at 10, the 10 buttons at 11-20, M100-M119 at 21-40,
+# the 8 special actions at 41-48 (its M24-M31 internally; 24 is M30, the program end)
+IDX_S, IDX_BUTTON, IDX_M100, IDX_SPECIAL = 10, 11, 21, 41
+SPECIAL_NAMES = ["M30 / program end", "special action 2", "special action 3", "special action 4",
+                 "special action 5", "special action 6", "special action 7", "special action 8"]
+
+
+class Migration:
+    def __init__(self, install, name, config_dir, force):
+        self.install = Path(install)
+        self.data = self.install / "KMotion" / "Data"
+        self.cprog = self.install / "C Programs"
+        self.name = name
+        self.out = Path(config_dir)
+        self.force = force
+        self.notes = []          # MIGRATION.md: what was taken, guessed, left
+        self.warnings = []       # ... and what needs a look
+        self.copied = {}         # source path -> path relative to the config folder
+        self.thread_programs = set()   # ... the ones a thread runs (compile-checked; an included file is not)
+        self.cfg = {}
+        self.actions = {}        # index -> dict(action, params[5], string)
+        self.units_mm = False
+        self.channels = [-1] * 8
+        self.chan = {}           # board channel -> {setting: value} from the INIT program
+        self.init_src = None
+        self.home_src = None
+        self.home_calls = []     # parsed SimpleHomeIndexFunction calls
+        self.windows_root = None # the install's path on Windows, when absolute paths reveal it
+
+    # ---- reading ---------------------------------------------------------------------------
+    def note(self, s): self.notes.append(s)
+    def warn(self, s): self.warnings.append(s); print("  ! " + s)
+
+    @staticmethod
+    def read_text(p):
+        b = Path(p).read_bytes()
+        if b.startswith(b"\xef\xbb\xbf"): b = b[3:]
+        return b.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+
+    def read_config(self):
+        f = self.data / "GCodeConfigCNC.txt"
+        if not f.exists(): sys.exit(f"no KMotionCNC setup at {f}")
+        for line in self.read_text(f).split("\n"):
+            if "=" not in line: continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip()
+            m = re.match(r"Interpreter->McodeActions\[(\d+)\]\.(Action|String|dParams\[(\d)\])", k)
+            if m:
+                a = self.actions.setdefault(int(m.group(1)), {"action": 0, "params": [0.0] * 5, "string": ""})
+                if m.group(2) == "Action": a["action"] = int(float(v))
+                elif m.group(2) == "String": a["string"] = v
+                else: a["params"][int(m.group(3))] = float(v)
+            else:
+                self.cfg[k] = v
+        self.note(f"Setup read: `{f}`")
+        setup = self.cfg.get("m_SetupFile", "")
+        if setup and (self.data / setup).exists():
+            for line in self.read_text(self.data / setup).split("\n"):
+                if line.strip().startswith("length_units"):
+                    cols = line.split()            # attribute, value, other possible values
+                    self.units_mm = len(cols) > 1 and cols[1].upper().startswith("MILLIMETER")
+            self.note(f"Units: {'millimeters' if self.units_mm else 'inches'} (`{setup}`: length_units)")
+        else:
+            self.note("Units: inches (no setup .set file found; the default)")
+        # the Windows install root, from absolute paths that point into C Programs
+        for src in [self.data / "Threads.txt"] + [self.data / "GCodeConfigCNC.txt"]:
+            if not src.exists(): continue
+            for m in re.finditer(r"([A-Za-z]:\\[^\n\"]*?)\\C Programs\\", self.read_text(src)):
+                self.windows_root = m.group(1); break
+            if self.windows_root: break
+
+    def num(self, key, default=0.0):
+        try: return float(self.cfg.get(key, default))
+        except ValueError: return default
+
+    # ---- files on the Windows side ---------------------------------------------------------
+    def resolve_ci(self, base, rel):
+        """a path under base, components matched case-insensitively; None when missing"""
+        p = Path(base)
+        for part in re.split(r"[\\/]+", rel.strip()):
+            if not part or part == ".": continue
+            if part == "..": p = p.parent; continue
+            nxt = p / part
+            if not nxt.exists():
+                cands = [c for c in p.iterdir() if c.name.lower() == part.lower()] if p.is_dir() else []
+                if not cands: return None
+                nxt = cands[0]
+            p = nxt
+        return p
+
+    def find_program(self, s):
+        """a program named by the setup: relative to C Programs, or an absolute Windows path"""
+        s = s.strip()
+        if not s: return None
+        if re.match(r"^[A-Za-z]:[\\/]|^\\\\", s):
+            m = re.search(r"[\\/]C Programs[\\/](.*)$", s, re.I)
+            if m:
+                p = self.resolve_ci(self.cprog, m.group(1))
+                if p: return p
+            m = re.search(r"[\\/]GCode Programs[\\/](.*)$", s, re.I)
+            if m:
+                p = self.resolve_ci(self.install / "GCode Programs", m.group(1))
+                if p: return p
+            return None
+        return self.resolve_ci(self.cprog, s)
+
+    @staticmethod
+    def mask_comments(text):
+        return re.sub(r"/\*[\s\S]*?\*/|//[^\n]*", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+
+    def copy_program(self, src, why):
+        """copy a C program into programs/ (its path under C Programs kept) with its #includes;
+        returns the path relative to the config folder"""
+        src = Path(src)
+        if src in self.copied: return self.copied[src]
+        try: rel = src.relative_to(self.cprog)
+        except ValueError: rel = Path(src.name)
+        dest_rel = Path("programs") / rel
+        dest = self.out / dest_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        text = self.read_text(src)
+        dest.write_text(text)
+        self.copied[src] = dest_rel.as_posix()
+        if not why.startswith("included by"): self.thread_programs.add(dest_rel.as_posix())
+        self.note(f"Program copied: `{rel.as_posix()}` -> `{dest_rel.as_posix()}` ({why})")
+        if src.suffix.lower() in (".c", ".h"):
+            for m in re.finditer(r'^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"', self.mask_comments(text), re.M):
+                inc = m.group(1)
+                p = self.resolve_ci(src.parent, inc) or self.resolve_ci(self.cprog, inc)
+                if p is None:
+                    if self.resolve_ci(ROOT / "DSP_KFLOP", inc) or self.resolve_ci(ROOT / "DSP_KOGNA", inc):
+                        continue                      # the firmware's own headers (KMotionDef.h)
+                    self.warn(f"`{rel.as_posix()}` includes `{inc}`, which was not found under C Programs")
+                    continue
+                self.copy_program(p, f"included by {rel.as_posix()}")
+        return self.copied[src]
+
+    # ---- the INIT program ------------------------------------------------------------------
+    def button_action(self, label_re):
+        for i in range(10):
+            label = self.cfg.get(f"m_Button{i}", "")
+            if label and re.search(label_re, label, re.I):
+                a = self.actions.get(IDX_BUTTON + i)
+                if a and a["action"] in (4, 5, 6) and a["string"]:
+                    return i, label, a
+        return None, None, None
+
+    def read_init(self):
+        i, label, a = self.button_action(r"init")
+        if a is None:
+            self.warn("No INIT button with a program: the coordinate system is assumed X Y Z on channels 0 1 2, "
+                      "and the channel settings (jerk, soft limits, limit switches) are unknown")
+            self.channels[:3] = [0, 1, 2]
+            return
+        src = self.find_program(a["string"])
+        if src is None:
+            self.warn(f"The INIT button's program `{a['string']}` was not found under the install: the coordinate "
+                      "system is assumed X Y Z on channels 0 1 2")
+            self.channels[:3] = [0, 1, 2]
+            return
+        self.init_src = src
+        self.note(f"INIT: button {i + 1} \"{label}\" runs `{a['string']}` in thread {int(a['params'][0])}")
+        text = self.mask_comments(self.read_text(src))
+        m = re.search(r"DefineCoordSystem(6|8)?\s*\(([^)]*)\)", text)
+        if m:
+            args = [int(float(x)) for x in m.group(2).split(",")]
+            for k, ch in enumerate(args[:8]): self.channels[k] = ch
+            self.note(f"Coordinate system: DefineCoordSystem{m.group(1) or ''}({', '.join(str(x) for x in args)}) -> "
+                      + ", ".join(f"{AXES[k]}=ch{self.channels[k]}" for k in range(8) if self.channels[k] >= 0))
+        else:
+            self.warn("No DefineCoordSystem in the INIT program: X Y Z on channels 0 1 2 assumed")
+            self.channels[:3] = [0, 1, 2]
+        for m in re.finditer(r"(?:ch(\d+)->|chan\[(\d+)\]\.)(\w+)\s*=\s*([^;]+);", text):
+            ch = int(m.group(1) or m.group(2))
+            key, val = m.group(3), m.group(4).strip()
+            try:
+                v = int(val, 0) if re.match(r"^0[xX]", val) else float(val)
+            except ValueError:
+                continue
+            self.chan.setdefault(ch, {})[key] = v
+
+    # ---- the Home program ------------------------------------------------------------------
+    def read_home(self):
+        i, label, a = self.button_action(r"home")
+        if a is None:
+            self.note("Home: no Home button with a program; the joints are homed where they stand (HOME_SEARCH_VEL = 0)")
+            return
+        src = self.find_program(a["string"])
+        if src is None:
+            self.warn(f"The Home button's program `{a['string']}` was not found under the install: the joints are "
+                      "homed where they stand")
+            return
+        self.home_src = src
+        text = self.mask_comments(self.read_text(src))
+        for m in re.finditer(r"SimpleHomeIndexFunction\s*\(([^;]*?)\)\s*;", text):
+            args = [x.strip() for x in m.group(1).split(",")]
+            if len(args) != 9: continue
+            try: vals = [float(x) for x in args]
+            except ValueError: continue
+            self.home_calls.append(vals)
+        if self.home_calls:
+            self.note(f"Home: button {i + 1} \"{label}\" runs `{a['string']}`: {len(self.home_calls)} "
+                      "SimpleHomeIndexFunction call(s), converted to LinuxCNC's homing (Home.c on the bench protocol)")
+        else:
+            self.note(f"Home: button {i + 1} \"{label}\" runs `{a['string']}`, not a SimpleHomeIndexFunction "
+                      "sequence: kept whole, wrapped by Home.c (one run homes every joint asked for)")
+
+    # ---- conversions -----------------------------------------------------------------------
+    def joints(self):
+        """the joints in LinuxCNC order: (axis letter, board channel)"""
+        return [(AXES[k], ch) for k, ch in enumerate(self.channels) if ch >= 0]
+
+    def axis_values(self, letter):
+        """scale (counts per unit), vel, accel, jerk (units/s..), limits, angular, for one axis"""
+        ch = self.channels[AXES.index(letter)]
+        cpi = self.num(f"m_CountsPerInch{letter}", 1.0)
+        angular = letter in "ABC" and int(self.num(f"m_Degrees{letter}", 1)) == 1
+        f = 1.0 if (angular or not self.units_mm) else MM
+        scale = cpi / f
+        vel = self.num(f"m_MaxVel{letter}", 1.0) * f
+        acc = self.num(f"m_MaxAccel{letter}", 10.0) * f
+        c = self.chan.get(ch, {})
+        jerk = c.get("Jerk", 0.0) / scale if scale else 0.0
+        jerk_note = "the INIT program's ch->Jerk" if jerk > 0 else "10 x accel (no Jerk in the INIT program)"
+        if jerk <= 0: jerk = 10 * acc
+        lo, hi = c.get("SoftLimitNeg"), c.get("SoftLimitPos")
+        if lo is not None and hi is not None and scale and abs(lo / scale) < 1e5 and abs(hi / scale) < 1e5:
+            lim = (lo / scale, hi / scale); lim_note = "the INIT program's SoftLimitNeg/Pos"
+        else:
+            lim = (-100.0, 100.0); lim_note = "PLACEHOLDER +-100 (no finite soft limits in the INIT program): set the real travel"
+        return dict(ch=ch, scale=scale, vel=vel, acc=acc, jerk=jerk, jerk_note=jerk_note, lim=lim, lim_note=lim_note,
+                    angular=angular, jog=self.num(f"m_JogSpeed[{AXES.index(letter)}]", 1.0) * f)
+
+    def limit_bits(self, ch):
+        """(neg bit, pos bit, active level) from the INIT program's LimitSwitchOptions; -1 = none"""
+        c = self.chan.get(ch, {})
+        o = int(c.get("LimitSwitchOptions", 0))
+        neg = pos = -1
+        if o & 0x100:
+            nb, pb = int(c.get("LimitSwitchNegBit", -1)), int(c.get("LimitSwitchPosBit", -1))
+        else:
+            nb, pb = (o >> 16) & 0xff, (o >> 24) & 0xff
+        if o & 1: neg = nb
+        if o & 2: pos = pb
+        level_neg = 0 if o & 4 else 1
+        level_pos = 0 if o & 8 else 1
+        return neg, pos, level_neg if neg >= 0 else level_pos
+
+    def action_text(self, a):
+        """the [KMOTION] action line for one of KMotionCNC's actions, or (None, why)"""
+        t, p, s = a["action"], a["params"], a["string"]
+        if t == 0: return None, "no action"
+        if t == 1: return f"SETBIT {int(p[0])} {int(p[1])}", None
+        if t == 2: return f"SETTWOBITS {int(p[0])} {int(p[1])} {int(p[2])} {int(p[3])}", None
+        if t == 3: return f"DAC {int(p[0])} {p[1]:g} {p[2]:g} {p[3]:g} {p[4]:g}", None
+        if t in (4, 5, 6):
+            src = self.find_program(s)
+            if src is None: return None, f"program `{s}` not found under the install"
+            rel = self.copy_program(src, "an action's program")
+            return f"{ACTION[t]} {int(p[0])} {int(p[1])} {rel}", None
+        return None, f"{ACTION.get(t, t)} actions have no counterpart in kmotion-motion"
+
+    # ---- writing ---------------------------------------------------------------------------
+    def run(self):
+        if self.out.exists():
+            if not self.force: sys.exit(f"{self.out} exists: choose another name, or --force to replace it")
+            shutil.rmtree(self.out)
+        self.out.mkdir(parents=True)
+        (self.out / "mcodes").mkdir()
+        self.read_config()
+        self.read_init()
+        self.read_home()
+        km = {}             # [KMOTION] key -> value (strings; INIT_PROGRAM/START_PROGRAM may repeat: lists)
+        hal_extra = []
+        # the INIT program
+        if self.init_src:
+            km["INIT_PROGRAM"] = [self.copy_program(self.init_src, "the INIT button")]
+            km["INIT_THREAD"] = str(int(self.button_action(r"init")[2]["params"][0]) or 1)
+        # spindle
+        spindle_lines = {}
+        for key, idx in (("SPINDLE_M3", 3), ("SPINDLE_M4", 4), ("SPINDLE_M5", 5), ("SPINDLE_S", IDX_S)):
+            a = self.actions.get(idx)
+            if not a: continue
+            txt, why = self.action_text(a)
+            if txt: spindle_lines[key] = txt; self.note(f"{key} = {txt}")
+            elif why == "no action": self.note(f"{key}: no action in the setup")
+            else: self.warn(f"{key}: not converted ({why})")
+        css = False
+        s_prog = None
+        a = self.actions.get(IDX_S)
+        if a and a["action"] in (4, 5, 6):
+            s_prog = self.find_program(a["string"])
+            if s_prog and (s_prog.parent / "CSSJog.c").exists():
+                css = True
+                self.copy_program(s_prog.parent / "CSSJog.c", "included by Loop.c: G96 constant surface speed (ServiceCSS)")
+        spindle_axis = int(self.num("m_SpindleAxis", -1))
+        spindle_type = int(self.num("m_SpindleType", 0))
+        self.note(f"Spindle: m_SpindleType={spindle_type}, m_SpindleAxis={spindle_axis}, "
+                  f"m_SpindleCntsPerRev={self.num('m_SpindleCntsPerRev'):g}, m_SpindleTau={self.num('m_SpindleTau'):g}")
+        # coolant M7/M8/M9 on bits
+        coolant = {}
+        for key, idx in (("mist", 7), ("flood", 8)):
+            a = self.actions.get(idx)
+            if a and a["action"] == 1:
+                if int(a["params"][1]) == 1: coolant[key] = int(a["params"][0])
+                else: self.warn(f"M{idx} sets bit {int(a['params'][0])} LOW for on (active low): not converted, "
+                                "kmotion.out.<bit> follows the HAL signal as it is")
+            elif a and a["action"] != 0:
+                self.warn(f"M{idx} is a {ACTION.get(a['action'])} action: not converted (only a SETBIT becomes the coolant bit)")
+        for key, bit in coolant.items():
+            hal_extra.append(f"net coolant-{key} iocontrol.0.coolant-{key} => kmotion.out.{bit}")
+            self.note(f"M{7 if key == 'mist' else 8} ({key}): board bit {bit}, from iocontrol.0.coolant-{key}; M9 clears both")
+        a9 = self.actions.get(9)
+        if a9 and a9["action"] not in (0, 1, 2): self.warn(f"M9 is a {ACTION.get(a9['action'])} action: not converted")
+        # M100-M119, then the other buttons as M120 upward
+        mcodes = {}
+        for k in range(20):
+            a = self.actions.get(IDX_M100 + k)
+            if not a or a["action"] == 0: continue
+            txt, why = self.action_text(a)
+            if txt: mcodes[100 + k] = txt; self.note(f"M{100 + k}: {txt}")
+            else: self.warn(f"M{100 + k}: not converted ({why})")
+        next_m = 120
+        init_i, _, _ = self.button_action(r"init")
+        home_i, _, _ = self.button_action(r"home")
+        for i in range(10):
+            if i in (init_i, home_i): continue
+            a = self.actions.get(IDX_BUTTON + i)
+            label = self.cfg.get(f"m_Button{i}", "") or f"button {i + 1}"
+            if not a or a["action"] == 0: continue
+            txt, why = self.action_text(a)
+            if txt:
+                mcodes[next_m] = txt
+                self.note(f"Button {i + 1} \"{label}\": M{next_m} = {txt} (MDI \"M{next_m}\")")
+                next_m += 1
+            else:
+                self.warn(f"Button {i + 1} \"{label}\": not converted ({why})")
+        # what is not converted
+        for idx, what in ((0, "M0"), (1, "M1"), (2, "M2"), (6, "M6 (tool change)")):
+            a = self.actions.get(idx)
+            if a and a["action"] != 0:
+                self.warn(f"{what} has a {ACTION.get(a['action'])} action ({a['string'] or 'no file'}): not converted; "
+                          "LinuxCNC handles that code itself")
+        for k in range(8):
+            a = self.actions.get(IDX_SPECIAL + k)
+            if a and a["action"] != 0:
+                self.warn(f"Special action \"{SPECIAL_NAMES[k]}\": {ACTION.get(a['action'])} {a['string']}: not converted")
+        # limits
+        neg_bits, pos_bits, levels = [], [], []
+        for letter, ch in self.joints():
+            n, p, lv = self.limit_bits(ch)
+            neg_bits.append(n); pos_bits.append(p)
+            if n >= 0 or p >= 0: levels.append(lv)
+        while len(neg_bits) < 8: neg_bits.append(-1); pos_bits.append(-1)
+        limit_active = levels[0] if levels else 1
+        if levels and any(l != limit_active for l in levels):
+            self.warn("The limit switches have mixed polarities in the INIT program; LIMIT_ACTIVE is one level for all: "
+                      f"{limit_active} taken, check the others")
+        if any(b >= 0 for b in neg_bits + pos_bits):
+            self.note("Limit switches (from LimitSwitchOptions): neg " + " ".join(str(b) for b in neg_bits[:len(self.joints())])
+                      + ", pos " + " ".join(str(b) for b in pos_bits[:len(self.joints())]) + f", active level {limit_active}")
+        else:
+            self.note("Limit switches: none watched in the INIT program; soft limits only")
+        # Home.c and the joints' homing keys
+        home = self.write_home()
+        # the loop program for CSS
+        start = None
+        if css:
+            rel = self.copied[s_prog.parent / "CSSJog.c"]
+            defs = s_prog.parent / "MySpindleDefs.h"
+            defs_inc = ""
+            if defs.exists():
+                defs_inc = f"#include \"{self.copy_program(defs, 'included by Loop.c: the Spindle Using Jogs settings')}\"\n"
+            (self.out / "Loop.c").write_text(
+                "// Loop.c (generated by migrate-kmotioncnc): the board's forever loop, started in thread 1 once the\n"
+                "// init programs have run ([KMOTION] START_PROGRAM). ServiceCSS() is Dynomotion's G96 constant\n"
+                "// surface speed service, on while persist 110 is 2 (kmotion-motion sets it for G96, as KMotionCNC does)\n"
+                "#include \"KMotionDef.h\"\n"
+                + defs_inc +
+                f"#include \"{rel}\"\n\n"
+                "int main()\n{\n\tfor (;;)\n\t{\n\t\tWaitNextTimeSlice();\n\t\tServiceCSS();\n\t}\n}\n")
+            start = "1 Loop.c"
+            self.note("G96: the S program's folder has CSSJog.c (the Spindle Using Jogs CSS set): SPINDLE_CSS = 1 and "
+                      "Loop.c runs ServiceCSS() in thread 1")
+        # tools, offsets, G-code files, geo
+        self.write_tools()
+        var = self.write_var()
+        self.write_ngc()
+        geo = self.cfg.get("m_GeoFile", "").strip()
+        if geo:
+            g = self.resolve_ci(self.data, geo) or self.find_program(geo)
+            if g: shutil.copy(g, self.out / g.name); geo = g.name; self.note(f"Geo correction file copied: `{g.name}`")
+            else: self.warn(f"The geo correction file `{geo}` was not found"); geo = ""
+        gamepad = int(self.num("m_EnableGamePad", 0)) == 1
+        if gamepad:
+            shutil.copy(THREELINK / "gamepad.hal", self.out / "gamepad.hal")
+            self.note("Game pad: enabled in the setup; gamepad.hal and the [GAMEPAD] section (a Logitech F310) are in; "
+                      "set its keys for your pad")
+        self.write_hal(hal_extra)
+        shutil.copy(BENCH / "gmoccapy-postgui.hal", self.out / "gmoccapy-postgui.hal")
+        self.write_mcodes(mcodes)
+        self.write_ini(km, spindle_lines, spindle_axis, spindle_type, css, start, mcodes, neg_bits, pos_bits,
+                       limit_active, home, var, geo, gamepad)
+        self.compile_check()
+        self.write_md()
+
+    def write_home(self):
+        """Home.c and the joints' homing keys; returns {joint index: dict of keys}"""
+        res = {}
+        jl = self.joints()
+        if self.home_calls:
+            n = max(ch for _, ch in jl) + 1
+            sw, pol, idx, idxpol = [-1] * n, [1] * n, [-1] * n, [1] * n
+            seq = 0
+            for axis, speed, d, bit, bpol, ispeed, ibit, ipol, off in self.home_calls:
+                ch = int(axis)
+                if ch >= n or ch not in [c for _, c in jl]:
+                    self.warn(f"Home: SimpleHomeIndexFunction homes channel {ch}, which is not in the coordinate system: skipped")
+                    continue
+                sw[ch], pol[ch], idx[ch], idxpol[ch] = int(bit), int(bpol), int(ibit), int(ipol)
+                j = [c for _, c in jl].index(ch)
+                letter = jl[j][0]
+                v = self.axis_values(letter)
+                d = -1 if d < 0 else 1
+                latch = (ispeed if ispeed > 0 else abs(speed) / 4) / v["scale"]
+                res[j] = dict(HOME_SEARCH_VEL=f"{d * speed / v['scale']:.6g}", HOME_LATCH_VEL=f"{-d * latch:.6g}",
+                              HOME_USE_INDEX="YES" if int(ibit) >= 0 else "NO", HOME_OFFSET="0.0",
+                              HOME=f"{-d * off / v['scale']:.6g}", HOME_SEQUENCE=str(seq))
+                self.note(f"Home {letter} (channel {ch}): switch bit {int(bit)} at {int(bpol)}, search {d * speed:g} counts/s "
+                          f"-> HOME_SEARCH_VEL {res[j]['HOME_SEARCH_VEL']}, back off until the switch opens at "
+                          f"{latch * v['scale']:g} counts/s (HOME_LATCH_VEL {res[j]['HOME_LATCH_VEL']}), "
+                          + (f"index bit {int(ibit)} at {int(ipol)}, " if int(ibit) >= 0 else "no index, ")
+                          + f"then {-d * off:g} counts inside -> HOME {res[j]['HOME']}; sequence {seq}")
+                seq += 1
+            text = self.read_text(BENCH / "Home.c")
+            head_end = text.index("#include \"KMotionDef.h\"")
+            body = text[head_end:]
+            body = re.sub(r"#define N_HOME_CHANNELS \d+", f"#define N_HOME_CHANNELS {n}", body)
+            body = re.sub(r"SwitchBit\[N_HOME_CHANNELS\]\s*=\s*\{[^}]*\}", "SwitchBit[N_HOME_CHANNELS]      = {" + ", ".join(map(str, sw)) + "}", body)
+            body = re.sub(r"SwitchPolarity\[N_HOME_CHANNELS\]\s*=\s*\{[^}]*\}", "SwitchPolarity[N_HOME_CHANNELS] = {" + ", ".join(map(str, pol)) + "}", body)
+            body = re.sub(r"IndexBit\[N_HOME_CHANNELS\]\s*=\s*\{[^}]*\}", "IndexBit[N_HOME_CHANNELS]       = {" + ", ".join(map(str, idx)) + "}", body)
+            body = re.sub(r"IndexPolarity\[N_HOME_CHANNELS\]\s*=\s*\{[^}]*\}", "IndexPolarity[N_HOME_CHANNELS]  = {" + ", ".join(map(str, idxpol)) + "}", body)
+            head = ("// Home.c (generated by migrate-kmotioncnc from the KMotionCNC Home program\n"
+                    f"// {self.home_src.name}): LinuxCNC's homing through the board, on kmotion-motion's protocol\n"
+                    "// (the bench configuration's Home.c, after Dynomotion's SimpleHomeIndexFunction.c): jog to the\n"
+                    "// switch, back off until it opens (that edge is home), optionally on to the index, set the\n"
+                    "// position, move to the home position. The switch and index bits per channel below come from\n"
+                    "// the SimpleHomeIndexFunction calls; the speeds, directions and distances are the ini's\n"
+                    "// [JOINT_n] HOME_* keys (kmotion-motion writes them into the persist array before each run).\n")
+            (self.out / "Home.c").write_text(head + body)
+            return res
+        if self.home_src:
+            rel = self.copy_program(self.home_src, "the Home button")
+            (self.out / "Home.c").write_text(
+                "// Home.c (generated by migrate-kmotioncnc): kmotion-motion's HOME_PROGRAM, wrapping the KMotionCNC\n"
+                f"// Home program {rel} unchanged. Its logic was not converted (it is not a SimpleHomeIndexFunction\n"
+                "// sequence), so LinuxCNC's Home All runs it once as the Home button did, and every joint asked for\n"
+                "// is then reported homed where the program left it (persist 120: the joints asked for, 121: homed,\n"
+                "// 122: failed, 123: the channel being homed). A single joint's Home runs the whole program too.\n"
+                "#define main KMotionCNC_HomeMain\n"
+                f"#include \"{rel}\"\n"
+                "#undef main\n\n"
+                "main()\n{\n"
+                "\tint mask = persist.UserData[120];\n"
+                "\tpersist.UserData[121] = 0;\n\tpersist.UserData[122] = 0;\n\tpersist.UserData[123] = -1;\n"
+                "\tKMotionCNC_HomeMain();\n"
+                "\tpersist.UserData[121] = mask;\n\tpersist.UserData[123] = -1;\n}\n")
+            for j in range(len(jl)):
+                res[j] = dict(HOME_SEARCH_VEL="-1", HOME_LATCH_VEL="-0.1", HOME_USE_INDEX="NO", HOME_OFFSET="0.0",
+                              HOME="0.0", HOME_SEQUENCE="0")
+            self.note("Homing keys: HOME_SEARCH_VEL -1 on every joint (nonzero, so the board's Home program runs; the "
+                      "program itself decides the moves), HOME_SEQUENCE 0 on all (one run)")
+            return res
+        for j in range(len(jl)):
+            res[j] = dict(HOME_SEARCH_VEL="0", HOME_LATCH_VEL="0", HOME_USE_INDEX="NO", HOME_OFFSET="0.0",
+                          HOME="0.0", HOME_SEQUENCE=str(j))
+        return res
+
+    def write_tools(self):
+        tbl = self.cfg.get("m_ToolFile", "").strip()
+        src = self.resolve_ci(self.data, tbl) if tbl else None
+        lines = []
+        if src:
+            for line in self.read_text(src).split("\n"):
+                m = re.match(r"\s*(\d+)\s+(\d+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s*(?:\"([^\"]*)\")?", line)
+                if not m: continue
+                slot, tid, length, dia, xo, yo, comment = m.groups()
+                extra = ""
+                if float(xo) != 0: extra += f" X{float(xo):g}"
+                if float(yo) != 0: extra += f" Y{float(yo):g}"
+                lines.append(f"T{tid} P{slot} Z{float(length):g} D{float(dia):g}{extra} ;{comment or ''}".rstrip(" ;"))
+            self.note(f"Tool table: `{tbl}`, {len(lines)} tools -> tool.tbl (T = KMotionCNC's ID, P = its slot; the values "
+                      "as they are, in the setup's units)")
+        else:
+            self.warn("No tool table file found: tool.tbl has one placeholder tool")
+            lines = ["T1 P1 Z0 D0.25 ;placeholder"]
+        (self.out / "tool.tbl").write_text("\n".join(lines) + "\n")
+
+    def write_var(self):
+        for cand in ("emc.var", "emc_UV.var"):
+            src = self.data / cand
+            if src.exists():
+                dest = f"{self.name}.var"
+                (self.out / dest).write_text(self.read_text(src))
+                self.note(f"Fixture offsets and parameters: `{cand}` copied as `{dest}` (the same numbering as LinuxCNC's)")
+                return dest
+        self.warn("No emc.var found: LinuxCNC starts with a fresh parameter file")
+        dest = f"{self.name}.var"
+        (self.out / dest).write_text("")
+        return dest
+
+    def write_ngc(self):
+        names = []
+        f = self.data / "GFilesCNC.txt"
+        if f.exists(): names = [l.strip() for l in self.read_text(f).split("\n") if l.strip()]
+        gdir = None
+        p = self.data / "persistCNC.ini"
+        if p.exists():
+            lines = self.read_text(p).split("\n")
+            if len(lines) > 1:
+                d = lines[1].strip()
+                m = re.search(r"[\\/]GCode Programs[\\/]?(.*)$", d, re.I)
+                gdir = self.resolve_ci(self.install / "GCode Programs", m.group(1)) if m else None
+        if gdir is None: gdir = self.install / "GCode Programs"
+        out = self.out / "nc_files"
+        out.mkdir(exist_ok=True)
+        n = 0
+        for name in names:
+            s = self.resolve_ci(gdir, name)
+            if s and s.is_file():
+                shutil.copy(s, out / s.name); n += 1
+        self.note(f"G-code files: {n} of the {len(names)} in KMotionCNC's recent list copied into nc_files/ (from `{gdir}`)")
+
+    def write_hal(self, extra):
+        text = ("# " + self.name + ".hal (generated by migrate-kmotioncnc): LinuxCNC with kmotion-motion in the\n"
+                "# motion module's place, a userspace process that attaches to the task<->motion shared memory\n"
+                "# like motmod does and creates the motion.*, joint.N.*, axis.L.* and spindle.N.* pins a GUI\n"
+                "# expects (see ../../README.md). The path is relative to this folder.\n"
+                "loadusr -W ../../kmotion-motion/kmotion-motion -l /tmp/kmotion-motion.log\n\n"
+                "# the iocontrol loopbacks every config needs: task leaves E-stop only when emc-enable-in is\n"
+                "# true, and tool changes complete only when answered\n"
+                "net estop-loop iocontrol.0.user-enable-out iocontrol.0.emc-enable-in\n"
+                "net tool-change iocontrol.0.tool-change iocontrol.0.tool-changed\n"
+                "net tool-prep iocontrol.0.tool-prepare iocontrol.0.tool-prepared\n")
+        if extra:
+            text += "\n# coolant on the board's output bits ([KMOTION] OUTPUT_BITS), from KMotionCNC's M7/M8 actions\n" + "\n".join(extra) + "\n"
+        (self.out / f"{self.name}.hal").write_text(text)
+
+    def write_mcodes(self, mcodes):
+        for n in mcodes:
+            p = self.out / "mcodes" / f"M{n}"
+            p.write_text("#!/bin/sh\n"
+                         f"# LinuxCNC runs this for M{n} as \"M{n} <P> <Q>\" (a word not given: -1) and waits for it;\n"
+                         f"# kmotion-mcode has kmotion-motion carry out [KMOTION] MCODE_{n} ({self.name}.ini) on the board\n"
+                         f"exec \"$(dirname \"$0\")/../../../kmotion-motion/kmotion-mcode\" {n} \"$@\"\n")
+            p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    def write_ini(self, km, spindle, spindle_axis, spindle_type, css, start, mcodes, neg_bits, pos_bits,
+                  limit_active, home, var, geo, gamepad):
+        jl = self.joints()
+        vals = {letter: self.axis_values(letter) for letter, _ in jl}
+        linear = [v for v in vals.values() if not v["angular"]]
+        units = "mm" if self.units_mm else "inch"
+        max_vel = max((v["vel"] for v in linear), default=1.0)
+        max_acc = max((v["acc"] for v in linear), default=10.0)
+        jog = min((v["jog"] for v in linear), default=max_vel / 4)
+        if jog > max_vel: jog = max_vel
+        coords = " ".join(letter for letter, _ in jl)
+        L = []
+        w = L.append
+        w(f"# {self.name}: LinuxCNC on a KFLOP or a Kogna through KMotion, converted from a KMotionCNC setup by")
+        w(f"# migrate-kmotioncnc on {datetime.date.today()} (MIGRATION.md in this folder lists every value taken,")
+        w("# every guess, and what was not converted). The bench configuration configs/kmotion-minirouter has")
+        w("# the full commentary on each [KMOTION] key.")
+        w("[EMC]"); w("VERSION = 1.1"); w(f"MACHINE = {self.name}: LinuxCNC on a KFLOP or Kogna through KMotion (TP3)"); w("DEBUG = 0")
+        w(""); w("[DISPLAY]")
+        w("# KMotionCNC's buttons (Back/Forward in feed hold, Measure, Geo reload) as a gladevcp panel")
+        w("EMBED_TAB_NAME = KMotion"); w("EMBED_TAB_LOCATION = box_custom_1")
+        w("EMBED_TAB_COMMAND = gladevcp -c kmotion-panel -x {XID} -u ../../panels/kmotion-panel.py -H ../../panels/kmotion-panel.hal ../../panels/kmotion-panel.ui")
+        w("DISPLAY = gmoccapy"); w("PREFERENCE_FILE_PATH = gmoccapy.pref"); w("CYCLE_TIME = 0.100")
+        w("POSITION_OFFSET = RELATIVE"); w("POSITION_FEEDBACK = ACTUAL")
+        w("MAX_FEED_OVERRIDE = 1.2"); w("MAX_SPINDLE_OVERRIDE = 1.0")
+        w(f"MAX_LINEAR_VELOCITY = {max_vel:.6g}"); w(f"DEFAULT_LINEAR_VELOCITY = {jog:.6g}")
+        w("DEFAULT_SPINDLE_SPEED = 1000")
+        w("# KMotionCNC's recent G-code files, copied into this folder's nc_files")
+        w("PROGRAM_PREFIX = nc_files")
+        w("INTRO_GRAPHIC = linuxcnc.gif"); w("INTRO_TIME = 0"); w("TOOL_EDITOR = tooledit")
+        w("GCODE_VIEW_TOOL_MIN_DIA = 0.08")
+        w("INCREMENTS = 10mm, 1mm, .1mm, .01mm, 1 in, 0.1 in, 10 mil, 1 mil" if self.units_mm else
+          "INCREMENTS = 1 in, 0.1 in, 10 mil, 1 mil, 1mm, .1mm")
+        w(""); w("[TASK]"); w("TASK = milltask"); w("CYCLE_TIME = 0.001")
+        w(""); w("[RS274NGC]"); w(f"PARAMETER_FILE = {var}"); w("USER_M_PATH = mcodes"); w("RIGID_TAP_CYCLES = 1")
+        w(""); w("[EMCMOT]"); w("EMCMOT = kmotion-motion"); w("COMM_TIMEOUT = 10.0"); w("BASE_PERIOD = 0"); w("SERVO_PERIOD = 1000000")
+        w(""); w("[EMCIO]"); w("TOOL_TABLE = tool.tbl"); w("TOOL_CHANGE_POSITION = 0 0 0"); w("TOOL_CHANGE_QUILL_UP = 1")
+        w(""); w("[HAL]"); w(f"HALFILE = {self.name}.hal"); w("POSTGUI_HALFILE = gmoccapy-postgui.hal")
+        if gamepad: w("POSTGUI_HALFILE = gamepad.hal")
+        w("HALUI = halui")
+        w(""); w("[TRAJ]"); w(f"COORDINATES = {coords}"); w(f"LINEAR_UNITS = {units}"); w("ANGULAR_UNITS = degree")
+        w(f"MAX_LINEAR_VELOCITY = {max_vel:.6g}"); w(f"DEFAULT_LINEAR_VELOCITY = {jog:.6g}")
+        w(f"DEFAULT_LINEAR_ACCELERATION = {max_acc:.6g}"); w(f"MAX_LINEAR_ACCELERATION = {max_acc:.6g}")
+        w("POSITION_FILE = position.txt")
+        w(""); w("[SPINDLE_0]")
+        w("# motion clamps every spindle speed to these (KMotionCNC had no cap): set your spindle's maximum")
+        w("MAX_FORWARD_VELOCITY = 100000"); w("MAX_REVERSE_VELOCITY = 100000")
+        w(""); w("[KINS]"); w("KINEMATICS = trivkins"); w(f"JOINTS = {len(jl)}")
+        for letter, ch in jl:
+            v = vals[letter]
+            w(""); w(f"[AXIS_{letter}]")
+            w(f"MAX_VELOCITY = {v['vel']:.6g}"); w(f"MAX_ACCELERATION = {v['acc']:.6g}"); w(f"MAX_JERK = {v['jerk']:.6g}")
+            w(f"MIN_LIMIT = {v['lim'][0]:.6g}"); w(f"MAX_LIMIT = {v['lim'][1]:.6g}")
+        for j, (letter, ch) in enumerate(jl):
+            v = vals[letter]
+            h = home[j]
+            w(""); w(f"[JOINT_{j}]")
+            w(f"# axis {letter}, board channel {ch}: {'degrees' if v['angular'] else units}, counts per unit from "
+              f"m_CountsPerInch{letter}{' / 25.4' if (self.units_mm and not v['angular']) else ''}")
+            w(f"TYPE = {'ANGULAR' if v['angular'] else 'LINEAR'}")
+            w(f"HOME = {h['HOME']}")
+            w(f"MAX_VELOCITY = {v['vel']:.6g}"); w(f"MAX_ACCELERATION = {v['acc']:.6g}")
+            w(f"MAX_JERK = {v['jerk']:.6g}              ; {v['jerk_note']}")
+            w("BACKLASH = 0.000"); w(f"INPUT_SCALE = {v['scale']:.10g}"); w("OUTPUT_SCALE = 1.000")
+            w("FERROR = 0.050"); w("MIN_FERROR = 0.010")
+            w(f"MIN_LIMIT = {v['lim'][0]:.6g}              ; {v['lim_note']}"); w(f"MAX_LIMIT = {v['lim'][1]:.6g}")
+            w(f"HOME_OFFSET = {h['HOME_OFFSET']}")
+            w(f"HOME_SEARCH_VEL = {h['HOME_SEARCH_VEL']}        ; units/s toward the switch (sign = direction); 0 = homed where it stands")
+            w(f"HOME_LATCH_VEL = {h['HOME_LATCH_VEL']}")
+            w(f"HOME_USE_INDEX = {h['HOME_USE_INDEX']}"); w("HOME_IGNORE_LIMITS = NO"); w(f"HOME_SEQUENCE = {h['HOME_SEQUENCE']}")
+        w(""); w("[KMOTION]"); w("MODE = board")
+        w(f"THIRD_ORDER = {int(self.num('m_ThirdOrderTP', 0))}")
+        w(f"CUBIC_KNOTS = {int(self.num('m_TPCubicKnots', 0))}")
+        w(f"ACTUATOR_LIMITS = {int(self.num('m_ActuatorLimits', 0))}")
+        w("LOG_SEGMENTS = 0")
+        w(f"BREAK_ANGLE = {self.num('m_BreakAngle', 30):g}")
+        w(f"COLLINEAR_TOL = {self.num('m_CollinearTol', 0.0005):g}")
+        w(f"CORNER_TOL = {self.num('m_CornerTol', 0.003):g}")
+        w(f"FACET_ANGLE = {self.num('m_FacetAngle', 0.5):g}")
+        w("CURVE_FACETS = 1")
+        w(f"LOOKAHEAD = {self.num('m_TPLookahead', 3.0):g}")
+        w("# board channel per axis X Y Z A B C U V (the coordinate system, from the INIT program's DefineCoordSystem)")
+        w("CHANNELS = " + " ".join(str(c) for c in self.channels))
+        for p in km.get("INIT_PROGRAM", []): w(f"INIT_PROGRAM = {p}")
+        if "INIT_THREAD" in km: w(f"INIT_THREAD = {km['INIT_THREAD']}")
+        if start: w(f"START_PROGRAM = {start}")
+        if (self.out / "Home.c").exists(): w("HOME_PROGRAM = Home.c"); w("HOME_THREAD = 2")
+        w("HOMED_PERSIST = 199"); w("HOME_TIMEOUT_S = 120")
+        w("# Spindle: KMotionCNC's M3/M4/M5/S actions, the same grammar (see the bench ini's commentary)")
+        for key in ("SPINDLE_M3", "SPINDLE_M4", "SPINDLE_M5", "SPINDLE_S"):
+            if key in spindle: w(f"{key} = {spindle[key]}")
+        w(f"SPINDLE_CSS = {1 if css else 0}")
+        if spindle_axis >= 0 and spindle_type != 0:
+            w(f"SPINDLE_SPEED_AXIS = {spindle_axis}")
+            w("SPINDLE_SPEED_FROM = DEST              ; a jogged spindle axis: its commanded speed; POSITION for an encoder")
+            w(f"SPINDLE_COUNTS_PER_REV = {self.num('m_SpindleCntsPerRev', 1000):g}")
+            w(f"SPINDLE_SPEED_TAU = {self.num('m_SpindleTau', 0.1):g}")
+            w(f"SPINDLE_AT_SPEED = AXIS {spindle_axis}"); w("SPINDLE_AT_SPEED_TOLERANCE = 0.02")
+        else:
+            w("SPINDLE_AT_SPEED = NONE")
+        bits = sorted({int(x.split()[1]) for k, x in mcodes.items() if x.startswith("SETBIT")} |
+                      {int(re.search(r"kmotion\.out\.(\d+)", l).group(1)) for l in (self.out / f"{self.name}.hal").read_text().split("\n") if "kmotion.out." in l})
+        if bits: w("OUTPUT_BITS = " + " ".join(str(b) for b in bits))
+        w("NUM_DIO = 4")
+        for n in sorted(mcodes): w(f"MCODE_{n} = {mcodes[n]}")
+        w("PC_COMM = 1")
+        w("LIMIT_NEG_BITS = " + " ".join(str(b) for b in neg_bits))
+        w("LIMIT_POS_BITS = " + " ".join(str(b) for b in pos_bits))
+        w(f"LIMIT_ACTIVE = {limit_active}")
+        if geo: w(f"GEO_FILE = {geo}")
+        w("MEASURE_FILE = Measurements.txt"); w("MEASURE_BUTTON = 0")
+        if gamepad:
+            text = self.read_text(THREELINK / "kmotion-3link.ini")
+            m = re.search(r"\[GAMEPAD\][\s\S]*?(?=\n\[|\Z)", text)
+            if m: w(""); w(m.group(0).rstrip())
+        (self.out / f"{self.name}.ini").write_text("\n".join(L) + "\n")
+
+    def compile_check(self):
+        tcc = ROOT / "bin" / "tcc67"
+        dsp = Path.home() / ".kmotionx" / "DSP_KFLOP" / "DSPKFLOP.out"
+        if not dsp.exists(): dsp = ROOT / "DSP_KFLOP" / "DSPKFLOP.out"
+        if not tcc.exists() or not dsp.exists():
+            self.warn("No tcc67 or firmware image found: the programs were not compile-checked"); return
+        files = sorted(self.out / p for p in self.thread_programs | {"Home.c", "Loop.c"} if (self.out / p).exists())
+        bad = 0
+        for f in files:
+            cmd = [str(tcc), "-text", "80050000", "-g", "-nostdinc", "-I", str(dsp.parent), "-I", str(f.parent),
+                   "-I", str(self.out), "-I", str(self.cprog), "-I", str(Path.home() / ".kmotionx" / "C Programs"),
+                   "-o", "/dev/null", str(f), str(dsp)]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                bad += 1
+                err = (r.stdout + r.stderr).strip().split("\n")[0]
+                self.warn(f"`{f.relative_to(self.out)}` does not compile for the KFLOP: {err}")
+        self.note(f"Compile check (tcc67, KFLOP image): {len(files)} programs, {bad} with errors")
+
+    def write_md(self):
+        L = [f"# {self.name}: converted from KMotionCNC", "",
+             f"Made by `linuxcnc/tools/migrate-kmotioncnc` on {datetime.date.today()} from `{self.install}`.",
+             "Start it with the desktop icon \"LinuxCNC (" + self.name + ")\" or",
+             f"`~/linuxcnc-dev/scripts/linuxcnc {self.out}/{self.name}.ini`.", ""]
+        if self.warnings:
+            L += ["## Needs a look", ""] + [f"- {s}" for s in self.warnings] + [""]
+        L += ["## What was taken", ""] + [f"- {s}" for s in self.notes] + ["",
+              "## Not converted by design", "",
+              "- M0, M1, M2 and M6 actions: LinuxCNC runs those codes itself (M6 through its tool-change pins).",
+              "- KMotionCNC's 8 special actions (program end and the like).",
+              "- Rigid tapping (TAP_PROGRAM): copy the bench's Tap.c if the spindle has an encoder.",
+              "- Probing: no probe bit in a KMotionCNC setup; set [KMOTION] PROBE_BIT yourself.",
+              "- The screen script, the jog step sizes, the DRO settings: gmoccapy has its own.", ""]
+        (self.out / "MIGRATION.md").write_text("\n".join(L))
+
+
+def write_icon(name, out):
+    """a desktop launcher, as install-desktop-icons.sh makes them"""
+    motion = LCNC / "kmotion-motion" / "kmotion-motion"
+    lcnc_dir = ""
+    try:
+        r = subprocess.run(["readelf", "-d", str(motion)], capture_output=True, text=True)
+        for m in re.finditer(r"R(?:UN)?PATH.*\[(.*)\]", r.stdout):
+            for p in m.group(1).split(":"):
+                cand = Path(p).parent
+                if (cand / "scripts" / "linuxcnc").exists(): lcnc_dir = str(cand); break
+            if lcnc_dir: break
+    except OSError:
+        pass
+    if not lcnc_dir: lcnc_dir = os.environ.get("LINUXCNC_DIR", str(Path.home() / "linuxcnc-dev"))
+    linuxcnc = Path(lcnc_dir) / "scripts" / "linuxcnc"
+    data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    apps = data / "applications"; apps.mkdir(parents=True, exist_ok=True)
+    desktop = Path(subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True).stdout.strip() or Path.home() / "Desktop")
+    desktop.mkdir(parents=True, exist_ok=True)
+    text = ("[Desktop Entry]\nVersion=1.0\nType=Application\n"
+            f"Name=LinuxCNC ({name})\nComment=LinuxCNC on a KFLOP or Kogna through KMotion: {name}, converted from KMotionCNC\n"
+            f"Exec=\"{linuxcnc}\" \"{out / (name + '.ini')}\"\nIcon=linuxcncicon\nTerminal=false\nStartupNotify=false\n"
+            "Categories=Science;Engineering;X-CNC;\nKeywords=cnc;linuxcnc;kmotion;\n")
+    for p in (apps / f"linuxcnc-{name}.desktop", desktop / f"linuxcnc-{name}.desktop"):
+        p.write_text(text)
+        p.chmod(0o755)
+        subprocess.run(["gio", "set", "-t", "string", str(p), "metadata::xfce-exe-checksum",
+                        subprocess.run(["sha256sum", str(p)], capture_output=True, text=True).stdout.split()[0]],
+                       capture_output=True)
+        subprocess.run(["gio", "set", "-t", "string", str(p), "metadata::trusted", "true"], capture_output=True)
+    subprocess.run(["update-desktop-database", str(apps)], capture_output=True)
+    return desktop / f"linuxcnc-{name}.desktop"
+
+
+def find_installs():
+    found = []
+    for base in (Path("/mnt/kmotion"), Path("/media"), Path.home()):
+        if not base.exists(): continue
+        for p in sorted(base.glob("*")):
+            if (p / "KMotion" / "Data" / "GCodeConfigCNC.txt").exists(): found.append(p)
+    return sorted(found, key=lambda p: (p / "KMotion" / "Data" / "GCodeConfigCNC.txt").stat().st_mtime, reverse=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="a LinuxCNC configuration from a KMotionCNC setup")
+    ap.add_argument("--install", help="the KMotion installation folder (has KMotion/Data and C Programs)")
+    ap.add_argument("--name", help="the configuration's name: configs/<name>")
+    ap.add_argument("--force", action="store_true", help="replace an existing configs/<name>")
+    ap.add_argument("--no-icon", action="store_true", help="no desktop launcher")
+    ap.add_argument("--yes", action="store_true", help="no questions: the defaults")
+    args = ap.parse_args()
+    install = args.install
+    if not install:
+        found = find_installs()
+        if not found:
+            sys.exit("no KMotion installation found: pass --install <folder> (one with KMotion/Data/GCodeConfigCNC.txt "
+                     "and C Programs/; on a VM, the Windows install through the shared folder, /mnt/kmotion/...)")
+        install = str(found[0])
+        if len(found) > 1 and not args.yes:
+            print("KMotion installations found:")
+            for i, p in enumerate(found): print(f"  {i + 1}. {p}")
+            s = input(f"which [1]: ").strip()
+            if s: install = str(found[int(s) - 1])
+    install = Path(install)
+    if not (install / "KMotion" / "Data" / "GCodeConfigCNC.txt").exists():
+        sys.exit(f"{install} has no KMotion/Data/GCodeConfigCNC.txt (a KMotionCNC setup)")
+    default_name = re.sub(r"[^A-Za-z0-9._-]+", "-", install.name).strip("-").lower() or "migrated"
+    name = args.name
+    if not name:
+        if args.yes: name = default_name
+        else:
+            name = input(f"name of the new configuration (configs/<name>) [{default_name}]: ").strip() or default_name
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
+    out = LCNC / "configs" / name
+    print(f"converting {install}\n       to {out}")
+    m = Migration(install, name, out, args.force)
+    m.run()
+    icon = None
+    if not args.no_icon:
+        icon = write_icon(name, out)
+    print(f"\ndone: {out}")
+    print(f"  {len(m.notes)} items taken, {len(m.warnings)} to look at: see {out / 'MIGRATION.md'}")
+    if icon: print(f"  launcher: {icon}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
