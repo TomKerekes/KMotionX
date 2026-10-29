@@ -213,30 +213,47 @@ class Migration:
         return re.sub(r"/\*[\s\S]*?\*/|//[^\n]*", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
     def copy_program(self, src, why):
-        """copy a C program into programs/ (its path under C Programs kept) with its #includes;
-        returns the path relative to the config folder"""
+        """copy a C program into programs/ (its path under C Programs kept) with its #includes, each
+        include line rewritten to the relative path of the copy (an absolute Windows path or
+        backslashes would not be found here); returns the path relative to the config folder"""
         src = Path(src)
         if src in self.copied: return self.copied[src]
         try: rel = src.relative_to(self.cprog)
-        except ValueError: rel = Path(src.parent.name) / src.name     # outside C Programs: its folder's name
+        except ValueError:
+            # outside C Programs: under the Windows folder it came from, by that folder's name
+            rel = Path(src.parent.name) / src.name
+            for root in [d for d in self.maps.values() if d]:
+                try: rel = Path(root.name) / src.relative_to(root); break
+                except ValueError: continue
         dest_rel = Path("programs") / rel
         dest = self.out / dest_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        text = self.read_text(src)
-        dest.write_text(text)
-        self.copied[src] = dest_rel.as_posix()
+        self.copied[src] = dest_rel.as_posix()        # before the includes: one may include this file back
         if not why.startswith("included by"): self.thread_programs.add(dest_rel.as_posix())
         self.note(f"Program copied: `{rel.as_posix()}` -> `{dest_rel.as_posix()}` ({why})")
+        text = self.read_text(src)
         if src.suffix.lower() in (".c", ".h"):
-            for m in re.finditer(r'^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"', self.mask_comments(text), re.M):
-                inc = m.group(1)
-                p = self.resolve_ci(src.parent, inc) or self.resolve_ci(self.cprog, inc)
+            masked = self.mask_comments(text)
+            edits = []
+            for m in re.finditer(r'^([ \t]*#[ \t]*include[ \t]*")([^"\n]+)(")', masked, re.M):
+                inc = m.group(2)
+                if re.match(r"^[A-Za-z]:[\\/]|^\\\\", inc):
+                    p = self.find_program(inc)
+                else:
+                    p = self.resolve_ci(src.parent, inc) or self.resolve_ci(self.cprog, inc)
                 if p is None:
-                    if self.resolve_ci(ROOT / "DSP_KFLOP", inc) or self.resolve_ci(ROOT / "DSP_KOGNA", inc):
-                        continue                      # the firmware's own headers (KMotionDef.h)
-                    self.warn(f"`{rel.as_posix()}` includes `{inc}`, which was not found under C Programs")
+                    if self.resolve_ci(ROOT / "DSP_KFLOP", Path(re.split(r"[\\/]", inc)[-1]).name):
+                        continue                      # the firmware's own headers (KMotionDef.h, PC-DSP.h)
+                    self.warn(f"`{rel.as_posix()}` includes `{inc}`, which was not found: the line is left as it is")
                     continue
-                self.copy_program(p, f"included by {rel.as_posix()}")
+                inc_rel = self.copy_program(p, f"included by {rel.as_posix()}")
+                new = os.path.relpath(self.out / inc_rel, dest.parent).replace(os.sep, "/")
+                if new != inc:
+                    edits.append((m.start(2), m.end(2), new))
+                    self.note(f"  `{rel.as_posix()}`: #include \"{inc}\" -> \"{new}\"")
+            for start, end, new in sorted(edits, reverse=True):
+                text = text[:start] + new + text[end:]
+        dest.write_text(text)
         return self.copied[src]
 
     # ---- the INIT program ------------------------------------------------------------------
