@@ -1598,8 +1598,8 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
 
 static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
 {
-    // an incremental or absolute jog of the one actuator (LinuxCNC's joint) to the target in
-    // its own units, at LinuxCNC's jog speed (with none, the board's own Vel)
+    // (no longer posted: KmBackend::jog_to sends the command on the urgent queue, in order
+    // with the stops; kept for a Cmd::JOG_TO that might still be queued)
     if (c.axis < 0 || c.axis >= 8) return;
     int ch = d->cfg.channel[c.axis];
     if (ch < 0) return;
@@ -2997,14 +2997,20 @@ void KmBackend::seglog_new_run()
 
 void KmBackend::jog_to(int axis, double target, double vel)
 {
+    // an incremental or absolute jog of the one actuator (LinuxCNC's joint) to the target in
+    // its own units, at LinuxCNC's jog speed (with none, the board's own Vel). Sent on the
+    // urgent queue, in order with jog() and jog_stop(): a continuous jog toward the soft limit
+    // comes this way, and its stop used to be able to overtake it while it sat in the worker's
+    // queue (the GUI re-sends a held jog) - the move then started after the stop and ran on
     if (d->cfg.simulate || axis < 0 || axis >= 8 || d->cfg.channel[axis] < 0) return;
-    Cmd c{};
-    c.kind = Cmd::JOG_TO;
-    c.axis = axis;
-    c.end[axis] = target;
-    c.vel = vel;
+    int ch = d->cfg.channel[axis];
+    char cmd[64];
+    double t = target * d->scale[axis];
+    double v = fabs(vel * d->scale[axis]);
+    if (v > 0) snprintf(cmd, sizeof cmd, "MoveAtVel%d=%.3f %.3f", ch, t, v);
+    else snprintf(cmd, sizeof cmd, "Move%d=%.3f", ch, t);
     d->jog_issued[axis]++;
-    d->post(c);
+    d->send_urgent(cmd, axis);
 }
 
 void KmBackend::jog_stop(int axis)

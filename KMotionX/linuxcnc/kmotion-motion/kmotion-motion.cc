@@ -1356,6 +1356,10 @@ static void start_jog(int index, bool to_target, double target, double vel)
         double lim = vel > 0 ? joints[index].max_pos_limit : joints[index].min_pos_limit;
         bool bounded = !to_target && fabs(lim) < 1e6;
         if (bounded && ((vel > 0 && cur >= lim) || (vel < 0 && cur <= lim))) return;
+        // the same bounded jog again while it runs (the GUI re-sends a held jog): nothing to
+        // send - every repeat was one more board command for the release's stop to follow
+        if (bounded && jog_running(index) && m.jog[index].to_target && m.jog[index].target == lim &&
+            m.jog[index].vel == vel) return;
         if (to_target) km->jog_to(index, target, vel);
         else if (bounded) km->jog_to(index, lim, fabs(vel));
         else km->jog(index, vel);
