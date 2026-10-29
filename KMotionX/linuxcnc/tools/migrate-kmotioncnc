@@ -13,7 +13,10 @@ M120 upward.
     migrate-kmotioncnc [--install DIR] [--name NAME] [--force] [--no-icon] [--yes]
 
 Without --name it asks (the install folder's name is the default). An existing
-configs/<name> is left alone unless --force."""
+configs/<name> is left alone unless --force. Programs the setup names by absolute Windows
+paths outside the install (C:\\Users\\...\\Desktop\\MyMachine\\Init.c) are looked for in a folder of
+that name under the shared folder, the install's parent, your home and any --programs-dir;
+--map says where such a folder is; otherwise the tool asks."""
 import argparse
 import datetime
 import os
@@ -42,8 +45,18 @@ SPECIAL_NAMES = ["M30 / program end", "special action 2", "special action 3", "s
 
 
 class Migration:
-    def __init__(self, install, name, config_dir, force):
+    def __init__(self, install, name, config_dir, force, search_dirs=(), maps=(), interactive=True):
         self.install = Path(install)
+        # programs the setup names by absolute Windows paths (C:\\Users\\...\\Desktop\\MyMachine\\Init.c): a
+        # Windows folder -> where that folder is here. From --map, from a folder of the same name found
+        # under the search folders (the shared folder, the install's parent, --programs-dir), or asked
+        self.maps = {}
+        for m in maps:
+            if "=" not in m: sys.exit(f"--map wants WINDOWS-FOLDER=LINUX-FOLDER, not {m!r}")
+            k, v = m.split("=", 1)
+            self.maps[self.win_key(k)] = Path(v).expanduser()
+        self.search_dirs = [Path(d).expanduser() for d in search_dirs] + [self.install.parent, Path("/mnt/kmotion"), Path.home()]
+        self.interactive = interactive
         self.data = self.install / "KMotion" / "Data"
         self.cprog = self.install / "C Programs"
         self.name = name
@@ -137,8 +150,63 @@ class Migration:
             if m:
                 p = self.resolve_ci(self.install / "GCode Programs", m.group(1))
                 if p: return p
-            return None
+            return self.find_outside(s)
         return self.resolve_ci(self.cprog, s)
+
+    @staticmethod
+    def win_key(folder):
+        return re.sub(r"[\\/]+", r"\\", folder.strip()).rstrip("\\").lower()
+
+    @staticmethod
+    def win_split(path):
+        parts = re.split(r"[\\/]+", path.strip())
+        return "\\".join(parts[:-1]), parts[-1]
+
+    def find_dirs_named(self, name, depth=3):
+        """folders of that name (case-insensitive) under the search folders, a few levels deep"""
+        seen = set()
+        for root in self.search_dirs:
+            if not root.is_dir(): continue
+            stack = [(root, 0)]
+            while stack:
+                d, lvl = stack.pop()
+                try: entries = list(d.iterdir())
+                except OSError: continue
+                for e in entries:
+                    if not e.is_dir() or e.name.startswith("."): continue
+                    if e.name.lower() == name.lower() and e not in seen:
+                        seen.add(e); yield e
+                    if lvl < depth: stack.append((e, lvl + 1))
+
+    def find_outside(self, s):
+        """a program at an absolute Windows path outside the install: through self.maps, a folder of the
+        same name under the search folders that holds the file, or the user's answer"""
+        win_dir, name = self.win_split(s)
+        key = self.win_key(win_dir)
+        if key in self.maps:
+            d = self.maps[key]
+            return self.resolve_ci(d, name) if d else None
+        base = win_dir.rsplit("\\", 1)[-1]
+        for d in self.find_dirs_named(base):
+            if self.resolve_ci(d, name):
+                self.maps[key] = d
+                self.note(f"Programs under `{win_dir}` (the setup's Windows path) taken from `{d}` (a folder of that name found here)")
+                return self.resolve_ci(d, name)
+        if self.interactive:
+            print(f"\nThe setup names `{s}`, a Windows folder not under the install, and no folder named "
+                  f"\"{base}\" with that file was found under {', '.join(str(x) for x in self.search_dirs)}.")
+            ans = input(f"Where is `{win_dir}` here? (a folder path; Enter = skip these programs): ").strip()
+            if ans:
+                d = Path(ans).expanduser()
+                if d.is_dir():
+                    self.maps[key] = d
+                    self.note(f"Programs under `{win_dir}` (the setup's Windows path) taken from `{d}` (as answered)")
+                    p = self.resolve_ci(d, name)
+                    if p is None: self.warn(f"`{name}` is not in `{d}`")
+                    return p
+                self.warn(f"`{ans}` is not a folder here: the programs under `{win_dir}` are skipped")
+        self.maps[key] = None
+        return None
 
     @staticmethod
     def mask_comments(text):
@@ -150,7 +218,7 @@ class Migration:
         src = Path(src)
         if src in self.copied: return self.copied[src]
         try: rel = src.relative_to(self.cprog)
-        except ValueError: rel = Path(src.name)
+        except ValueError: rel = Path(src.parent.name) / src.name     # outside C Programs: its folder's name
         dest_rel = Path("programs") / rel
         dest = self.out / dest_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -190,8 +258,8 @@ class Migration:
             return
         src = self.find_program(a["string"])
         if src is None:
-            self.warn(f"The INIT button's program `{a['string']}` was not found under the install: the coordinate "
-                      "system is assumed X Y Z on channels 0 1 2")
+            self.warn(f"The INIT button's program `{a['string']}` was not found: the coordinate system is assumed "
+                      "X Y Z on channels 0 1 2 (copy that folder onto the shared folder, or --map / --programs-dir, and run again)")
             self.channels[:3] = [0, 1, 2]
             return
         self.init_src = src
@@ -223,8 +291,8 @@ class Migration:
             return
         src = self.find_program(a["string"])
         if src is None:
-            self.warn(f"The Home button's program `{a['string']}` was not found under the install: the joints are "
-                      "homed where they stand")
+            self.warn(f"The Home button's program `{a['string']}` was not found: the joints are homed where they stand "
+                      "(copy that folder onto the shared folder, or --map / --programs-dir, and run again)")
             return
         self.home_src = src
         text = self.mask_comments(self.read_text(src))
@@ -291,7 +359,7 @@ class Migration:
         if t == 3: return f"DAC {int(p[0])} {p[1]:g} {p[2]:g} {p[3]:g} {p[4]:g}", None
         if t in (4, 5, 6):
             src = self.find_program(s)
-            if src is None: return None, f"program `{s}` not found under the install"
+            if src is None: return None, f"program `{s}` not found (copy its folder onto the shared folder, or --map / --programs-dir)"
             rel = self.copy_program(src, "an action's program")
             return f"{ACTION[t]} {int(p[0])} {int(p[1])} {rel}", None
         return None, f"{ACTION.get(t, t)} actions have no counterpart in kmotion-motion"
@@ -783,6 +851,7 @@ def find_installs():
     for base in (Path("/mnt/kmotion"), Path("/media"), Path.home()):
         if not base.exists(): continue
         for p in sorted(base.glob("*")):
+            if p.resolve() == ROOT.resolve(): continue            # this checkout has the files too
             if (p / "KMotion" / "Data" / "GCodeConfigCNC.txt").exists(): found.append(p)
     return sorted(found, key=lambda p: (p / "KMotion" / "Data" / "GCodeConfigCNC.txt").stat().st_mtime, reverse=True)
 
@@ -794,6 +863,12 @@ def main():
     ap.add_argument("--force", action="store_true", help="replace an existing configs/<name>")
     ap.add_argument("--no-icon", action="store_true", help="no desktop launcher")
     ap.add_argument("--yes", action="store_true", help="no questions: the defaults")
+    ap.add_argument("--programs-dir", action="append", default=[], metavar="DIR",
+                    help="a folder searched (3 levels deep) for the folders the setup names by absolute Windows paths; "
+                         "the shared folder, the install's parent and your home are searched anyway")
+    ap.add_argument("--map", action="append", default=[], metavar="WINFOLDER=DIR",
+                    help="where a Windows folder the setup names is here, e.g. "
+                         "--map 'C:\\Users\\Carl\\Desktop\\5x5 K6=/mnt/kmotion/5x5 K6' (repeatable)")
     args = ap.parse_args()
     install = args.install
     if not install:
@@ -819,7 +894,7 @@ def main():
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
     out = LCNC / "configs" / name
     print(f"converting {install}\n       to {out}")
-    m = Migration(install, name, out, args.force)
+    m = Migration(install, name, out, args.force, args.programs_dir, args.map, interactive=not args.yes)
     m.run()
     icon = None
     if not args.no_icon:
