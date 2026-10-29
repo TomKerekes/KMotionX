@@ -52,7 +52,8 @@ step() { echo; echo "==== $*"; }
 note() { echo "   - $*"; }
 
 # the packages: LinuxCNC's build needs (its own apt build-dep adds the rest), KMotionX's
-# (libftdi1-dev), the KMotion tool's (PySide6), the Guest Additions' (headers, dkms)
+# (libftdi1-dev), the KMotion tool's (PySide6), the Guest Additions' (headers, dkms), tio for the
+# Kogna COM port, geany as an editor with an outline of an ini's sections (and gmoccapy's EDITOR)
 PACKAGES="git build-essential autoconf automake libtool pkg-config dh-python desktop-file-utils
 intltool bwidget libboost-python-dev libepoxy-dev libgl-dev libglu1-mesa-dev libgtk-3-dev
 libcap-dev libmodbus-dev libgpiod-dev libeditreadline-dev libtirpc-dev libudev-dev
@@ -61,7 +62,7 @@ python3-pybind11 python3-tk python3-xlib python3-opengl python3-numpy python3-ma
 python3-cairo python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gtksource-4 python3-pyqt5
 python3-pyqt5.qsci python3-pyqt5.qtsvg python3-pyqt5.qtopengl python3-dbus python3-qtpy
 python3-zmq tcl tcl8.6-dev tclx tk8.6-dev yapps2 libftdi1-dev python3-pyside6.qtwidgets
-python3-pyside6.qtgui python3-pyside6.qtcore network-manager dkms tio"
+python3-pyside6.qtgui python3-pyside6.qtcore network-manager dkms tio geany"
 # the Guest Additions build against the running kernel: its headers, not the metapackage (which
 # brought the standard kernel along onto a VM running the real-time one, and made it the default)
 PACKAGES="$PACKAGES linux-headers-$(uname -r)"
