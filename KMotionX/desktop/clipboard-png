@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """clipboard-png: an image that arrives on the clipboard as a Windows bitmap only is offered as
-PNG as well, so programs that ask for PNG (Chromium, Electron apps such as Claude Code, Firefox)
-can paste it. VirtualBox's shared clipboard brings a Windows screenshot into the guest as
-image/bmp and nothing else; GTK programs take that, the browser-based ones do not.
+PNG, so programs that ask for PNG (Chromium, Electron apps such as Claude Code, Firefox) can paste
+it. VirtualBox's shared clipboard brings a Windows screenshot into the guest as image/bmp and
+nothing else; GTK programs take that, the browser-based ones do not.
 
 Runs in the X session (started by ~/.config/autostart/clipboard-png.desktop, which
 install-desktop-icons.sh puts there). On every clipboard change: if image/bmp is offered and
-image/png is not, the image is read and the clipboard re-set with it through GTK, which offers
-image/png beside image/bmp (any text that came with the bitmap is dropped: a screenshot has
-none worth keeping). The host takes the new contents back as a bitmap and offers them again;
-the same pixels coming round again (copied once more, or re-announced at login) are re-offered
-too, up to three times running, so a host that bounced an image straight back could not loop."""
-import hashlib
+image/png is not, the image is read and the clipboard taken over with an image/png form only.
+Only PNG: offering a bitmap as well made VirtualBox take the contents back to the host and hand
+them down again as a bitmap, round after round, until the PNG form was lost. The Windows side
+keeps its own bitmap, and GTK programs paste PNG too."""
 import signal
 import sys
 
@@ -21,11 +19,16 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib   # noqa: E402
 
 class Republisher:
+    """Owns the clipboard with an image/png form only. Offering a bitmap too made VirtualBox take the
+    contents back to the host and hand them down again as a bitmap, over and over; PNG alone it
+    leaves be, and Windows keeps its own bitmap. GTK programs paste PNG as well."""
     def __init__(self):
         self.cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        self.last = None          # the pixels last republished, and how often in a row: the same image
-        self.repeats = 0          # comes back as a bitmap (copied again, re-announced) and is re-offered,
-                                  # but not without end, in case a host ever bounced it straight back
+        self.png = b""
+        self.owner = Gtk.Invisible()
+        self.owner.realize()
+        Gtk.selection_add_target(self.owner, Gdk.SELECTION_CLIPBOARD, Gdk.Atom.intern("image/png", False), 0)
+        self.owner.connect("selection-get", self.on_get)
         self.cb.connect("owner-change", self.on_change)
         GLib.idle_add(self.on_change, self.cb, None)   # what is on the clipboard already
 
@@ -39,15 +42,15 @@ class Republisher:
         pixbuf = cb.wait_for_image()
         if pixbuf is None:
             return
-        digest = hashlib.md5(pixbuf.get_pixels()).hexdigest() + f"{pixbuf.get_width()}x{pixbuf.get_height()}"
-        if digest == self.last:
-            self.repeats += 1
-            if self.repeats > 3:
-                return            # the same image for the fourth time running: a bounce, not a copy
-        else:
-            self.last, self.repeats = digest, 0
-        cb.set_image(pixbuf)      # GTK offers image/png, image/bmp, image/tiff, image/jpeg...
-        print(f"clipboard-png: {pixbuf.get_width()}x{pixbuf.get_height()} bitmap offered as PNG too", flush=True)
+        ok, png = pixbuf.save_to_bufferv("png", [], [])
+        if not ok:
+            return
+        self.png = bytes(png)
+        if Gtk.selection_owner_set(self.owner, Gdk.SELECTION_CLIPBOARD, Gdk.CURRENT_TIME):
+            print(f"clipboard-png: {pixbuf.get_width()}x{pixbuf.get_height()} bitmap offered as PNG", flush=True)
+
+    def on_get(self, widget, selection, info, time):
+        selection.set(Gdk.Atom.intern("image/png", False), 8, self.png)
 
 
 def main():
