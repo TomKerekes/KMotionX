@@ -783,7 +783,11 @@ class Migration:
         if "INIT_THREAD" in km: w(f"INIT_THREAD = {km['INIT_THREAD']}")
         if start: w(f"START_PROGRAM = {start}")
         if (self.out / "Home.c").exists(): w("HOME_PROGRAM = Home.c"); w("HOME_THREAD = 2")
-        w("HOMED_PERSIST = 199"); w("HOME_TIMEOUT_S = 120")
+        w("HOMED_PERSIST = 199")
+        if self.home_src and not self.home_calls:
+            w("HOME_TIMEOUT_S = 900             ; the KMotionCNC Home program's own duration is unknown: generous")
+        else:
+            w("HOME_TIMEOUT_S = 120")
         w("# Spindle: KMotionCNC's M3/M4/M5/S actions, the same grammar (see the bench ini's commentary)")
         for key in ("SPINDLE_M3", "SPINDLE_M4", "SPINDLE_M5", "SPINDLE_S"):
             if key in spindle: w(f"{key} = {spindle[key]}")
