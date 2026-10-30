@@ -456,8 +456,24 @@ class Migration:
                 next_m += 1
             else:
                 self.warn(f"Button {i + 1} \"{label}\": not converted ({why})")
+        # M6: the tool change program, through the M6 remap (ngc/kmotion_m6.ngc) and the M198 wrapper
+        tool_change = None
+        a6 = self.actions.get(6)
+        if a6 and a6["action"] in (4, 5, 6):
+            txt, why = self.action_text(a6)
+            if txt:
+                if a6["action"] == 4:
+                    txt = "PROGRAM_WAIT" + txt[len("PROGRAM"):]       # M6 must wait for the change
+                    self.note("M6: the setup's action did not wait for the program; LinuxCNC's M6 must, so PROGRAM_WAIT")
+                tool_change = txt
+                self.note(f"M6 (tool change): TOOL_CHANGE = {txt}; the pocket and tool ID go to the program's persist "
+                          "variable and the next one as ints, as in KMotionCNC (REMAP=M6 in [RS274NGC], ngc/kmotion_m6.ngc, mcodes/M198)")
+            else:
+                self.warn(f"M6 (tool change): not converted ({why})")
+        elif a6 and a6["action"] != 0:
+            self.warn(f"M6 (tool change) is a {ACTION.get(a6['action'])} action: not converted (only a program action becomes TOOL_CHANGE)")
         # what is not converted
-        for idx, what in ((0, "M0"), (1, "M1"), (2, "M2"), (6, "M6 (tool change)")):
+        for idx, what in ((0, "M0"), (1, "M1"), (2, "M2")):
             a = self.actions.get(idx)
             if a and a["action"] != 0:
                 self.warn(f"{what} has a {ACTION.get(a['action'])} action ({a['string'] or 'no file'}): not converted; "
@@ -520,8 +536,15 @@ class Migration:
         self.write_hal(hal_extra)
         shutil.copy(BENCH / "gmoccapy-postgui.hal", self.out / "gmoccapy-postgui.hal")
         self.write_mcodes(mcodes)
+        if tool_change:
+            p = self.out / "mcodes" / "M198"
+            p.write_text("#!/bin/sh\n"
+                         "# M198: the M6 remap's way to the board (ngc/kmotion_m6.ngc runs \"M198 P<pocket> Q<tool>\"): kmotion-mcode 6\n"
+                         "# has kmotion-motion carry out [KMOTION] TOOL_CHANGE with the pocket and tool ID, and waits for it.\n"
+                         "exec \"$(dirname \"$0\")/../../../kmotion-motion/kmotion-mcode\" 6 \"$@\"\n")
+            p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self.write_ini(km, spindle_lines, spindle_axis, spindle_type, css, start, mcodes, neg_bits, pos_bits,
-                       limit_active, home, var, geo, gamepad)
+                       limit_active, home, var, geo, gamepad, tool_change)
         self.compile_check()
         self.write_md()
 
@@ -697,7 +720,7 @@ class Migration:
             p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     def write_ini(self, km, spindle, spindle_axis, spindle_type, css, start, mcodes, neg_bits, pos_bits,
-                  limit_active, home, var, geo, gamepad):
+                  limit_active, home, var, geo, gamepad, tool_change=None):
         jl = self.joints()
         vals = {letter: self.axis_values(letter) for letter, _ in jl}
         linear = [v for v in vals.values() if not v["angular"]]
@@ -731,6 +754,10 @@ class Migration:
           "INCREMENTS = 1 in, 0.1 in, 10 mil, 1 mil, 1mm, .1mm")
         w(""); w("[TASK]"); w("TASK = milltask"); w("CYCLE_TIME = 0.001")
         w(""); w("[RS274NGC]"); w(f"PARAMETER_FILE = {var}"); w("USER_M_PATH = mcodes"); w("RIGID_TAP_CYCLES = 1")
+        if tool_change:
+            w("# M6 on the board: the remap runs mcodes/M198 with the selected pocket and tool, kmotion-motion runs")
+            w("# [KMOTION] TOOL_CHANGE and waits, then LinuxCNC is told the tool is in (ngc/kmotion_m6.ngc)")
+            w("SUBROUTINE_PATH = ../../ngc"); w("REMAP = M6 modalgroup=6 ngc=kmotion_m6")
         w(""); w("[EMCMOT]"); w("EMCMOT = kmotion-motion"); w("COMM_TIMEOUT = 10.0"); w("BASE_PERIOD = 0"); w("SERVO_PERIOD = 1000000")
         w(""); w("[EMCIO]"); w("TOOL_TABLE = tool.tbl"); w("TOOL_CHANGE_POSITION = 0 0 0"); w("TOOL_CHANGE_QUILL_UP = 1")
         w(""); w("[HAL]"); w(f"HALFILE = {self.name}.hal"); w("POSTGUI_HALFILE = gmoccapy-postgui.hal")
@@ -805,6 +832,7 @@ class Migration:
         if bits: w("OUTPUT_BITS = " + " ".join(str(b) for b in bits))
         w("NUM_DIO = 4")
         for n in sorted(mcodes): w(f"MCODE_{n} = {mcodes[n]}")
+        if tool_change: w(f"TOOL_CHANGE = {tool_change}             ; M6: the pocket and tool ID as ints in <var>, <var>+1")
         w("PC_COMM = 1")
         w("LIMIT_NEG_BITS = " + " ".join(str(b) for b in neg_bits))
         w("LIMIT_POS_BITS = " + " ".join(str(b) for b in pos_bits))
@@ -845,7 +873,7 @@ class Migration:
             L += ["## Needs a look", ""] + [f"- {s}" for s in self.warnings] + [""]
         L += ["## What was taken", ""] + [f"- {s}" for s in self.notes] + ["",
               "## Not converted by design", "",
-              "- M0, M1, M2 and M6 actions: LinuxCNC runs those codes itself (M6 through its tool-change pins).",
+              "- M0, M1 and M2 actions: LinuxCNC runs those codes itself.",
               "- KMotionCNC's 8 special actions (program end and the like).",
               "- Rigid tapping (TAP_PROGRAM): copy the bench's Tap.c if the spindle has an encoder.",
               "- Probing: no probe bit in a KMotionCNC setup; set [KMOTION] PROBE_BIT yourself.",

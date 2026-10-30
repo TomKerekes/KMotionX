@@ -137,6 +137,10 @@ struct KmConfig {
     // LinuxCNC's user M codes M100-M199 (index n - 100): KMotionCNC's M-code actions; P and Q
     // go to the action's persist variable and the next one, as floats
     KmAction mcode[100];
+    // M6 through the board: the action run with the selected pocket (slot) and tool ID as ints in
+    // its persist variable and the next one, as KMotionCNC's M6 action gets them (ToolChange.c);
+    // reached from the M6 remap (ngc/kmotion_m6.ngc) through the M198 wrapper and kmotion-mcode 6
+    KmAction tool_change;
     // G38.2-G38.5: the probe watcher ServiceProbe() (configs/kmotion-minirouter/probe/ProbeService.c)
     // runs in the board's forever loop; armed for each probe move, which the planner runs like
     // any move (so any kinematics apply), it records the axes' Dests on the trip and stops the

@@ -1,0 +1,10 @@
+(kmotion_m6: M6 on the KMotion board. The ini remaps M6 here - [RS274NGC] REMAP=M6 modalgroup=6 ngc=kmotion_m6,)
+(SUBROUTINE_PATH = ../../ngc - and this runs the board's tool change program: M198 is the mcodes/M198 wrapper, which)
+(sends the selected pocket and tool ID to kmotion-motion, which runs [KMOTION] TOOL_CHANGE with them in its)
+(persist variable and the next one as ints, KMotionCNC's M6 convention, and waits for the program. Then LinuxCNC)
+(is told the tool is in the spindle. The tool length offset is G43's business, as always.)
+o<kmotion_m6> sub
+M198 P#<_selected_pocket> Q#<_selected_tool>
+M61 Q#<_selected_tool>
+o<kmotion_m6> endsub
+M2

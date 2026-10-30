@@ -113,6 +113,7 @@ static bool axes_seen_enabled = false; // since the ENABLE, every axis was seen 
                                        // a fault on the board, or the KMotion console - takes the
                                        // machine off and unhomes the joint, as motmod's amp fault
 static bool mcode_configured[100];
+static bool tool_change_configured = false;   // [KMOTION] TOOL_CHANGE: M6's remap reaches it as code 6
 static bool limits_configured = false;  // [KMOTION] LIMIT_NEG_BITS / LIMIT_POS_BITS name a switch
 static std::string measure_file;        // [KMOTION] MEASURE_FILE: the geo correction measurements (KMotionCNC's Measure)
 static std::string geo_file_name;       // [KMOTION] GEO_FILE as given, for messages
@@ -2396,6 +2397,16 @@ static bool read_kmotion_config(KmConfig &cfg)
             mcode_configured[n - 100] = cfg.mcode[n - 100].type != KM_ACTION_NONE;
         }
     }
+    // M6 on the board: [KMOTION] TOOL_CHANGE, the same grammar; the pocket and tool ID go to the
+    // program as ints (KMotionCNC's M6 convention). The ini's REMAP=M6 ... ngc=kmotion_m6 and the
+    // mcodes/M198 wrapper bring M6 here as code 6
+    {
+        const char *v = ini.get(K, "TOOL_CHANGE");
+        if (v && v[0]) {
+            if (!parse_spindle_action(ini_path, "TOOL_CHANGE", v, cfg.tool_change)) return false;
+            tool_change_configured = cfg.tool_change.type != KM_ACTION_NONE;
+        }
+    }
     static const char *spindle_keys[KM_SPINDLE_ACTIONS] = {"SPINDLE_M3", "SPINDLE_M4", "SPINDLE_M5", "SPINDLE_S"};
     for (int i = 0; i < KM_SPINDLE_ACTIONS; i++) {
         const char *v = ini.get(K, spindle_keys[i]);
@@ -2652,12 +2663,15 @@ static void mcode_server()
         int code = 0;
         double p = -1, q = -1;
         std::string reply;
-        if (sscanf(req, "%d %lf %lf", &code, &p, &q) < 1 || code < 100 || code > 199) {
-            reply = "error: expected <100-199> <P> <Q>";
-        } else if (!km || !mcode_configured[code - 100]) {
+        if (sscanf(req, "%d %lf %lf", &code, &p, &q) < 1 || !(code == 6 || (code >= 100 && code <= 199))) {
+            reply = "error: expected <100-199> <P> <Q>, or 6 <pocket> <tool> for the tool change";
+        } else if (code == 6 && (!km || !tool_change_configured)) {
+            reply = "error: M6 on the board needs a [KMOTION] TOOL_CHANGE action";
+        } else if (code != 6 && (!km || !mcode_configured[code - 100])) {
             reply = "error: M" + std::to_string(code) + " has no [KMOTION] MCODE_" + std::to_string(code) + " action";
         } else {
-            log_print("M%d P%g Q%g\n", code, p, q);
+            if (code == 6) log_print("M6 tool change: pocket %g tool %g\n", p, q);
+            else log_print("M%d P%g Q%g\n", code, p, q);
             int ticket = km->mcode(code, p, q), result = 0;
             while (!km->mcode_finished(ticket, result) && !mcode_stop) usleep(10000);
             reply = result == 0 ? "ok" : result == 2 ? "error: aborted" : "error: failed";
@@ -2781,8 +2795,9 @@ int main(int argc, char *argv[])
     }
     log_print("kmotion-motion started, period %.1f ms\n", period_s * 1e3);
     std::thread mcode_thread;
-    for (bool any : mcode_configured)
-        if (any) { mcode_thread = std::thread(mcode_server); break; }
+    bool any_mcode = tool_change_configured;
+    for (bool any : mcode_configured) any_mcode = any_mcode || any;
+    if (any_mcode) mcode_thread = std::thread(mcode_server);
     // the board's commands to the PC (persist 100-107), board mode only
     bool pccomm_running = false;
     if (km && km->is_board()) {

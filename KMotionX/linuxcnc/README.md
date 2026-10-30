@@ -254,6 +254,16 @@ installation from scratch, with its scripts.
     work, and answers when it is over; an error stops the program. The kmotion-minirouter bench has
     `mcodes/M100` and `mcodes/M100.c` (thread 5, P and Q in persist 10 and 11: virtual bit 1027
     on when P is not 0). `KM_BOARD=1 ./build/backend-test io` checks the bits and M100.
+  - **M6 on the board**: `[KMOTION] TOOL_CHANGE = PROGRAM_WAIT <thread> <var> <file>` (the same
+    grammar as the spindle and M-code actions) with, in the ini's `[RS274NGC]`,
+    `SUBROUTINE_PATH = ../../ngc` and `REMAP = M6 modalgroup=6 ngc=kmotion_m6`, and the
+    `mcodes/M198` wrapper. The remap (`ngc/kmotion_m6.ngc`) runs M198 with the selected pocket
+    and tool, which reaches kmotion-motion as code 6 (`kmotion-mcode 6 <pocket> <tool>`): the
+    action runs with the pocket and the tool ID as ints in `<var>` and `<var>+1`, as KMotionCNC's
+    M6 action writes them, so a KMotionCNC ToolChange.c runs unchanged; LinuxCNC waits for it,
+    then M61 marks the tool in the spindle (G43 applies the offset as always). The bench's
+    `ToolChange.c` prints the two. Without the key and the remap, M6 is LinuxCNC's own:
+    iocontrol's tool-change pins, looped back in the HAL file.
   - **Probing, G38.2-G38.5** (`[KMOTION] PROBE_BIT`, `PROBE_ACTIVE`): the planner runs the
     probe move like any move, so any kinematics apply (3Link included), while the probe
     watcher, `ServiceProbe()` (`configs/kmotion-minirouter/probe/ProbeService.c`, after Dynomotion's
@@ -401,8 +411,9 @@ maybe a Home button, the spindle on M3/M4/M5/S actions, coolant on bits, user M 
   kept whole and wrapped (one run homes every joint asked for);
 - G96 when the S program is the Spindle Using Jogs CSS set (`Loop.c` with `ServiceCSS()`);
 - the tool table, the fixture offsets (`emc.var`), the recent G-code files, the game pad;
-- `MIGRATION.md` in the folder: every value taken, every guess, what was not converted (M6's
-  tool-change program, the special actions, tapping, probing).
+- M6: a tool-change program becomes `TOOL_CHANGE` with the M6 remap (below);
+- `MIGRATION.md` in the folder: every value taken, every guess, what was not converted (the
+  special actions, tapping, probing).
 
 Every program is compile-checked with tcc67 for the KFLOP image.
 

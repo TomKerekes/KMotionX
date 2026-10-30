@@ -1773,7 +1773,7 @@ failed_all:
 // 1 failed (message posted), 2 stopped waiting on an abort (the program carries on, as in
 // KMotionCNC).
 static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm, const std::function<void()> &issued,
-                    const double *pq = nullptr)
+                    const double *pq = nullptr, bool ints = false)
 {
     char cmd[640], reply[MAX_LINE + 1];
     const std::string who = mcode >= 100 ? "M" + std::to_string(mcode) : "spindle";
@@ -1816,11 +1816,12 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (var >= 0 && pq) {
-        // a user M code: P and Q as floats, in <var> and <var>+1 (LinuxCNC sends -1 for a word not given)
+        // a user M code: P and Q as floats, in <var> and <var>+1 (LinuxCNC sends -1 for a word not
+        // given); the tool change: the pocket and the tool ID as ints, as KMotionCNC's M6 writes them
         for (int k = 0; k < 2; k++) {
-            float f = (float) pq[k];
             unsigned bits;
-            memcpy(&bits, &f, sizeof bits);
+            if (ints) bits = (unsigned) (int) lround(pq[k]);
+            else { float f = (float) pq[k]; memcpy(&bits, &f, sizeof bits); }
             snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var + k, bits);
             if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
         }
@@ -2453,6 +2454,10 @@ static void worker_main(KmBackend::Impl *d)
                 if (!d->cfg.simulate && c.mc >= 100 && c.mc < 200) {
                     const double pq[2] = {c.p, c.q};
                     r = w_action(d, d->cfg.mcode[c.mc - 100], c.mc, c.p, [] {}, pq);
+                } else if (!d->cfg.simulate && c.mc == 6) {
+                    // M6 (the remap): [KMOTION] TOOL_CHANGE with the pocket and the tool ID
+                    const double pq[2] = {c.p, c.q};
+                    r = w_action(d, d->cfg.tool_change, 6, 0, [] {}, pq, true);
                 }
                 d->mcode_result = r;
                 d->mcode_done = c.ticket;

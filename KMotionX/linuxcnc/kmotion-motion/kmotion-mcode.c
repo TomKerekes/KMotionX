@@ -5,7 +5,9 @@
  * word not given) and waits for it to exit; a nonzero exit is an error that stops the program.
  * A config's M1xx is a wrapper: exec kmotion-mcode <n> "$@". This sends "<n> <P> <Q>" to the
  * running kmotion-motion (Unix socket, abstract name "kmotion-motion"), which carries out
- * [KMOTION] MCODE_<n> on the board, and waits for its "ok" or "error".
+ * [KMOTION] MCODE_<n> on the board, and waits for its "ok" or "error". "kmotion-mcode 6 <pocket>
+ * <tool>" (the mcodes/M198 wrapper, called by the M6 remap ngc/kmotion_m6.ngc) runs [KMOTION]
+ * TOOL_CHANGE with the pocket and tool ID as ints, as KMotionCNC's M6 action gets them.
  */
 #include <stddef.h>
 #include <stdio.h>
@@ -18,7 +20,7 @@
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: kmotion-mcode <100-199> [<P> [<Q>]]\n");
+        fprintf(stderr, "usage: kmotion-mcode <100-199> [<P> [<Q>]]   or   kmotion-mcode 6 <pocket> <tool>  (the M6 remap)\n");
         return 2;
     }
     int code = atoi(argv[1]);

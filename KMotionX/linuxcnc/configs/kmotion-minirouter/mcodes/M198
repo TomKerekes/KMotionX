@@ -1,0 +1,5 @@
+#!/bin/sh
+# M198: the M6 remap's way to the board (ngc/kmotion_m6.ngc runs "M198 P<pocket> Q<tool>"): kmotion-mcode 6
+# has kmotion-motion carry out [KMOTION] TOOL_CHANGE with the pocket and tool ID, and waits for it.
+# Not for use from G-code directly.
+exec "$(dirname "$0")/../../../kmotion-motion/kmotion-mcode" 6 "$@"
