@@ -188,15 +188,49 @@ static int set_mode(EMC_TASK_MODE mode)
     return wait_until([mode] { return nml.st->task.mode == mode; }, 2.0) ? 0 : -1;
 }
 
-// an MDI line, as the GUI would send it, through to the end of its motion; the mode goes
-// back to what it was (an operator jogging in MANUAL keeps the jog keys). -1: refused (a
-// program is running, task is not on) or the interpreter reported an error
+// MDI lines held back while the board's home program runs: the mode switch an MDI line
+// needs makes task abort the motion under way - the homing itself - and the board waits for
+// the PC's answer before it goes on (Carl's Home program sets the X and Y DROs to 0 just
+// before it ends), so such a command is acknowledged at once and its line is run, in order,
+// once the joints the homing reported show homed in task's status (task refuses an MDI
+// line while a joint is unhomed). gmoccapy's side of a switch right after a homing - its
+// status poll reports the mode change before the homed joints - is gmoccapy's
+// (linuxcnc/patches/gmoccapy-keep-enabled-on-exit.patch). A held line whose mode switch
+// is taken back from under it - gmoccapy's own all-homed handler sends task to MANUAL once
+// more (its reload-tool step), right when the first held line goes - is held again and
+// tried once the GUI is done, at most three times. GET commands are answered during homing
+// as usual
+struct HeldMdi { std::string line; int tries; };
+static std::deque<HeldMdi> held_mdi;
+static bool homing_now = false;         // the backend's homing flag, as the dispatcher last saw it
+static int home_serial_seen = 0;        // the backend's homing runs taken into account
+
+static bool homed_in_status(unsigned homed_mask)
+{
+    EMC_STAT *st = snapshot();
+    if (!st || st->task.state != EMC_TASK_STATE::ON) return false;
+    for (int j = 0; j < 8 && j < EMCMOT_MAX_JOINTS; j++)
+        if (((homed_mask >> j) & 1) && !st->motion.joint[j].homed) return false;
+    return true;
+}
+
+// an MDI line, as the GUI would send it, through to the end of its motion: task takes an
+// MDI line in MDI mode only ("Must be in MDI mode to issue MDI command"), so the mode is
+// switched, and goes back to what it was afterwards (an operator jogging in MANUAL keeps
+// the jog keys). -1: refused (a program is running, task is not on) or the interpreter
+// reported an error
+static const int MDI_NO_MODE = -3;      // the switch to MDI mode did not hold (the GUI took it back)
 static int mdi(const std::string &line)
 {
+    if (homing_now) {
+        held_mdi.push_back(HeldMdi{line, 0});
+        pclog("pccomm: MDI %s held until the homing is over\n", line.c_str());
+        return 0;
+    }
     EMC_STAT *st = snapshot();
     if (!st || !idle(st)) return -1;
     EMC_TASK_MODE prev = st->task.mode;
-    if (set_mode(EMC_TASK_MODE::MDI)) return -1;
+    if (set_mode(EMC_TASK_MODE::MDI)) return MDI_NO_MODE;
     pclog("pccomm: MDI %s\n", line.c_str());
     EMC_TASK_PLAN_EXECUTE c;
     snprintf(c.command, sizeof c.command, "%s", line.c_str());
@@ -582,6 +616,29 @@ static void pccomm_main()
         usleep(20000);
         KmState ks;
         km->state(ks);
+        homing_now = ks.homing;
+        if (ks.home_serial != home_serial_seen) {
+            // a homing run ended: the lines held during it go once the joints show homed;
+            // after a failed run they are dropped (nothing to set a DRO to)
+            home_serial_seen = ks.home_serial;
+            if (ks.home_fail_mask && !held_mdi.empty()) {
+                pclog("pccomm: %zu held MDI line(s) dropped: the homing failed\n", held_mdi.size());
+                held_mdi.clear();
+            }
+        }
+        if (!homing_now && !held_mdi.empty() && homed_in_status(ks.home_ok_mask)) {
+            std::deque<HeldMdi> lines;
+            lines.swap(held_mdi);
+            for (const HeldMdi &h : lines) {
+                int r = mdi(h.line);
+                if (r == MDI_NO_MODE && h.tries + 1 < 3) {
+                    held_mdi.push_back(HeldMdi{h.line, h.tries + 1});
+                    pclog("pccomm: held MDI %s: the mode switch did not hold, held again (%d)\n", h.line.c_str(), h.tries + 1);
+                } else {
+                    pclog("pccomm: held MDI %s -> %d\n", h.line.c_str(), r);
+                }
+            }
+        }
         if (!ks.connected || ks.pc_comm_count == 0) continue;
         const int code = ks.pc_comm[0];
         if (first) {
