@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool kogna-console pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console motion-log-plotter pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 stale="linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop"   # earlier names of the bench launcher, removed on an install
 sizes="16 32 48 64 128 256"
 
@@ -37,7 +37,7 @@ refresh() {
 if [ "${1:-}" = "--remove" ]; then
     for l in $launchers $stale; do rm -f "$apps/$l.desktop" "$desktop/$l.desktop"; done
     rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/clipboard-png.desktop"; pkill -f '[c]lipboard-png$' || true
-    for n in $sizes; do rm -f "$icons/${n}x${n}/apps/kmotion-tool.png"; done
+    for n in $sizes; do rm -f "$icons/${n}x${n}/apps/kmotion-tool.png" "$icons/${n}x${n}/apps/motion-log-plotter.png"; done
     rm -f "$icons/scalable/apps/linuxcncicon.svg" "$icons/48x48/apps/linuxcncicon.png"
     refresh
     note "removed the KMotion and LinuxCNC launchers from $desktop and $apps"
@@ -111,6 +111,26 @@ Icon=utilities-terminal
 Terminal=true
 Categories=Science;Engineering;
 Keywords=kmotion;kogna;dynomotion;console;serial;
+END
+
+# --- the planner's motion log, plotted ----------------------------------------------------
+note "Motion Log Plotter (examples/MotionLogPlotter, desktop/motion-log-plotter)"
+python3 -c 'import numpy, matplotlib' 2>/dev/null ||
+    warn "python3 has no numpy/matplotlib: the Motion Log Plotter needs   sudo apt install python3-matplotlib"
+for n in $sizes; do   # the Windows plotter's own icon (its .ico, as PNGs beside the Python one)
+    install -Dm644 "$root/KMotionX/examples/MotionLogPlotter/icons/motion-log-plotter-$n.png" "$icons/${n}x${n}/apps/motion-log-plotter.png"
+done
+write_launcher motion-log-plotter <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Motion Log Plotter
+Comment=The planner's segment log (/tmp/TPSegLog.csv, written with [KMOTION] LOG_SEGMENTS = 1): the XY path and position, velocity, accel and jerk over time
+Exec="$here/motion-log-plotter"
+Icon=motion-log-plotter
+Terminal=true
+Categories=Science;Engineering;
+Keywords=kmotion;dynomotion;motion;log;plot;trajectory;
 END
 
 # --- updating: pull, then re-install -----------------------------------------------------

@@ -1,0 +1,20 @@
+#!/bin/bash
+# motion-log-plotter: the planner's segment log plotted (examples/MotionLogPlotter, the Linux
+# counterpart of Dynomotion's MotionLogPlotter), from a desktop launcher in a terminal window:
+# the plotter prints a clicked sample's values there. The log is /tmp/TPSegLog.csv, written
+# while the run goes when [KMOTION] LOG_SEGMENTS = 1 in the LinuxCNC ini (kmotion-motion's
+# backend; 0 in a migrated configuration) - without one the plotter stops with a traceback,
+# so a note instead. The plotter watches the file (w): a run finished later reloads by itself.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # .../KMotionX/KMotionX/desktop
+root=$(cd "$here/../.." && pwd)                        # the checkout
+log=${1:-/tmp/TPSegLog.csv}
+if [ ! -s "$log" ]; then
+    echo "No motion log at $log."
+    echo
+    echo "The planner writes it while a program runs when the LinuxCNC ini has, under [KMOTION],"
+    echo "    LOG_SEGMENTS = 1"
+    echo "(a configuration made by migrate-kmotioncnc has 0). Set it, start LinuxCNC again, run the"
+    echo "program, then start the plotter again. The log is overwritten at each run's start."
+    echo; read -r -p "press Enter to close " _; exit 1
+fi
+exec python3 "$root/KMotionX/examples/MotionLogPlotter/MotionLogPlotter.py" --watch "$log"
