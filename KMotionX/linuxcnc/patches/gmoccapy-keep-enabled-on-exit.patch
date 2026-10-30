@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..678b5a8e3d 100644
+index cae34386ee..e39e10b477 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -29,6 +29,7 @@
@@ -199,7 +199,27 @@ index cae34386ee..678b5a8e3d 100644
          if self.widgets.ntb_main.get_current_page() != 0:
              self.command.mode(linuxcnc.MODE_MANUAL)
              self.command.wait_complete()
-@@ -3364,14 +3475,33 @@ class gmoccapy(object):
+@@ -3150,6 +3261,19 @@ class gmoccapy(object):
+             self.widgets.ntb_jog.set_current_page(0)
+             return
+ 
++        # A status poll reports a mode change before the homed joints (hal_glib's update), so
++        # a switch to MDI from outside as a homing ends - kmotion-motion running the DRO
++        # settings the board's home program asked for - lands here with every joint homed in
++        # the status just read and all-homed not yet handled: the status decides, not the
++        # buttons. all-homed follows in the same poll and does the rest
++        if not self.widgets.rbt_mdi.get_sensitive() and not self.all_homed \
++                and not self.widgets.tbtn_setup.get_active():
++            self.stat.poll()
++            if self.stat.task_state == linuxcnc.STATE_ON and all(self.stat.homed[j] for j in range(self.stat.joints)):
++                LOG.debug("MDI mode with every joint homed in the status: taken ahead of all-homed")
++                self.all_homed = True
++                self._sensitize_widgets(["rbt_mdi", "rbt_auto"], True)
++
+         # if MDI button is not sensitive, we are not ready for MDI commands
+         # so we have to abort external commands and get back to manual mode
+         # This will happen mostly, if we are in settings mode, as we do disable the mode button
+@@ -3364,14 +3488,33 @@ class gmoccapy(object):
          self.initialized = True
  
      # kill keyboard and estop machine before closing
@@ -235,7 +255,7 @@ index cae34386ee..678b5a8e3d 100644
          Gtk.main_quit()
  
      def on_focus_out(self, widget, data=None):
-@@ -4369,6 +4499,13 @@ class gmoccapy(object):
+@@ -4369,6 +4512,13 @@ class gmoccapy(object):
  
      def on_chk_ignore_limits_toggled(self, widget, data=None):
          if self.widgets.chk_ignore_limits.get_active():
