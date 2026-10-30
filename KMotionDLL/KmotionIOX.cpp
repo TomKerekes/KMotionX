@@ -1052,6 +1052,41 @@ int CKMotionIO::ReadLineTimeOutRaw(char *buf, int TimeOutms)
 
 	while (!Done)
 	{ 
+		// a whole line may already be here: the tail saved from the last read (the board
+		// answers GetStatus in 11 lines and the chip delivers them together), or the read
+		// below. Then it is returned without a USB read: a read with nothing more to come
+		// ends only on the chip's next empty packet - a latency-timer period plus a
+		// transfer's round trip - and that was paid once per line (a status read took
+		// 55 ms instead of 15 under VirtualBox)
+
+		p = strchr(buf,'\n');
+
+		if (p)
+		{
+			// check if we read extra characters
+
+			if ((p-buf) < (int)(strlen(buf)-1))
+			{
+				// yes, save them for next time
+
+				strcpy(m_SaveChars,p+1);
+
+				// now zero terminate first string
+				// after the \r
+
+				*(p+1) = 0;
+			}
+
+			Done=true;
+			break;
+		}
+
+		if (!NO_KMOTION_TIMEOUT && Timer.Elapsed_Seconds() * 1000.0 > TimeOutms)
+		{
+			Mutex->Unlock();
+			return 2;  // return with timeout indication
+		}
+
 		if (FirstTime)
 			FirstTime=false;
 		else
@@ -1097,32 +1132,6 @@ int CKMotionIO::ReadLineTimeOutRaw(char *buf, int TimeOutms)
 			//Successfully received data.  Zero terminate string.
 			buf[TotalBytes] = 0;
 		
-		}
-		// check if we got a terminating character  \n 
-
-
-		p = strchr(buf,'\n');
-
-
-		if (p)
-		{
-			// check if we read extra characters
-			if ((p-buf) < (int)(strlen(buf)-1))
-			{
-				// yes, save them for next time
-				strcpy(m_SaveChars,p+1);
-				// now zero terminate first string
-				// after the \r
-				*(p+1) = 0;
-			}
-
-			Done=true;
-		}
-
-		if (!NO_KMOTION_TIMEOUT && !Done && Timer.Elapsed_Seconds() * 1000.0 > TimeOutms)
-		{
-			Mutex->Unlock();
-			return 2;  // return with timeout indication
 		}
 
 	}
