@@ -10,6 +10,7 @@ SUBDIRS+=KMotionX/examples/test
 SUBDIRS+=KMotionX/examples/KFlopConsole
 SUBDIRS+=KMotionX/examples/ExecuteGCode
 SUBDIRS+=KMotionX/examples/kmxWeb
+SUBDIRS+=KMotionX/examples/LinkProbe
 SUBDIRS+=TCC67
 
 ifeq ($(BUILD_JNI),true)
