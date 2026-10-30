@@ -1677,13 +1677,33 @@ static int set_persist(KmBackend::Impl *d, int index, long value)
 static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
 {
     enum { P_MASK = 120, P_OK = 121, P_FAILED = 122, P_CURRENT = 123, P_JOINT = 128, P_STRIDE = 8 };
-    unsigned chmask = 0;                     // by board channel
-    unsigned jmask = 0;                      // by LinuxCNC joint
+    unsigned chmask = 0;                     // the program's joints, by board channel
+    unsigned jmask = 0;                      // every joint asked for, by LinuxCNC joint
+    unsigned zero_j = 0;                     // the joints homed where they stand: channels zeroed, after the program
+    unsigned ok_j = 0;                       // the joints homed, by LinuxCNC joint
+    unsigned ok_ch = 0;                      // the program's answer (persist 121), by channel
+    bool killed = false;
     int ch_of[8];
     for (int j = 0; j < 8; j++) {
         ch_of[j] = d->cfg.channel[j];
-        if (!req.joint[j].home || ch_of[j] < 0 || ch_of[j] >= 8) continue;
+        if (!req.joint[j].home) continue;
         const KmHomeJoint &hj = req.joint[j];
+        if (hj.in_place) {
+            // no switch to look for: where it stands becomes HOME_OFFSET, as LinuxCNC's own
+            // immediate homing has it. The board can only zero a channel (Zero), so the offset
+            // must be 0; a joint without a channel is simply declared homed there
+            jmask |= 1u << j;
+            if (ch_of[j] < 0 || ch_of[j] >= 8) { ok_j |= 1u << j; continue; }
+            if (hj.offset != 0) {
+                char t[200];
+                snprintf(t, sizeof t, "joint %d is homed where it stands, but its HOME_OFFSET %g is not 0: the board can only zero the channel", j, hj.offset);
+                d->message(t);
+                continue;
+            }
+            zero_j |= 1u << j;
+            continue;
+        }
+        if (ch_of[j] < 0 || ch_of[j] >= 8) continue;
         double k = d->scale[j];
         int base = P_JOINT + P_STRIDE * ch_of[j];
         int flags = (hj.use_index ? 1 : 0) | (hj.no_final_move ? 4 : 0);
@@ -1697,22 +1717,21 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
         chmask |= 1u << ch_of[j];
         jmask |= 1u << j;
     }
-    if (chmask == 0) return;
-    if (set_persist(d, P_OK, 0) || set_persist(d, P_FAILED, 0) || set_persist(d, P_CURRENT, -1) || set_persist(d, P_MASK, (long) chmask)) goto failed_all;
-    {
-        d->homing = true;
+    if (jmask == 0) return;
+    d->homing = true;
+    if (chmask) {
+        if (set_persist(d, P_OK, 0) || set_persist(d, P_FAILED, 0) || set_persist(d, P_CURRENT, -1) || set_persist(d, P_MASK, (long) chmask)) goto failed_all;
         char err[512] = "";
         char cmd[64], reply[MAX_LINE + 1];
         int thread = d->cfg.home_thread;
         if (board_compile_load(d, d->cfg.home_program, thread, err, sizeof err - 1)) {
             d->message(std::string("home program failed: ") + d->cfg.home_program + ": " + err);
-            goto finish_failed;
+            goto failed_all;
         }
         snprintf(cmd, sizeof cmd, "Execute%d", thread);
-        if (board_write(d, cmd)) { d->message("Execute failed for the home program"); goto finish_failed; }
+        if (board_write(d, cmd)) { d->message("Execute failed for the home program"); goto failed_all; }
         snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
         double t0 = now_s();
-        bool killed = false;
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             if (d->aborting || d->stop) {
@@ -1732,29 +1751,37 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
             if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); killed = true; break; }
             if (strcmp(reply, "0") == 0) break;
         }
-        unsigned ok_ch = 0;
         if (!killed) {
             snprintf(cmd, sizeof cmd, "GetPersistDec %d", (int) P_OK);
             if (board_query(d, cmd, reply) == 0) ok_ch = (unsigned) strtol(reply, NULL, 10);
         }
-        // where the board stands now is where the planner continues from
-        if (!read_board_position(d)) d->cm->ClearAbort();
-        set_cm_position(d, d->pos);
-        unsigned ok_j = 0;
-        for (int j = 0; j < 8; j++)
-            if ((jmask & (1u << j)) && ch_of[j] >= 0 && (ok_ch & (1u << ch_of[j]))) ok_j |= 1u << j;
-        {
-            std::lock_guard<std::mutex> lock(d->smx);
-            d->home_ok_mask = ok_j;
-            d->home_fail_mask = jmask & ~ok_j;
-            d->home_serial++;
-        }
-        d->homing = false;
-        return;
     }
-finish_failed:
+    // the joints homed where they stand: their channels zeroed now, after the program (its
+    // DefineCoordSystem and last moves are over), unless the run was stopped
+    if (!killed) {
+        for (int j = 0; j < 8; j++) {
+            if (!(zero_j & (1u << j))) continue;
+            char cmd[64];
+            snprintf(cmd, sizeof cmd, "Zero%d", ch_of[j]);
+            if (board_write(d, cmd) == 0) ok_j |= 1u << j;
+            else d->message(std::string("board command failed: ") + cmd);
+        }
+    }
+    // where the board stands now is where the planner continues from
+    if (!read_board_position(d)) d->cm->ClearAbort();
+    set_cm_position(d, d->pos);
+    for (int j = 0; j < 8; j++)
+        if ((jmask & (1u << j)) && !(zero_j & (1u << j)) && ch_of[j] >= 0 && ch_of[j] < 8 && (ok_ch & (1u << ch_of[j]))) ok_j |= 1u << j;
+    {
+        std::lock_guard<std::mutex> lock(d->smx);
+        d->home_ok_mask = ok_j;
+        d->home_fail_mask = jmask & ~ok_j;
+        d->home_serial++;
+    }
     d->homing = false;
+    return;
 failed_all:
+    d->homing = false;
     {
         std::lock_guard<std::mutex> lock(d->smx);
         d->home_ok_mask = 0;

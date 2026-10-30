@@ -1717,8 +1717,10 @@ static void handle_command()
     case EMCMOT_JOINT_HOME: {
         log_print("JOINT_HOME joint=%d\n", c->joint);
         // with a home program on the board, joints with a search velocity are homed there
-        // (the result comes back through the backend's state); a joint with HOME_SEARCH_VEL 0
-        // is declared homed where it stands, as in LinuxCNC
+        // (the result comes back through the backend's state). A joint with HOME_SEARCH_VEL 0
+        // is homed where it stands, as in LinuxCNC: on the board its channel is zeroed there
+        // by the backend, in order with the program's joints, so that it reads HOME_OFFSET
+        // (0); in simulate mode, or without a backend, it is declared so
         KmHomeRequest req;
         unsigned mask = 0;
         for (int j = 0; j < num_joints; j++) {
@@ -1731,10 +1733,12 @@ static void handle_command()
                 mark_joint_homed(j, true, false);
                 continue;
             }
-            bool on_board = km && km->has_home_program() && j < 8 && m.hp[j].search_vel != 0;
+            bool in_place = m.hp[j].search_vel == 0;
+            bool on_board = km && j < 8 && (in_place ? km->is_board() : km->has_home_program());
             if (!on_board) { mark_joint_homed(j, true); continue; }
             KmHomeJoint &hj = req.joint[j];
             hj.home = true;
+            hj.in_place = in_place;
             hj.search_vel = m.hp[j].search_vel;
             hj.latch_vel = m.hp[j].latch_vel;
             hj.final_vel = m.hp[j].final_vel;

@@ -174,6 +174,8 @@ struct KmSpindleCss {
 // program through the board's persist variables (layout documented in Home.c).
 struct KmHomeJoint {
     bool home = false;            // this joint is to be homed
+    bool in_place = false;        // no switch (HOME_SEARCH_VEL 0): homed where it stands - its channel is
+                                  // zeroed there, so it reads HOME_OFFSET, which must be 0 (board mode)
     double search_vel = 0;        // units/s, the sign is the direction toward the switch
     double latch_vel = 0;         // units/s; same sign as the search: approach again slowly,
                                   // opposite sign: the switch's trailing edge is home
