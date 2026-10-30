@@ -31,6 +31,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 #include <strings.h>
 
 #include "GCodeInterpreterX.h"
@@ -123,6 +124,17 @@ struct KmBackend::Impl {
     std::condition_variable ucv;
     struct Urgent { std::string cmd; int jog_axis; };   // jog_axis >= 0: a counted jog command
     std::deque<Urgent> uq;
+    // the link's turns (lmx, lcv): link_wanted counts the other threads' board calls that are
+    // under way or waiting - an urgent command from the moment it is queued, the worker's and
+    // the PC-comm thread's calls (LinkUse) - and the poller starts no status read while it is
+    // nonzero. The pipe's mutex is not fair: on a slow link a status read takes longer than
+    // the period, the poller read back to back and took the mutex back before a waiting
+    // WriteLine got it (under VirtualBox on a laptop a jog waited up to 1.5 s)
+    std::mutex lmx;
+    std::condition_variable lcv;
+    int link_wanted = 0;
+    void link_want() { std::lock_guard<std::mutex> lk(lmx); link_wanted++; }
+    void link_done() { { std::lock_guard<std::mutex> lk(lmx); link_wanted--; } lcv.notify_all(); }
     std::mutex wmx;                 // the run bookkeeping below, shared by the two threads
     std::atomic<bool> stop{false};
     std::atomic<bool> paused{false};
@@ -137,6 +149,7 @@ struct KmBackend::Impl {
     int wj_serial = 0, wj_end = 0, wj_joint = -1, wj_dir = 0;   // the last pass's end (smx)
     std::atomic<int> stop_state{0};    // board: MAIN_STATUS.StopImmediateState from the last status poll
     std::atomic<unsigned> status_count{0};   // board: status polls so far
+    std::vector<double> first_reads;         // board: the first status reads' round-trip times, logged once
     double act_fb[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // poller: the channels' Position, in the actuators' units
     unsigned axis_done = 0;                // poller: AxisDone by axis (bit = LinuxCNC joint)
     std::atomic<unsigned> lines_posted{0}, lines_begun{0};   // line() calls, and the ones the worker took up
@@ -266,6 +279,7 @@ struct KmBackend::Impl {
     }
     void send_urgent(const std::string &cmd, int jog_axis = -1)
     {
+        link_want();                      // counted until urgent_main has sent it (link_done there)
         std::lock_guard<std::mutex> lock(umx);
         if (cmd == "StopImmediate0") holds_queued++;
         uq.push_back(Urgent{cmd, jog_axis});
@@ -279,6 +293,18 @@ struct KmBackend::Impl {
         messages += m;
     }
 };
+
+// a board call by the worker, the protocol side or the PC-comm thread, counted on the link
+// (Impl::link_wanted) so that the poller reads no status until it is over
+struct LinkUse {
+    KmBackend::Impl *d;
+    explicit LinkUse(KmBackend::Impl *d) : d(d) { d->link_want(); }
+    ~LinkUse() { d->link_done(); }
+};
+static int board_write(KmBackend::Impl *d, const char *cmd) { LinkUse u(d); return d->km->WriteLine(cmd); }
+static int board_status(KmBackend::Impl *d, MAIN_STATUS &st) { LinkUse u(d); return d->km->GetStatus(st, true); }
+static int board_compile_load(KmBackend::Impl *d, const char *path, int thread, char *err, int errlen) { LinkUse u(d); return d->km->CompileAndLoadCoff(path, thread, err, errlen); }
+static int board_load(KmBackend::Impl *d, int thread, const char *path, int pack) { LinkUse u(d); return d->km->LoadCoff(thread, path, pack); }
 
 // ---- geometry of a segment (the same reconstruction MotionLogPlotter does) ------------
 static double dist_at(const Seg &s, double t)
@@ -707,7 +733,7 @@ static void board_stop(KmBackend::Impl *d)
     if (d->lost || !d->connected) return; // nothing answers (lost, or never connected): the planner's reset is all there is
     char reply[MAX_LINE + 1];
     unsigned c0 = d->status_count;
-    if (d->km->WriteLine("StopImmediate0")) d->message("StopImmediate0 failed");   // abort() has queued one too: harmless twice
+    if (board_write(d, "StopImmediate0")) d->message("StopImmediate0 failed");   // abort() has queued one too: harmless twice
     double t0 = now_s(), t_check = t0;
     bool was_moving = false;
     int last_state = -1;
@@ -735,7 +761,7 @@ static void board_stop(KmBackend::Impl *d)
         if (now_s() - t1 > 2) { d->message("a feed hold queued for the board did not go out within 2 s"); break; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (d->km->WriteLine("StopImmediate2")) d->message("StopImmediate2 failed");
+    if (board_write(d, "StopImmediate2")) d->message("StopImmediate2 failed");
     if (was_moving) fprintf(stderr, "kmotion-motion: board stopped (%.2f s)\n", now_s() - t0);
 }
 
@@ -820,6 +846,7 @@ static void w_replay(KmBackend::Impl *d, double dt)
 static int board_query(KmBackend::Impl *d, const char *cmd, char *reply)
 {
     reply[0] = 0;
+    LinkUse u(d);
     return d->km->WriteLineReadLine(cmd, reply);
 }
 
@@ -865,7 +892,7 @@ static bool read_board_position_to(KmBackend::Impl *d, double p[9])
         if (ch >= 0 && ch < N_CHANNELS_KOGNA && !(d->ever_enabled & (1u << i))) return false;
     }
     double x, y, z, a, b, c, u, v;
-    if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) != 0) return false;
+    { LinkUse use(d); if (d->cm->ReadCurAbsPosition(&x, &y, &z, &a, &b, &c, &u, &v) != 0) return false; }
     double q[9] = {x, y, z, a, b, c, u, v, 0};
     memcpy(p, q, sizeof q);
     return true;
@@ -930,6 +957,7 @@ static void w_poll_board(KmBackend::Impl *d)
     for (int i = 0; i < 8; i++) jog_written[i] = d->jog_written[i];
     const int spindle_done = d->spindle_done;    // ... and spindle commands
     if (!d->connected && !d->lost) return;       // never connected (no board, other firmware): Machine on tries
+    double t_read = now_s();
     int tok = d->km->WaitToken(false, 100, "kmotion-motion");
     if (tok == KMOTION_IN_USE) return;      // another client holds the board (a download, say): no loss
     if (tok != KMOTION_LOCKED) {
@@ -939,6 +967,7 @@ static void w_poll_board(KmBackend::Impl *d)
     }
     int r = d->km->GetStatus(status, false);
     d->km->ReleaseToken();
+    t_read = now_s() - t_read;
     // a record of the wrong size is stale bytes from a reply nobody finished reading (the
     // board rebooted mid-record, or a client quit mid-record): out of step with the board
     if (r == 0 && (status.VersionAndSize & 0xffff) != (int) (sizeof status / sizeof(int))) r = -1;
@@ -968,6 +997,20 @@ static void w_poll_board(KmBackend::Impl *d)
     d->connected = true;
     d->stop_state = status.StopImmediateState;
     d->status_count++;
+    if (d->first_reads.size() < 20) {
+        // the link's speed, once: a read longer than the period means the status is read
+        // back to back (the poller still yields to the other threads' calls: poller_main)
+        d->first_reads.push_back(t_read);
+        if (d->first_reads.size() == 20) {
+            std::vector<double> v = d->first_reads;
+            std::sort(v.begin(), v.end());
+            char t[240];
+            snprintf(t, sizeof t, "a status read takes %.0f ms (the median of the first 20, %.0f to %.0f ms); STATUS_PERIOD_MS %.0f%s",
+                     v[10] * 1e3, v[0] * 1e3, v[19] * 1e3, d->cfg.status_period * 1e3,
+                     v[10] > d->cfg.status_period ? ": longer than the period, so the status is read back to back" : "");
+            d->trace(t);
+        }
+    }
     {
         std::lock_guard<std::mutex> lk(d->pcmx);
         memcpy(d->pc_comm, status.PC_comm, sizeof d->pc_comm);
@@ -1256,18 +1299,26 @@ static void urgent_main(KmBackend::Impl *d)
         bool hold = cmd == "StopImmediate0";
         // no board (never connected, or lost): nothing to send and nothing to say - a start
         // without a board reported every stop and output bit as "board command failed"
-        if (d->lost || !d->connected) { if (hold) d->holds_sent++; if (jog_axis >= 0) d->jog_written[jog_axis]++; continue; }
-        if (d->km->WriteLine(cmd.c_str())) d->message(std::string("board command failed: ") + cmd);
+        if (!d->lost && d->connected) {
+            if (d->km->WriteLine(cmd.c_str())) d->message(std::string("board command failed: ") + cmd);
+            if (getenv("KM_DEBUG_STOP")) fprintf(stderr, "kmotion-motion: %s sent, took %.3f s\n", cmd.c_str(), now_s() - t0);
+        }
         if (hold) d->holds_sent++;
         if (jog_axis >= 0) d->jog_written[jog_axis]++;
-        if (getenv("KM_DEBUG_STOP") && cmd.compare(0, 13, "StopImmediate") == 0)
-            fprintf(stderr, "kmotion-motion: %s sent, took %.3f s\n", cmd.c_str(), now_s() - t0);
+        d->link_done();                    // counted since send_urgent: the poller may read again
     }
 }
 
 static void poller_main(KmBackend::Impl *d)
 {
     while (!d->stop) {
+        {
+            // the others first: no status read while an urgent command is queued or a board
+            // call of the worker's or the PC-comm thread's is under way (Impl::link_wanted)
+            std::unique_lock<std::mutex> lk(d->lmx);
+            d->lcv.wait(lk, [d] { return d->stop.load() || d->link_wanted == 0; });
+        }
+        if (d->stop) break;
         double t = now_s();
         w_poll_board(d);
         d->last_poll = t;
@@ -1280,13 +1331,13 @@ static void poller_main(KmBackend::Impl *d)
 static int run_program(KmBackend::Impl *d, const char *path, int thread)
 {
     char err[512] = "";
-    if (d->km->CompileAndLoadCoff(path, thread, err, sizeof err - 1)) {
+    if (board_compile_load(d, path, thread, err, sizeof err - 1)) {
         d->message(std::string("init program failed: ") + path + ": " + err);
         return 1;
     }
     char cmd[64], reply[MAX_LINE + 1];
     snprintf(cmd, sizeof cmd, "Execute%d", thread);
-    if (d->km->WriteLine(cmd)) { d->message("Execute failed for the init program"); return 1; }
+    if (board_write(d, cmd)) { d->message("Execute failed for the init program"); return 1; }
     snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
     double t0 = now_s();
     for (;;) {
@@ -1308,17 +1359,17 @@ static int start_program(KmBackend::Impl *d, const char *path, int thread)
 {
     size_t n = strlen(path);
     if (n > 4 && !strcasecmp(path + n - 4, ".out")) {
-        if (d->km->LoadCoff(thread, path, 0)) { d->message(std::string("start program failed: loading ") + path); return 1; }
+        if (board_load(d, thread, path, 0)) { d->message(std::string("start program failed: loading ") + path); return 1; }
     } else {
         char err[512] = "";
-        if (d->km->CompileAndLoadCoff(path, thread, err, sizeof err - 1)) {
+        if (board_compile_load(d, path, thread, err, sizeof err - 1)) {
             d->message(std::string("start program failed: ") + path + ": " + err);
             return 1;
         }
     }
     char cmd[64];
     snprintf(cmd, sizeof cmd, "Execute%d", thread);
-    if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
     d->trace(std::string("start program ") + path + " started in thread " + std::to_string(thread));
     return 0;
 }
@@ -1341,7 +1392,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
         // enables at the measured position): run it, wait until every axis of the coordinate
         // system is enabled, then take the position from the board. Axes left enabled by the
         // last session (KEEP_ENABLED_ON_EXIT) need no program: it still runs on the board
-        bool all = d->km->GetStatus(status, true) == 0;
+        bool all = board_status(d, status) == 0;
         for (int i = 0; all && i < 8; i++) {
             int ch = d->cfg.channel[i];
             if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((status.Enables >> ch) & 1)) all = false;
@@ -1357,7 +1408,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             memset(&status, 0, sizeof status);
             bool thread_done = false;
-            if (d->km->GetStatus(status, true) == 0) {
+            if (board_status(d, status) == 0) {
                 bool all = true;
                 for (int i = 0; i < 8; i++) {
                     int ch = d->cfg.channel[i];
@@ -1391,7 +1442,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
         if (read_board_position(d)) set_cm_position(d, d->pos);
         return;
     }
-    bool have_status = d->km->GetStatus(status, true) == 0;
+    bool have_status = board_status(d, status) == 0;
     for (int i = 0; i < 8; i++) {
         int ch = d->cfg.channel[i];
         if (ch < 0) continue;
@@ -1402,7 +1453,7 @@ static void w_machine_on(KmBackend::Impl *d, bool on)
         } else {
             snprintf(cmd, sizeof cmd, "DisableAxis%d", ch);
         }
-        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return; }
+        if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return; }
     }
 }
 
@@ -1535,7 +1586,7 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
     bool killed = false;
     if (r || cm->GetAbort()) {
         snprintf(cmd, sizeof cmd, "Kill%d", thread);
-        d->km->WriteLine(cmd);
+        board_write(d, cmd);
         killed = true;
         d->message("the planner refused the rigid tap move");
     }
@@ -1548,7 +1599,7 @@ static void w_tap(KmBackend::Impl *d, const Cmd &c)
         else if (now_s() - t0 > d->cfg.tap_timeout) { killed = true; d->message("the rigid tap program did not finish in time"); }
         if (killed) {
             snprintf(cmd, sizeof cmd, "Kill%d", thread);
-            d->km->WriteLine(cmd);
+            board_write(d, cmd);
             break;
         }
         if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); killed = true; break; }
@@ -1608,7 +1659,7 @@ static void w_jog_to(KmBackend::Impl *d, const Cmd &c)
     double vel = fabs(c.vel * d->scale[c.axis]);
     if (vel > 0) snprintf(cmd, sizeof cmd, "MoveAtVel%d=%.3f %.3f", ch, target, vel);
     else snprintf(cmd, sizeof cmd, "Move%d=%.3f", ch, target);
-    if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
+    if (board_write(d, cmd)) d->message(std::string("board command failed: ") + cmd);
 }
 
 // ---- worker loop --------------------------------------------------------------------------
@@ -1619,7 +1670,7 @@ static int set_persist(KmBackend::Impl *d, int index, long value)
 {
     char cmd[64];
     snprintf(cmd, sizeof cmd, "SetPersistDec %d %ld", index, value);
-    if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
     return 0;
 }
 
@@ -1653,12 +1704,12 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
         char err[512] = "";
         char cmd[64], reply[MAX_LINE + 1];
         int thread = d->cfg.home_thread;
-        if (d->km->CompileAndLoadCoff(d->cfg.home_program, thread, err, sizeof err - 1)) {
+        if (board_compile_load(d, d->cfg.home_program, thread, err, sizeof err - 1)) {
             d->message(std::string("home program failed: ") + d->cfg.home_program + ": " + err);
             goto finish_failed;
         }
         snprintf(cmd, sizeof cmd, "Execute%d", thread);
-        if (d->km->WriteLine(cmd)) { d->message("Execute failed for the home program"); goto finish_failed; }
+        if (board_write(d, cmd)) { d->message("Execute failed for the home program"); goto finish_failed; }
         snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
         double t0 = now_s();
         bool killed = false;
@@ -1673,9 +1724,9 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
             }
             if (killed) {
                 snprintf(cmd, sizeof cmd, "Kill%d", thread);
-                d->km->WriteLine(cmd);
+                board_write(d, cmd);
                 for (int ch = 0; ch < 8; ch++)
-                    if (chmask & (1u << ch)) { snprintf(cmd, sizeof cmd, "Jog%d=0", ch); d->km->WriteLine(cmd); }
+                    if (chmask & (1u << ch)) { snprintf(cmd, sizeof cmd, "Jog%d=0", ch); board_write(d, cmd); }
                 break;
             }
             if (board_query(d, cmd, reply)) { d->message("CheckThread failed"); killed = true; break; }
@@ -1734,7 +1785,7 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
     case KM_ACTION_SETTWOBITS:
         for (int k = 0; k < (a.type == KM_ACTION_SETTWOBITS ? 2 : 1); k++) {
             snprintf(cmd, sizeof cmd, "SetStateBit%d=%d", (int) a.p[2 * k], (int) a.p[2 * k + 1]);
-            if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+            if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
         }
         issued();
         return 0;
@@ -1743,7 +1794,7 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
         if (v < (int) a.p[3]) v = (int) a.p[3];
         if (v > (int) a.p[4]) v = (int) a.p[4];
         snprintf(cmd, sizeof cmd, "DAC%d=%d", (int) a.p[0], v);
-        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+        if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
         issued();
         return 0;
     }
@@ -1771,28 +1822,28 @@ static int w_action(KmBackend::Impl *d, const KmAction &a, int mcode, double rpm
             unsigned bits;
             memcpy(&bits, &f, sizeof bits);
             snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var + k, bits);
-            if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+            if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
         }
     } else if (var >= 0) {
         unsigned bits = (unsigned) mcode;
         if (mcode == 10) { float f = (float) rpm; memcpy(&bits, &f, sizeof bits); }   // S: the speed as a float
         snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var, bits);
-        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+        if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
     }
     if (a.file[0]) {
         size_t n = strlen(a.file);
         if (n > 4 && !strcasecmp(a.file + n - 4, ".out")) {
-            if (d->km->LoadCoff(thread, a.file, 0)) { d->message(who + ": loading " + a.file + " failed"); return 1; }
+            if (board_load(d, thread, a.file, 0)) { d->message(who + ": loading " + a.file + " failed"); return 1; }
         } else {
             char err[512] = "";
-            if (d->km->CompileAndLoadCoff(a.file, thread, err, sizeof err - 1)) {
+            if (board_compile_load(d, a.file, thread, err, sizeof err - 1)) {
                 d->message(who + " program failed: " + a.file + ": " + err);
                 return 1;
             }
         }
     }
     snprintf(cmd, sizeof cmd, "Execute%d", thread);
-    if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+    if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
     issued();
     if (a.type == KM_ACTION_PROGRAM) return 0;
     snprintf(cmd, sizeof cmd, "CheckThread%d", thread);
@@ -1822,7 +1873,7 @@ static int w_css(KmBackend::Impl *d, const Cmd &c, bool &changed)
     char cmd[64];
     auto put = [&](int var, unsigned bits) {
         snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", var, bits);
-        if (d->km->WriteLine(cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
+        if (board_write(d, cmd)) { d->message(std::string("board command failed: ") + cmd); return 1; }
         return 0;
     };
     auto float_bits = [](double v) { float f = (float) v; unsigned b; memcpy(&b, &f, sizeof b); return b; };
@@ -2068,9 +2119,9 @@ static bool wj_stop(KmBackend::Impl *d, double stop_time)
     for (int attempt = 0; attempt < 5; attempt++) {
         if (attempt == 0) {
             snprintf(cmd, sizeof cmd, "SetFROwRateTemp 0 %.3f", stop_time);
-            if (d->km->WriteLine(cmd)) return false;
+            if (board_write(d, cmd)) return false;
         } else {
-            if (d->km->WriteLine("StopImmediate0")) return false;
+            if (board_write(d, "StopImmediate0")) return false;
             for (double t0 = now_s(); now_s() - t0 < 5;) {
                 if (board_query(d, "GetStopState", reply)) return false;
                 if (!strcmp(reply, "3") || !strcmp(reply, "4") || !strcmp(reply, "0")) break;   // stopped, or nothing to stop
@@ -2087,7 +2138,7 @@ static bool wj_stop(KmBackend::Impl *d, double stop_time)
             else { same = 0; last = e; }
             std::this_thread::sleep_for(std::chrono::milliseconds(30));
         }
-        if (d->km->WriteLine("StopImmediate2")) return false;
+        if (board_write(d, "StopImmediate2")) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));   // an ExecBuf in flight lands
         if (board_query(d, "ExecTime", reply)) return false;
         double e2;
@@ -2097,7 +2148,7 @@ static bool wj_stop(KmBackend::Impl *d, double stop_time)
         std::this_thread::sleep_for(std::chrono::milliseconds(75));
         if (board_query(d, "GetStopState", reply)) return false;
         if (!strcmp(reply, "0")) break;
-        if (d->km->WriteLine("StopImmediate2")) return false;
+        if (board_write(d, "StopImmediate2")) return false;
     }
     return true;
 }
@@ -2484,6 +2535,8 @@ KmBackend::~KmBackend()
 {
     d->cm->SetAbort();                // gets the worker out of a blocking download (e.g. paused mid-run)
     d->stop = true;
+    { std::lock_guard<std::mutex> lk(d->lmx); }   // the poller waiting at the link's gate sees stop
+    d->lcv.notify_all();
     d->qcv.notify_one();
     if (d->worker.joinable()) d->worker.join();
     if (d->poller.joinable()) d->poller.join();
@@ -2660,7 +2713,7 @@ static bool board_connect(KmBackend::Impl *d)
     // programs); a board fresh from power-up reads 0 on channels nothing has set up
     MAIN_STATUS st;
     memset(&st, 0, sizeof st);
-    bool all = d->km->GetStatus(st, true) == 0;
+    bool all = board_status(d, st) == 0;
     for (int i = 0; all && i < 8; i++) {
         int ch = cfg.channel[i];
         if (ch >= 0 && ch < N_CHANNELS_KOGNA && !((st.Enables >> ch) & 1)) all = false;
@@ -2687,7 +2740,7 @@ static bool board_connect(KmBackend::Impl *d)
         else {
             d->still_homed = 0;
             snprintf(cmd, sizeof cmd, "SetPersistHex %d 0", cfg.homed_persist);
-            d->km->WriteLine(cmd);
+            board_write(d, cmd);
         }
         fprintf(stderr, "kmotion-motion: HOMED_PERSIST %d: %s, homed mask 0x%02x\n", cfg.homed_persist,
                 all ? "every axis enabled" : "an axis is disabled, cleared", d->still_homed);
@@ -3103,10 +3156,18 @@ bool KmBackend::measure_point(const char *file, int &row, int &col, int &index, 
 
 unsigned KmBackend::still_homed() const { return d->still_homed; }
 
+static const int N_PERSIST = 200;    // the board's persist.UserData[] (KMotionDef.h's N_USER_DATA_VARS)
+
 bool KmBackend::homed_persist_write(unsigned mask)
 {
-    if (d->cfg.simulate || d->cfg.homed_persist < 0) return false;
-    return persist_set(d->cfg.homed_persist, (int) mask);
+    // the protocol thread's, at a change of the homed mask: sent on the urgent queue, in order
+    // with the jogs and stops, so that thread never waits on the link (a WriteLine here held
+    // task's command lock 581 ms behind a status read, and 5.7 s once the board was lost)
+    if (d->cfg.simulate || d->cfg.homed_persist < 0 || d->cfg.homed_persist >= N_PERSIST) return false;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", d->cfg.homed_persist, mask);
+    d->send_urgent(cmd);
+    return true;
 }
 
 const KmAxisParams &KmBackend::axis_params(int axis) const
@@ -3121,11 +3182,9 @@ unsigned KmBackend::pc_result(int result)
 {
     char cmd[64];
     snprintf(cmd, sizeof cmd, "SetPersistDec %d %d", PC_COMM_PERSIST, result);
-    if (d->km->WriteLine(cmd)) d->message(std::string("board command failed: ") + cmd);
+    if (board_write(d, cmd)) d->message(std::string("board command failed: ") + cmd);
     return d->status_count;
 }
-
-static const int N_PERSIST = 200;    // the board's persist.UserData[] (KMotionDef.h's N_USER_DATA_VARS)
 
 bool KmBackend::persist_get(int index, int &value)
 {
@@ -3144,7 +3203,7 @@ bool KmBackend::persist_set(int index, int value)
     if (index < 0 || index >= N_PERSIST) return false;
     char cmd[64];
     snprintf(cmd, sizeof cmd, "SetPersistHex %d %x", index, (unsigned) value);
-    return d->km->WriteLine(cmd) == 0;
+    return board_write(d, cmd) == 0;
 }
 
 bool KmBackend::persist_get_double(int index, double &value)
@@ -3169,8 +3228,9 @@ bool KmBackend::gather_read_string(int word_offset, int max_words, std::string &
     const int L = d->board_type == BOARD_TYPE_KFLOP ? 8 : 256;
     char cmd[64], line[MAX_LINE + 1];
     snprintf(cmd, sizeof cmd, "GetGatherHex %d %d", word_offset, max_words);
+    LinkUse use(d);
     if (d->km->WaitToken(false, 5000, "kmotion-pccomm") != KMOTION_LOCKED) return false;
-    bool ok = d->km->WriteLine(cmd) == 0;
+    bool ok = board_write(d, cmd) == 0;
     const char *p = line;
     bool done = false;
     for (int i = 0; ok && i < max_words; i++) {
@@ -3201,8 +3261,9 @@ bool KmBackend::gather_write_string(int word_offset, const std::string &s)
     int nwords = (int) (s.size() + 1 + 3) / 4;
     char cmd[64];
     snprintf(cmd, sizeof cmd, "SetGatherHex %d %d", word_offset, nwords);
+    LinkUse use(d);
     if (d->km->WaitToken(false, 5000, "kmotion-pccomm") != KMOTION_LOCKED) return false;
-    bool ok = d->km->WriteLine(cmd) == 0;
+    bool ok = board_write(d, cmd) == 0;
     std::string line;
     for (int i = 0; ok && i < nwords; i++) {
         unsigned w = 0;
@@ -3215,7 +3276,7 @@ bool KmBackend::gather_write_string(int word_offset, const std::string &s)
         if (i % L) line += " ";
         line += hex;
         if (i % L == L - 1 || i == nwords - 1) {
-            ok = d->km->WriteLine(line.c_str()) == 0;
+            ok = board_write(d, line.c_str()) == 0;
             line.clear();
         }
     }
