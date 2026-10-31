@@ -29,11 +29,12 @@ Nothing else is installed on Windows: no Python, no compiler. Everything else go
    The `Description` line of that adapter is the name to use, for example `Intel(R) Ethernet Controller I226-V #2`. The VM gets its internet through the PC on its own, so the internet adapter matters only if the Kogna is on that same network.
    The same names appear after `Name:` in `& "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs`; the `VBoxNetworkName:` lines there, with their `HostInterfaceNetworking-` prefix, are not accepted.
    If the name is wrong, the script makes nothing and prints the accepted names; run it again with one of those.
-7. Make the VM (one line; the ISO name exactly as downloaded, the adapter name in quotes, or leave it out for a KFLOP):
+7. Make the VM (one line; the ISO name exactly as downloaded, the adapter name in quotes, then a folder for the shared folder):
 
-       .\vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "Intel(R) Ethernet Controller I226-V #2"
+       .\vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "Intel(R) Ethernet Controller I226-V #2" C:\ShareVM\kmotion
 
    The script stops with a message if the ISO or the adapter name is wrong, before it makes anything.
+   The last argument is a Windows folder the VM sees as `/mnt/kmotion` (the script creates it): the way to move files in and out, and where the **Migrate from KMotionCNC** icon looks for a copy of your KMotion installation. Any path is fine; without it the VM has no shared folder. For a KFLOP-only machine leave the adapter out but keep the folder: `.\vm-create.cmd C:\InstallLinuxCNC\debian-13.7.0-amd64-netinst.iso "" C:\ShareVM\kmotion`.
 
 8. Start it:
 
