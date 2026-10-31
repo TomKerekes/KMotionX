@@ -921,6 +921,7 @@ def find_installs():
         if not base.exists(): continue
         for p in sorted(base.glob("*")):
             if p.resolve() == ROOT.resolve(): continue            # this checkout has the files too
+            if (p / ".git").exists(): continue                     # a source checkout (KMotionSrcKogna), not an installation: --install names it
             if (p / "KMotion" / "Data" / "GCodeConfigCNC.txt").exists(): found.append(p)
     return sorted(found, key=lambda p: (p / "KMotion" / "Data" / "GCodeConfigCNC.txt").stat().st_mtime, reverse=True)
 
