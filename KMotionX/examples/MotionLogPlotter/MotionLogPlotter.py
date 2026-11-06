@@ -86,8 +86,8 @@ class Seg:
             self.total = self.dwell      # a dwell holds position
 
     def eval(self, t):
-        """8-axis positions (n, 8) at the local times t (array)."""
-        t = np.asarray(t, dtype=float)
+        """8-axis positions (n, 8) at the local times t (an array, or one time)."""
+        t = np.atleast_1d(np.asarray(t, dtype=float))   # one time too: the end-of-log velocity check passes a scalar
         if self.kind == 'K':
             tc = np.clip(t, 0.0, self.total)
             o = np.empty((t.size, 8))
