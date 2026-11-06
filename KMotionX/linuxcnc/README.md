@@ -521,6 +521,9 @@ program zeroes the positions and the test moves the axes.
   failed. `backend-test quit` covers the paused-mid-run case.
 - `SET_TERM_COND` (G61, G61.1, G64 P) goes to the planner's `SetPathMode`: blend mode with
   the programmed tolerance (0 = the ini's `CORNER_TOL`), exact stop at block ends otherwise.
+  LinuxCNC's canon starts every program in G64 with a blend tolerance of its own (0.001 in,
+  0.0254 on a mm machine); that value is taken as no tolerance given, so `CORNER_TOL` applies
+  as KMotionCNC's setup tolerance does, and a G64 P in the program is taken as given.
 - Corner tolerance matters a lot to TP3. At a corner it either blends within the tolerance
   at a kink speed cap of 8·(tol/2)/(|Δdir|·Tw), Tw = 3·accel/jerk being its filter window,
   or stops; with `CORNER_TOL = 0.0005` and jerk 984 that cap was 0.0067 in/s, and around

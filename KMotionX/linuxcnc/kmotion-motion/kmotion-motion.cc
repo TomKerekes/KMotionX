@@ -108,6 +108,7 @@ static bool always_homed = false;
 static unsigned homed_mask = 0;        // joints homed, as LinuxCNC's flags say (bit = joint)
 static unsigned still_homed = 0;       // HOMED_PERSIST's mask at the start, consumed as joints are homed from it
 static bool board_lost = false;        // the board went away: the machine is off and unhomed
+static bool machine_mm = false;        // [TRAJ] LINEAR_UNITS is mm (LinuxCNC's start-up blend tolerance is then 0.0254)
 static bool axes_seen_enabled = false; // since the ENABLE, every axis was seen enabled (the enable
                                        // program takes a moment): from then on a disabled axis -
                                        // a fault on the board, or the KMotion console - takes the
@@ -1965,10 +1966,23 @@ static void handle_command()
         log_print("SET_SCURVE_PEAK_SCALE scale=%.6g\n", c->scurve_peak_scale);
         emcmotStatus->scurve_peak_scale = c->scurve_peak_scale;
         break;
-    case EMCMOT_SET_TERM_COND:
-        log_print("SET_TERM_COND termCond=%d, tolerance=%.6g\n", c->termCond, c->tolerance);
-        if (km && !hold(*c, false)) to_planner(*c);   // G61/G61.1/G64 P, in order with the moves
+    case EMCMOT_SET_TERM_COND: {
+        // LinuxCNC's canon starts every program in G64 with a blend tolerance of its own:
+        // 0.001 in, 0.0254 on a mm machine (emccanon's INIT_CANON), sent at start-up and at
+        // every program start - not the program's word. KMotionCNC rounds within the setup's
+        // Corner Tolerance unless the program says G64 P, so that start-up value counts as no
+        // tolerance given and [KMOTION] CORNER_TOL applies (forwarded, it overrode CORNER_TOL
+        // on every run: Carl's 'C' was rounded at 0.001 whatever the ini said). A G64 P in the
+        // program is taken as given; a G64 without P arrives as 0 and means the same
+        emcmot_command_t cc = *c;
+        const double lcnc_default = machine_mm ? 0.001 * 25.4 : 0.001;
+        const bool start_default = c->termCond == 2 && fabs(c->tolerance - lcnc_default) < 1e-9;
+        if (start_default) cc.tolerance = 0;
+        log_print("SET_TERM_COND termCond=%d, tolerance=%.6g%s\n", c->termCond, c->tolerance,
+                  start_default ? " (LinuxCNC's start-up default: the ini's CORNER_TOL applies)" : "");
+        if (km && !hold(cc, false)) to_planner(cc);   // G61/G61.1/G64 P, in order with the moves
         break;
+    }
     case EMCMOT_SET_NUM_JOINTS:
         log_print("SET_NUM_JOINTS %d\n", c->joint);
         if (c->joint > 0 && c->joint <= EMCMOT_MAX_JOINTS) {
@@ -2507,6 +2521,7 @@ static bool read_pccomm_config(KmPcCommConfig &pc)
     if (const char *v = ini.get("EMC", "NML_FILE")) pc.nml_file = ini_relative(ini_path, v);
     if (const char *v = ini.get("RS274NGC", "PARAMETER_FILE")) pc.var_file = ini_relative(ini_path, v);
     if (const char *v = ini.get("TRAJ", "LINEAR_UNITS")) pc.machine_mm = !strncasecmp(v, "mm", 2) || !strncasecmp(v, "metric", 6);
+    machine_mm = pc.machine_mm;
     pc.max_feed_override = ini.num("DISPLAY", "MAX_FEED_OVERRIDE", pc.max_feed_override);
     pc.max_spindle_override = ini.num("DISPLAY", "MAX_SPINDLE_OVERRIDE", pc.max_spindle_override);
     pc.min_spindle_override = ini.num("DISPLAY", "MIN_SPINDLE_OVERRIDE", pc.min_spindle_override);
