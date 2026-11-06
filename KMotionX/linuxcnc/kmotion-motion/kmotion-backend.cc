@@ -58,9 +58,13 @@ static void err_handler(const char *msg)
     if (!g_message.empty()) g_message += " | ";
     g_message += msg;
 }
+static KmBackend::Impl *g_console_d = nullptr;   // the backend the console lines are logged to (one per process)
+static void trace_console(KmBackend::Impl *d, const char *msg);
+
 static int console_handler(const char *msg)     // the board's console output (printf from C programs)
 {
     fprintf(stderr, "kmotion-motion: board console: %s", msg);
+    if (g_console_d) trace_console(g_console_d, msg);     // and the log, with the time: what the board said when
     return 0;
 }
 
@@ -226,6 +230,8 @@ struct KmBackend::Impl {
     std::deque<int> ids;            // LinuxCNC id per sequence number, ids[0] is for done_upto + 1
     bool unflushed = false;         // moves handed over since the last flush
     double last_move_t = 0;
+    double last_status_ok = 0;      // when the last good status read ended (the poller's log of gaps and losses)
+    double lost_t = 0;              // when the board was declared lost
     double last_full_t = 0;         // when task's queue was last seen full (it needs a moment to refill)
     double pos[9];
     double cmd_end[8];              // where the last move handed to the planner ends (its own
@@ -980,6 +986,13 @@ bool km_status_has_bit(int bit)
 // the probe watcher's persist variables (configs/kmotion-minirouter/probe/ProbeService.c)
 enum { P_ARM = 69, P_STATUS = 70, P_BIT = 71, P_LEVEL = 72, P_AWAY = 73, P_POS = 74 };
 
+static void trace_console(KmBackend::Impl *d, const char *msg)
+{
+    std::string m = std::string("board console: ") + msg;
+    while (!m.empty() && (m.back() == '\n' || m.back() == '\r')) m.pop_back();
+    d->trace(m);
+}
+
 static void w_poll_board(KmBackend::Impl *d)
 {
     CCoordMotion *cm = d->cm;
@@ -992,8 +1005,23 @@ static void w_poll_board(KmBackend::Impl *d)
     double t_read = now_s();
     int tok = d->km->WaitToken(false, 100, "kmotion-motion");
     if (tok == KMOTION_IN_USE) return;      // another client holds the board (a download, say): no loss
+    // the lost and back events go to the log with their timing: how long the failing read
+    // took, how long before it the last status came, and how long the board was gone - the
+    // link's stalls are seen from here only (a USB passthrough that goes quiet, say)
+    auto lost_trace = [d](const char *why, double took) {
+        char t[200];
+        double now = now_s();
+        snprintf(t, sizeof t, "lost the board: %s; the read took %.3f s, the last good status %.3f s before, status read %u",
+                 why, took, d->last_status_ok > 0 ? now - took - d->last_status_ok : -1.0, d->status_count.load());
+        d->trace(t);
+        d->lost_t = now;
+    };
     if (tok != KMOTION_LOCKED) {
-        if (d->connected) { fprintf(stderr, "kmotion-motion: lost the board: no answer\n"); d->lost = true; d->board_init_done = false; }
+        if (d->connected) {
+            fprintf(stderr, "kmotion-motion: lost the board: no answer\n");
+            lost_trace("no answer (the token)", now_s() - t_read);
+            d->lost = true; d->board_init_done = false;
+        }
         d->connected = false;
         return;
     }
@@ -1003,15 +1031,11 @@ static void w_poll_board(KmBackend::Impl *d)
     // a record of the wrong size is stale bytes from a reply nobody finished reading (the
     // board rebooted mid-record, or a client quit mid-record): out of step with the board
     if (r == 0 && (status.VersionAndSize & 0xffff) != (int) (sizeof status / sizeof(int))) r = -1;
-    {
-        static double last_ok = 0;
-        double now = now_s();
-        if (getenv("KM_DEBUG_STOP") && last_ok > 0 && now - last_ok > 0.2) fprintf(stderr, "kmotion-motion: status gap %.3f s\n", now - last_ok);
-        last_ok = now;
-    }
     if (r) {
         if (d->connected) {
-            fprintf(stderr, "kmotion-motion: lost the board: %s\n", r < 0 ? "a status record of the wrong size" : "GetStatus failed");
+            const char *why = r < 0 ? "a status record of the wrong size" : "GetStatus failed";
+            fprintf(stderr, "kmotion-motion: lost the board: %s\n", why);
+            lost_trace(why, t_read);
             d->lost = true;
             // the board that comes back may be another one, or this one rebooted (a KFLOP
             // swapped for a Kogna, a power cycle): the next Machine on runs the init and
@@ -1025,7 +1049,23 @@ static void w_poll_board(KmBackend::Impl *d)
         d->connected = false;
         return;
     }
-    if (d->lost) { d->lost = false; d->ever_enabled = 0; d->message("the board is back"); }
+    if (d->lost) {
+        d->lost = false; d->ever_enabled = 0; d->message("the board is back");
+        char t[120];
+        snprintf(t, sizeof t, "the board is back: gone %.3f s, this read took %.3f s", now_s() - d->lost_t, t_read);
+        d->trace(t);
+    }
+    {
+        // a gap between good status reads, in the log (over 0.5 s: a stall, not the period)
+        double now = now_s();
+        if (d->last_status_ok > 0 && now - d->last_status_ok > 0.5) {
+            char t[120];
+            snprintf(t, sizeof t, "status gap %.3f s (this read took %.3f s)", now - d->last_status_ok, t_read);
+            d->trace(t);
+        }
+        if (getenv("KM_DEBUG_STOP") && d->last_status_ok > 0 && now - d->last_status_ok > 0.2) fprintf(stderr, "kmotion-motion: status gap %.3f s\n", now - d->last_status_ok);
+        d->last_status_ok = now;
+    }
     d->connected = true;
     d->stop_state = status.StopImmediateState;
     d->status_count++;
@@ -2770,6 +2810,7 @@ static bool board_connect(KmBackend::Impl *d)
                        "attached to this machine, and not held by another program?)");
     fprintf(stderr, "kmotion-motion: connected to a %s\n", type == BOARD_TYPE_KOGNA ? "Kogna" : "KFLOP");
     d->board_type = type;
+    g_console_d = d;
     d->km->SetConsoleCallback(console_handler);     // registers with the server: board mode only
     if (cm->SetAxisDefinitions(cfg.channel[0], cfg.channel[1], cfg.channel[2], cfg.channel[3],
                                cfg.channel[4], cfg.channel[5], cfg.channel[6], cfg.channel[7]))

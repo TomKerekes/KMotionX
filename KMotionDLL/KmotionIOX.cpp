@@ -1083,6 +1083,10 @@ int CKMotionIO::ReadLineTimeOutRaw(char *buf, int TimeOutms)
 
 		if (!NO_KMOTION_TIMEOUT && Timer.Elapsed_Seconds() * 1000.0 > TimeOutms)
 		{
+			// a command's reply that never came (the short polls of the console and the
+			// ready check time out as a matter of course: not those)
+			if (TimeOutms >= 1000)
+				log_info("a reply timed out after %d ms with %d byte(s) received", TimeOutms, TotalBytes);
 			Mutex->Unlock();
 			return 2;  // return with timeout indication
 		}
@@ -1168,11 +1172,23 @@ int CKMotionIO::WriteLineWithEcho(const char *s)
 	
 	if((unsigned int)Actual_ID > MAX_USB_ID)
 	{
-		if (SendSocketNonBlock(s2, length)) return 1;
+		if (SendSocketNonBlock(s2, length)) { Mutex->Unlock(); return 1; }
 	}
 	else
 	{
+		// a write that fails or falls short used to pass as sent: the board then lacked a
+		// command (or part of a line) and nobody knew. Logged and reported as a failure
 		ftStatus = ftdi_write_data(ftdi,(unsigned char *)s2,length);
+		if (ftStatus != length)
+		{
+			if (ftStatus < 0) {
+				log_info("FAIL: ftdi_write_data status: %d (%s), %d byte(s) not sent", ftStatus, ftdi_get_error_string(ftdi), length);
+			} else {
+				log_info("FAIL: ftdi_write_data wrote %d of %d byte(s)", ftStatus, length);
+			}
+			Mutex->Unlock();
+			return 1;
+		}
 	}
 
 	Mutex->Unlock();
