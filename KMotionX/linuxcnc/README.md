@@ -262,8 +262,12 @@ installation from scratch, with its scripts.
     action runs with the pocket and the tool ID as ints in `<var>` and `<var>+1`, as KMotionCNC's
     M6 action writes them, so a KMotionCNC ToolChange.c runs unchanged; LinuxCNC waits for it,
     then M61 marks the tool in the spindle (G43 applies the offset as always). The bench's
-    `ToolChange.c` prints the two. Without the key and the remap, M6 is LinuxCNC's own:
-    iocontrol's tool-change pins, looped back in the HAL file.
+    `ToolChange.c` prints the two. A tool change program may redefine the board's coordinate
+    system (a Z axis per spindle: DefineCoordSystem with the other Z channel); the module reads
+    it back after the program (as after the init programs) and its channel map follows, so the
+    joints, enables, homing and jogs go by the new channel and Z stands where that channel is.
+    Without the key and the remap, M6 is LinuxCNC's own: iocontrol's tool-change pins, looped
+    back in the HAL file.
   - **Probing, G38.2-G38.5** (`[KMOTION] PROBE_BIT`, `PROBE_ACTIVE`): the planner runs the
     probe move like any move, so any kinematics apply (3Link included), while the probe
     watcher, `ServiceProbe()` (`configs/kmotion-minirouter/probe/ProbeService.c`, after Dynomotion's

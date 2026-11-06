@@ -906,6 +906,38 @@ static bool read_board_position(KmBackend::Impl *d)
     return true;
 }
 
+// a board program may redefine the coordinate system - a machine with a Z axis per spindle
+// switches Z between two channels in its tool change program (DefineCoordSystem), as Carl's
+// MakeToolActive does: read it back and follow it, as KMotionCNC's interpreter re-reads it
+// after a program. channel[] is what the status's joints, enables and done bits, the homing
+// and the jogs go by; then the position, as the axis stands where its new channel is
+static void follow_board_cs(KmBackend::Impl *d, const char *after)
+{
+    if (d->cfg.simulate) return;
+    int ch[8];
+    {
+        LinkUse use(d);
+        d->cm->m_DefineCS_valid = false;             // GetAxisDefinitions asks the board (DefineCSEx)
+        int r = d->cm->GetAxisDefinitions(&ch[0], &ch[1], &ch[2], &ch[3], &ch[4], &ch[5], &ch[6], &ch[7]);
+        d->cm->m_DefineCS_valid = true;              // cached again either way: the axes it holds now
+        if (r) {
+            d->message(std::string("reading the board's coordinate system after ") + after + " failed (DefineCSEx)");
+            return;
+        }
+    }
+    bool same = true;
+    for (int i = 0; i < 8; i++) if (ch[i] != d->cfg.channel[i]) same = false;
+    if (same) return;
+    char t[300];
+    snprintf(t, sizeof t, "after %s the board's coordinate system is X%d Y%d Z%d A%d B%d C%d U%d V%d, was X%d Y%d Z%d A%d B%d C%d U%d V%d: "
+             "the channel map follows", after, ch[0], ch[1], ch[2], ch[3], ch[4], ch[5], ch[6], ch[7],
+             d->cfg.channel[0], d->cfg.channel[1], d->cfg.channel[2], d->cfg.channel[3], d->cfg.channel[4], d->cfg.channel[5],
+             d->cfg.channel[6], d->cfg.channel[7]);
+    d->trace(t);
+    for (int i = 0; i < 8; i++) d->cfg.channel[i] = ch[i];
+    if (read_board_position(d)) set_cm_position(d, d->pos);
+}
+
 // an I/O bit's state as MAIN_STATUS carries it, KMotion's numbering (KMotion.exe's Digital I/O
 // pages read them the same way): 1 or 0, or -1 for a bit the status does not carry
 static int status_bit(const MAIN_STATUS &st, int b)
@@ -2485,6 +2517,7 @@ static void worker_main(KmBackend::Impl *d)
                     // M6 (the remap): [KMOTION] TOOL_CHANGE with the pocket and the tool ID
                     const double pq[2] = {c.p, c.q};
                     r = w_action(d, d->cfg.tool_change, 6, 0, [] {}, pq, true);
+                    if (r == 0) follow_board_cs(d, "the tool change");   // it may have moved Z to another channel
                 }
                 d->mcode_result = r;
                 d->mcode_done = c.ticket;
@@ -2794,6 +2827,7 @@ static bool board_init_programs(KmBackend::Impl *d)
         if (run_program(d, prog.c_str(), cfg.init_thread)) return false;
     for (const auto &sp : cfg.start_programs)
         if (start_program(d, sp.second.c_str(), sp.first)) return false;
+    follow_board_cs(d, "the init programs");        // an init program's DefineCoordSystem may differ from CHANNELS
     d->init_done_count = d->status_count;
     d->start_stopped = 0;
     d->board_init_done = true;

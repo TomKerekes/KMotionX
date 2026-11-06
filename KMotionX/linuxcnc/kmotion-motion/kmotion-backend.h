@@ -75,7 +75,8 @@ struct KmConfig {
                                   // corner blend is a facet of a curve, not a corner (CURVE_FACETS)
     double lookahead = 3.0;
     KmAxisParams axis[8];
-    int channel[8] = {0, 1, 2, -1, -1, -1, -1, -1};   // board channel per axis (DefineCS)
+    int channel[8] = {0, 1, 2, -1, -1, -1, -1, -1};   // board channel per axis (DefineCS) at the start; it follows the
+                                                       // board's after the init programs and a tool change program
     // the planner's kinematics: "" = linear, each axis its own actuator; else a name
     // Data/Kinematics.txt takes (3Link, Scara, Geppetto, ...), and the actuators are
     // LinuxCNC's joints
