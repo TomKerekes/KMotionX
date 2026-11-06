@@ -24,7 +24,21 @@ desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 
 launchers="kmotion-tool kogna-console motion-log-plotter pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 stale="linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop"   # earlier names of the bench launcher, removed on an install
+builtin_configs="kmotion-minirouter kmotion-3link kmotion-sim"   # the launchers written above, by hand
 sizes="16 32 48 64 128 256"
+
+# extra_configs: every other folder under linuxcnc/configs/ with an ini of its own name
+# (a migrated KMotionCNC setup, say: configs/carl/carl.ini) gets a launcher of its own,
+# linuxcnc-<folder>, so a machine's icon is not a hand edit of the bench one that the
+# next install overwrites
+extra_configs() {
+    local d n
+    for d in "$lcnc_tree"/configs/*/; do
+        n=$(basename "$d")
+        case " $builtin_configs " in *" $n "*) continue ;; esac
+        [ -f "$d/$n.ini" ] && printf '%s\n' "$n"
+    done
+}
 
 note() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -36,6 +50,7 @@ refresh() {
 
 if [ "${1:-}" = "--remove" ]; then
     for l in $launchers $stale; do rm -f "$apps/$l.desktop" "$desktop/$l.desktop"; done
+    for n in $(extra_configs); do rm -f "$apps/linuxcnc-$n.desktop" "$desktop/linuxcnc-$n.desktop"; done
     rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/clipboard-png.desktop"; pkill -f '[c]lipboard-png$' || true
     for n in $sizes; do rm -f "$icons/${n}x${n}/apps/kmotion-tool.png" "$icons/${n}x${n}/apps/motion-log-plotter.png"; done
     rm -f "$icons/scalable/apps/linuxcncicon.svg" "$icons/48x48/apps/linuxcncicon.png"
@@ -273,6 +288,26 @@ StartupNotify=false
 Categories=Science;Engineering;X-CNC;
 Keywords=cnc;linuxcnc;kmotion;kogna;3link;robot;
 END
+    # a launcher per further configuration folder, named after it; the ini's [EMC] MACHINE
+    # line is the description
+    for n in $(extra_configs); do
+        ini="$lcnc_tree/configs/$n/$n.ini"
+        machine=$(sed -n 's/^[[:space:]]*MACHINE[[:space:]]*=[[:space:]]*//p' "$ini" | head -1)
+        [ -n "$machine" ] || machine="LinuxCNC with KMotion's trajectory planner"
+        write_launcher "linuxcnc-$n" <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LinuxCNC ($n)
+Comment=$machine ($n.ini)
+Exec="$linuxcnc" "$ini"
+Icon=linuxcncicon
+Terminal=false
+StartupNotify=false
+Categories=Science;Engineering;X-CNC;
+Keywords=cnc;linuxcnc;kmotion;$n;
+END
+    done
 fi
 
 refresh
