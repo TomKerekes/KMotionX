@@ -75,6 +75,10 @@ struct KmConfig {
                                   // corner blend is a facet of a curve, not a corner (CURVE_FACETS)
     double lookahead = 3.0;
     KmAxisParams axis[8];
+    bool arcs_to_segs = true;     // the standard planner chords arcs finer than COLLINEAR_TOL (KMotionCNC's Arcs To Segs,
+                                  // its default): every junction line-to-line, rounded within CORNER_TOL and limited by
+                                  // lateral acceleration. Off: an arc goes to the board as one arc segment, its junctions
+                                  // with lines or other arcs unrounded kinks
     int channel[8] = {0, 1, 2, -1, -1, -1, -1, -1};   // board channel per axis (DefineCS) at the start; it follows the
                                                        // board's after the init programs and a tool change program
     // the planner's kinematics: "" = linear, each axis its own actuator; else a name

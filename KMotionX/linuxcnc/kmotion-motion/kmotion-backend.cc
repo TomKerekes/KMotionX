@@ -2909,6 +2909,7 @@ bool KmBackend::init(const KmConfig &cfg, const double pos[9])
     MP->CornerTol = cfg.corner_tol;
     MP->FacetAngle = cfg.facet_angle;
     MP->CurveFacets = cfg.curve_facets;
+    MP->ArcsToSegs = cfg.arcs_to_segs;        // the library's default is off; KMotionCNC's and the ini's is on
     MP->TPLookahead = cfg.lookahead;
     MP->MaxRapidFRO = 1.0;
     MP->DegreesA = MP->DegreesB = MP->DegreesC = true;

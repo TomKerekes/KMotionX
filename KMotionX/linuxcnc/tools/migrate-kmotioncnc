@@ -802,6 +802,7 @@ class Migration:
         w(f"COLLINEAR_TOL = {self.num('m_CollinearTol', 0.0005):g}")
         w(f"CORNER_TOL = {self.num('m_CornerTol', 0.003):g}")
         w(f"FACET_ANGLE = {self.num('m_FacetAngle', 0.5):g}")
+        w(f"ARCS_TO_SEGS = {int(self.num('m_ArcsToSegs', 1))}             ; KMotionCNC's Arcs To Segs: arcs as chords within COLLINEAR_TOL, every junction rounded")
         w("CURVE_FACETS = 1")
         w(f"LOOKAHEAD = {self.num('m_TPLookahead', 3.0):g}")
         w("# board channel per axis X Y Z A B C U V (the coordinate system, from the INIT program's DefineCoordSystem)")

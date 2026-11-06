@@ -2469,6 +2469,7 @@ static bool read_kmotion_config(KmConfig &cfg)
     cfg.corner_tol = ini.num(K, "CORNER_TOL", cfg.corner_tol);
     cfg.facet_angle = ini.num(K, "FACET_ANGLE", cfg.facet_angle);
     cfg.curve_facets = ini.num(K, "CURVE_FACETS", 1) != 0;
+    cfg.arcs_to_segs = ini.num(K, "ARCS_TO_SEGS", 1) != 0;
     cfg.lookahead = ini.num(K, "LOOKAHEAD", cfg.lookahead);
     const char *coords = ini.get("TRAJ", "COORDINATES");
     const char *channels = ini.get(K, "CHANNELS");
@@ -2766,7 +2767,8 @@ int main(int argc, char *argv[])
         }
         still_homed = km->still_homed();
         log_print("motion: %s; planner %s%s%s; axes", km->mode_name(), cfg.third_order ? "3rd order" : "standard",
-                  cfg.third_order && cfg.cubic_knots ? ", cubic knots" : "", cfg.actuator_limits ? ", actuator limits" : ", axis limits");
+                  cfg.third_order && cfg.cubic_knots ? ", cubic knots" : (!cfg.third_order && cfg.arcs_to_segs ? ", arcs to segs" : ""),
+                  cfg.actuator_limits ? ", actuator limits" : ", axis limits");
         for (int i = 0; i < 8; i++)
             if (cfg.axis[i].counts_per_unit > 0 && cfg.axis[i].max_vel > 0)
                 log_print(" %c: %g counts, vel %g, accel %g, jerk %g;", "XYZABCUV"[i], cfg.axis[i].counts_per_unit,
