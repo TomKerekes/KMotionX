@@ -23,6 +23,10 @@ exec > >(tee -a build.log) 2>&1
 echo "==== $(date) live image build in $WORK"
 command -v lb >/dev/null || { apt-get update -q; apt-get install -y -q live-build; }
 df -h "$WORK" | tail -1
+# the image is about 5 GB and the chroot 14 GB: 22 GB free to be safe (the first run on a 38 GB VM
+# ran out at the ISO step; finish-iso.sh completes such a build)
+free_gb=$(df -BG --output=avail "$WORK" | tail -1 | tr -dc 0-9)
+[ "$free_gb" -ge 22 ] || echo "note: $free_gb GB free; the build wants about 22 GB - if the ISO step runs out, finish-iso.sh completes it"
 # a fresh configuration each time (lb config is not idempotent across option changes); the
 # cache/ of downloaded packages and the bootstrap stays
 if [ -d config ]; then lb clean; rm -rf config; fi
@@ -33,8 +37,8 @@ lb config \
     --archive-areas "main contrib non-free non-free-firmware" \
     --debian-installer live \
     --debian-installer-gui true \
-    --firmware-chroot true \
-    --firmware-binary true \
+    --firmware-chroot false \
+    --firmware-binary false \
     --memtest none \
     --bootappend-live "boot=live components username=cnc hostname=kmotion locales=en_US.UTF-8 keyboard-layouts=us" \
     --iso-application "LinuxCNC on KMotion" \
@@ -51,3 +55,6 @@ iso="kmotion-linuxcnc-$(date +%Y%m%d).iso"
 mv -f live-image-amd64.hybrid.iso "$iso"
 chown "$owner": "$iso" build.log 2>/dev/null || true
 echo "==== $(date) done: $WORK/$iso ($(du -h "$iso" | cut -f1))"
+if [ -d /mnt/kmotion ] && [ -w /mnt/kmotion ]; then mv -f "$iso" /mnt/kmotion/ && echo "moved to /mnt/kmotion/$iso (the shared folder)"; fi
+echo "==== removing the chroot (14 GB); the package cache stays for the next build"
+lb clean --chroot 2>/dev/null || rm -rf chroot
