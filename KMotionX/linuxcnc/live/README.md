@@ -12,4 +12,7 @@ paths of the install are in /home/cnc. The build takes about 40 minutes on the V
 and removing the chroot). The ISO is 4.7 GB - a USB stick, not a DVD. `vm-test-iso.cmd` on the
 Windows host boots it in a throwaway VirtualBox VM. `~/live/build.log` has everything.
 Not in the image yet: KMotionXCNC (the web UI). Known: the module's `make test` prints nothing inside
-the chroot (to be looked at); the disk installer must be given the user name `cnc`.
+the chroot (to be looked at); the disk installer must be given the user name `cnc`; in a VirtualBox VM the
+live system has no Guest Additions (Debian 13 ships only their ISO, `virtualbox-guest-additions-iso`; building
+them into the image for its kernel is a to-do), so the mouse works only as a USB tablet (`vm-test-iso.cmd` sets
+that) and the display does not follow the window. Real hardware is unaffected.

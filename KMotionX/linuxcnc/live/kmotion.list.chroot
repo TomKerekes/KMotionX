@@ -23,7 +23,3 @@ gvfs
 udisks2
 # the "check disc" media check of the boot menu
 isomd5sum
-# in a VirtualBox VM: mouse integration, a display that follows the window, the shared clipboard
-# (Debian's packages, from contrib; inert on real hardware)
-virtualbox-guest-utils
-virtualbox-guest-x11
