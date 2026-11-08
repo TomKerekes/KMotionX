@@ -21,3 +21,5 @@ thunar
 mousepad
 gvfs
 udisks2
+# the "check disc" media check of the boot menu
+isomd5sum
