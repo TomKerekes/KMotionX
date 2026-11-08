@@ -35,6 +35,8 @@ lb config \
     --architectures amd64 \
     --binary-images iso-hybrid \
     --archive-areas "main contrib non-free non-free-firmware" \
+    --security false \
+    --updates false \
     --debian-installer live \
     --debian-installer-gui true \
     --firmware-chroot false \
@@ -49,12 +51,22 @@ mkdir -p config/package-lists config/hooks/live
 cp "$here/kmotion.list.chroot" config/package-lists/
 cp "$here/0100-kmotion.hook.chroot" config/hooks/live/
 chmod +x config/hooks/live/0100-kmotion.hook.chroot
+# (--security/--updates false: one kernel. With them, the binary stage installed linux-image-amd64
+# again and got a newer kernel from the security mirror than the filesystem was built with; the
+# generic /live/vmlinuz then booted a kernel without its modules - no keyboard, no mouse. The
+# image takes updates through apt once installed.)
 echo "==== $(date) lb build"
-lb build
-iso="kmotion-linuxcnc-$(date +%Y%m%d).iso"
-mv -f live-image-amd64.hybrid.iso "$iso"
-chown "$owner": "$iso" build.log 2>/dev/null || true
-echo "==== $(date) done: $WORK/$iso ($(du -h "$iso" | cut -f1))"
-if [ -d /mnt/kmotion ] && [ -w /mnt/kmotion ]; then mv -f "$iso" /mnt/kmotion/ && echo "moved to /mnt/kmotion/$iso (the shared folder)"; fi
-echo "==== removing the chroot (14 GB); the package cache stays for the next build"
-lb clean --chroot 2>/dev/null || rm -rf chroot
+lb build || echo "lb build ended with $?: if everything but the ISO was made, finish-iso.sh completes it"
+if [ -f live-image-amd64.hybrid.iso ]; then
+    iso="kmotion-linuxcnc-$(date +%Y%m%d).iso"
+    mv -f live-image-amd64.hybrid.iso "$iso"
+    chown "$owner": "$iso" build.log 2>/dev/null || true
+    echo "==== $(date) done: $WORK/$iso ($(du -h "$iso" | cut -f1))"
+    if [ -d /mnt/kmotion ] && [ -w /mnt/kmotion ]; then mv -f "$iso" /mnt/kmotion/ && echo "moved to /mnt/kmotion/$iso (the shared folder)"; fi
+    echo "==== removing the chroot (14 GB); the package cache stays for the next build"
+    lb clean --chroot 2>/dev/null || rm -rf chroot
+else
+    # the ISO step ran out of disk (the usual case on a 38 GB VM): write it onto the shared folder
+    echo "==== $(date) no ISO in $WORK: finishing it onto the shared folder"
+    exec bash "$here/finish-iso.sh" "$WORK"
+fi
