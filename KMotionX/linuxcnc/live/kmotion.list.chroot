@@ -1,0 +1,23 @@
+# the live image's own packages; install-vm.sh adds everything KMotionX and LinuxCNC need
+task-xfce-desktop
+xfce4-terminal
+lightdm
+sudo
+git
+curl
+ca-certificates
+network-manager
+firmware-linux
+firmware-linux-nonfree
+firmware-realtek
+firmware-iwlwifi
+firmware-atheros
+firmware-misc-nonfree
+locales
+console-setup
+keyboard-configuration
+firefox-esr
+thunar
+mousepad
+gvfs
+udisks2

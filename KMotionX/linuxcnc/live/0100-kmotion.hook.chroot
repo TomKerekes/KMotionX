@@ -1,0 +1,34 @@
+#!/bin/sh
+# live-build chroot hook: the KMotion / LinuxCNC install inside the image, as user cnc, with the
+# repository's own installer (install-vm.sh --image: no VM steps). Runs as root at build time,
+# with the network; takes an hour or more (LinuxCNC and KMotionX are built here).
+set -e
+USERNAME=cnc
+PASSWORD=cnc
+REPO=${KMOTIONX_REPO:-https://github.com/TomKerekes/KMotionX.git}
+BRANCH=${KMOTIONX_BRANCH:-master}
+echo "==== kmotion hook: user $USERNAME"
+if ! id "$USERNAME" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -c "LinuxCNC on KMotion" "$USERNAME"
+    echo "$USERNAME:$PASSWORD" | chpasswd
+fi
+for g in sudo plugdev dialout input video audio netdev; do getent group $g >/dev/null && usermod -aG $g "$USERNAME"; done
+# the live user's sudo without a password, as Debian's live images have it; live-config leaves the
+# user alone, it exists already (the stamp), and logs it in (username= on the kernel command line)
+echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/live-$USERNAME
+chmod 440 /etc/sudoers.d/live-$USERNAME
+mkdir -p /var/lib/live/config && touch /var/lib/live/config/user-setup
+echo "==== kmotion hook: the checkout"
+HOME_DIR=$(getent passwd "$USERNAME" | cut -d: -f6)
+if [ ! -d "$HOME_DIR/KMotionX/.git" ]; then
+    su - "$USERNAME" -c "git clone --branch $BRANCH $REPO ~/KMotionX"
+fi
+echo "==== kmotion hook: install-vm.sh --image (the whole install; a long while)"
+export DEBIAN_FRONTEND=noninteractive
+su - "$USERNAME" -c "bash ~/KMotionX/KMotionX/linuxcnc/install/install-vm.sh --image"
+echo "==== kmotion hook: tidying"
+# the build trees' objects stay (a rebuild on the installed machine is incremental); the apt lists
+# and caches go (live-build cleans the rest)
+apt-get clean
+rm -f /etc/sudoers.d/README 2>/dev/null || true
+echo "==== kmotion hook: done"

@@ -11,6 +11,8 @@
 #     --dry-run        print the commands, run nothing
 #     --no-linuxcnc    skip the LinuxCNC tree (KMotionX and the tool only)
 #     --no-icons       no desktop icons
+#     --image          building a live image (live/build.sh runs this in the chroot): no kernel headers
+#                      for the running kernel, no Guest Additions, no network profile, udev not reloaded
 # Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX),
 #     LINUXCNC_COMMIT (514be4f657), LINUXCNC_DIR (~/linuxcnc-dev),
 #     KOGNA_IF (the bridged interface to the Kogna, e.g. enp0s8: a DHCP profile is made for it)
@@ -32,12 +34,13 @@ LINUXCNC_REPO=${LINUXCNC_REPO:-https://github.com/LinuxCNC/linuxcnc.git}
 LINUXCNC_COMMIT=${LINUXCNC_COMMIT:-514be4f657}
 LINUXCNC_DIR=${LINUXCNC_DIR:-$HOME/linuxcnc-dev}
 KOGNA_IF=${KOGNA_IF:-}
-DRY=0; DO_LINUXCNC=1; DO_ICONS=1
+DRY=0; DO_LINUXCNC=1; DO_ICONS=1; IMAGE=0
 for a in "$@"; do
     case $a in
         --dry-run) DRY=1;;
         --no-linuxcnc) DO_LINUXCNC=0;;
         --no-icons) DO_ICONS=0;;
+        --image) IMAGE=1;;
         -h|--help) sed -n '2,20p' "$0"; exit 0;;
         *) echo "unknown option $a"; exit 2;;
     esac
@@ -65,7 +68,7 @@ python3-zmq tcl tcl8.6-dev tclx tk8.6-dev yapps2 libftdi1-dev python3-pyside6.qt
 python3-pyside6.qtgui python3-pyside6.qtcore network-manager dkms tio geany"
 # the Guest Additions build against the running kernel: its headers, not the metapackage (which
 # brought the standard kernel along onto a VM running the real-time one, and made it the default)
-PACKAGES="$PACKAGES linux-headers-$(uname -r)"
+[ $IMAGE = 1 ] || PACKAGES="$PACKAGES linux-headers-$(uname -r)"
 
 step "Debian"
 . /etc/os-release
@@ -117,14 +120,12 @@ if [ ! -f /etc/udev/rules.d/90-kflop.rules ]; then
     # (90-: after Debian's 50-udev-default, which overrode the old 10.kflop.rules' mode)
     run sudo cp "$KMOTIONX_DIR/KMotionX/usb/etc/udev/rules.d/90-kflop.rules" /etc/udev/rules.d/
     [ -f /etc/udev/rules.d/10.kflop.rules ] && run sudo rm -f /etc/udev/rules.d/10.kflop.rules
-    run sudo udevadm control --reload-rules
-    run sudo udevadm trigger
+    [ $IMAGE = 1 ] || { run sudo udevadm control --reload-rules; run sudo udevadm trigger; }
 else note "KFLOP udev rule already installed"; fi
 if [ ! -f /etc/udev/rules.d/11.joystick.rules ]; then
     # a game pad readable by the logged-in user, for the configs' gamepad.hal
     run sudo cp "$KMOTIONX_DIR/KMotionX/usb/etc/udev/rules.d/11.joystick.rules" /etc/udev/rules.d/
-    run sudo udevadm control --reload-rules
-    run sudo udevadm trigger
+    [ $IMAGE = 1 ] || { run sudo udevadm control --reload-rules; run sudo udevadm trigger; }
 else note "joystick udev rule already installed"; fi
 for g in plugdev dialout vboxsf; do
     if getent group $g > /dev/null && ! id -nG | grep -qw $g; then run sudo usermod -aG $g "$USER"; GROUPS_CHANGED=1; fi
@@ -169,7 +170,8 @@ fi
 step "VirtualBox Guest Additions (shared clipboard, drag and drop, a resizable display)"
 # from the disc vm-create attached (or one inserted by hand: Devices > Insert Guest Additions CD),
 # wherever the desktop mounted it or not mounted at all; the packages step put the headers and dkms in
-if ! grep -q '^flags.*hypervisor' /proc/cpuinfo 2>/dev/null; then note "not a VM: skipped"
+if [ $IMAGE = 1 ]; then note "a live image: skipped (the image runs on real hardware or in any VM)"
+elif ! grep -q '^flags.*hypervisor' /proc/cpuinfo 2>/dev/null; then note "not a VM: skipped"
 elif command -v VBoxClient >/dev/null 2>&1; then note "already installed ($(VBoxClient --version 2>/dev/null || echo installed))"
 else
     GA=""
@@ -215,6 +217,7 @@ if [ $DO_ICONS = 1 ]; then
 fi
 
 step "the Kogna's network"
+if [ $IMAGE = 1 ]; then note "a live image: skipped (NetworkManager makes the profile on the machine it runs on)"; else
 # KOGNA_IF not given: a wired interface without an IPv4 address is one nothing manages yet -
 # the bridge to a Kogna that is its own DHCP server (NetworkManager makes no profile for a link
 # that answers no DHCP at install time); an interface that has an address (the internet's, or
@@ -237,6 +240,8 @@ if [ -n "$KOGNA_IF" ]; then
     fi
 else
     note "every wired interface has an address: nothing to do (a Kogna on a router's network is reached through the interface on that network)"
+fi
+
 fi
 
 step "done"
