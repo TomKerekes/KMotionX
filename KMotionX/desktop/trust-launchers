@@ -1,0 +1,17 @@
+#!/bin/bash
+# trust-launchers: mark the KMotion / LinuxCNC desktop launchers as trusted for this login, so Xfce
+# runs them on a double-click without the "Untrusted application launcher" question. The mark is
+# gio metadata keyed to the file's identity, so one made at install time does not survive a change of
+# filesystem (a live image's squashfs, a copied home); run at every login from the autostart entry
+# install-desktop-icons.sh makes. Only launchers of this checkout and its LinuxCNC tree are marked.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # .../KMotionX/KMotionX/desktop
+root=$(cd "$here/../.." && pwd)                        # the checkout
+command -v gio >/dev/null || exit 0
+desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true); [ -n "$desktop" ] || desktop="$HOME/Desktop"
+for f in "$desktop"/*.desktop; do
+    [ -f "$f" ] || continue
+    grep -q "^Exec=.*\($root\|linuxcnc\)" "$f" 2>/dev/null || continue
+    chmod +x "$f" 2>/dev/null || true
+    gio set -t string "$f" metadata::xfce-exe-checksum "$(sha256sum "$f" | cut -d' ' -f1)" 2>/dev/null || true
+    gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+done

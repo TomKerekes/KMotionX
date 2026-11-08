@@ -52,6 +52,7 @@ if [ "${1:-}" = "--remove" ]; then
     for l in $launchers $stale; do rm -f "$apps/$l.desktop" "$desktop/$l.desktop"; done
     for n in $(extra_configs); do rm -f "$apps/linuxcnc-$n.desktop" "$desktop/linuxcnc-$n.desktop"; done
     rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/clipboard-png.desktop"; pkill -f '[c]lipboard-png$' || true
+    rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/kmotion-trust-launchers.desktop"
     for n in $sizes; do rm -f "$icons/${n}x${n}/apps/kmotion-tool.png" "$icons/${n}x${n}/apps/motion-log-plotter.png"; done
     rm -f "$icons/scalable/apps/linuxcncicon.svg" "$icons/48x48/apps/linuxcncicon.png"
     refresh
@@ -214,6 +215,24 @@ Terminal=true
 Categories=Science;Engineering;
 Keywords=kmotion;kmotioncnc;linuxcnc;migrate;convert;
 END
+
+# --- the launchers trusted at every login -----------------------------------------------------
+# the trust mark (gio metadata) is keyed to the file's identity and does not survive a change of
+# filesystem - a live image's squashfs, a copied home - so trust-launchers marks them again at login
+autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+mkdir -p "$autostart"
+cat >"$autostart/kmotion-trust-launchers.desktop" <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=KMotion launchers trusted
+Comment=Marks the KMotion and LinuxCNC desktop launchers as trusted for this login (KMotionX desktop/trust-launchers)
+Exec="$here/trust-launchers"
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+END
+note "  $autostart/kmotion-trust-launchers.desktop"
 
 # --- LinuxCNC --------------------------------------------------------------------------
 note "LinuxCNC with KMotion's planner (linuxcnc/)"
