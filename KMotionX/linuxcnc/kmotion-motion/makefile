@@ -34,14 +34,14 @@ kmotion-motion: $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS) -rdynamic $(LIBS) $(KM_LIBS)     # -rdynamic: names in the crash handler's backtrace
 
 build/kmotion-motion.o: kmotion-motion.cc kmotion-backend.h kmotion-pccomm.h kmotion-joglimit.h | build
-	$(CXX) $(OPT) $(DEFS) $(INC) -Wall -Wextra -c -o $@ $<
+	$(CXX) $(OPT) $(DEFS) $(INC) -MMD -MP -Wall -Wextra -c -o $@ $<
 
 # the board's commands to the PC: LinuxCNC's NML on one side, PC-DSP.h's codes on the other
 build/kmotion-pccomm.o: kmotion-pccomm.cc kmotion-pccomm.h kmotion-backend.h | build
-	$(CXX) $(OPT) -std=c++20 $(DEFS) $(INC) -I$(KMOTIONX_DIR)/DSP_KFLOP -Wall -Wextra -Wno-unused-parameter -c -o $@ $<
+	$(CXX) $(OPT) -std=c++20 $(DEFS) $(INC) -I$(KMOTIONX_DIR)/DSP_KFLOP -MMD -MP -Wall -Wextra -Wno-unused-parameter -c -o $@ $<
 
 build/kmotion-backend.o: kmotion-backend.cc kmotion-backend.h | build
-	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) $(KM_INC) -Wall -Wno-unknown-pragmas -Wno-overloaded-virtual -c -o $@ $<
+	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) $(KM_INC) -MMD -MP -Wall -Wno-unknown-pragmas -Wno-overloaded-virtual -c -o $@ $<
 
 # the helper a config's M100-M199 wrappers run (see kmotion-mcode.c)
 kmotion-mcode: kmotion-mcode.c
@@ -79,3 +79,7 @@ build/backend-test: backend-test.cc build/kmotion-backend.o kmotion-backend.h km
 # the 3 Link robot's servo zero offsets from one measured pose (see the source)
 kins3link-offsets: kins3link-offsets.cc
 	$(CXX) $(OPT) -std=c++20 $(KM_DEFS) $(KM_INC) -Wno-unknown-pragmas -Wno-overloaded-virtual -o $@ $< $(KM_LIBS) -lpthread
+
+# the headers each object was compiled against (-MMD): a change in KMotionX's CoordMotion.h or
+# LinuxCNC's headers rebuilds what uses them (without it a class that grew was read at old offsets)
+-include $(wildcard build/*.d)

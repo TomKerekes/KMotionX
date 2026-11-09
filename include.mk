@@ -39,6 +39,10 @@ dummy := $(shell test -d $(BINDIR) || mkdir -p $(BINDIR))
  
 OBJECTS=$(SOURCES:%.cpp=$(ODIR)/%.o)
 
+# the dependency files -MMD writes: without them a header change rebuilt nothing, and kmxWeb's
+# objects from before CoordMotion.h grew read the library pointer 72 bytes off (it crashed at start)
+-include $(OBJECTS:.o=.d)
+
 all: $(ODIR) $(EXECUTABLE)
 
 $(ODIR):
