@@ -14,7 +14,7 @@
 #     --no-kmotionxcnc skip KMotionXCNC (the web CNC application: Node, a clone, an npm build)
 #     --image          building a live image (live/build.sh runs this in the chroot): no kernel headers
 #                      for the running kernel, no Guest Additions, no network profile, udev not reloaded
-# Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX), KMOTIONXCNC_BRANCH (kmotion-5.5.1),
+# Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX), KMOTIONXCNC_BRANCH (master),
 #     LINUXCNC_COMMIT (514be4f657), LINUXCNC_DIR (~/linuxcnc-dev),
 #     KOGNA_IF (the bridged interface to the Kogna, e.g. enp0s8: a DHCP profile is made for it)
 set -Eeuo pipefail   # -E: the ERR message below also fires for a command run inside a function
@@ -38,9 +38,9 @@ KOGNA_IF=${KOGNA_IF:-}
 DRY=0; DO_LINUXCNC=1; DO_ICONS=1; IMAGE=0; DO_KMOTIONXCNC=1
 KMOTIONXCNC_REPO=${KMOTIONXCNC_REPO:-https://github.com/TomKerekes/KMotionXCNC.git}
 KMOTIONXCNC_DIR=${KMOTIONXCNC_DIR:-$HOME/KMotionXCNC}
-# the branch with the KMotion 5.5.1 work (TP3 3rd-order planner, jerk, actuator limits); the
-# repository's default branch, linux-fixes-5.3.2, predates it
-KMOTIONXCNC_BRANCH=${KMOTIONXCNC_BRANCH:-kmotion-5.5.1}
+# master: the KMotion 5.5.1 work (TP3 3rd-order planner, jerk, actuator limits), named explicitly
+# since the repository's default branch on GitHub may be another one
+KMOTIONXCNC_BRANCH=${KMOTIONXCNC_BRANCH:-master}
 for a in "$@"; do
     case $a in
         --dry-run) DRY=1;;
