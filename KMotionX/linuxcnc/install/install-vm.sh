@@ -11,6 +11,7 @@
 #     --dry-run        print the commands, run nothing
 #     --no-linuxcnc    skip the LinuxCNC tree (KMotionX and the tool only)
 #     --no-icons       no desktop icons
+#     --no-kmotionxcnc skip KMotionXCNC (the web CNC application: Node, a clone, an npm build)
 #     --image          building a live image (live/build.sh runs this in the chroot): no kernel headers
 #                      for the running kernel, no Guest Additions, no network profile, udev not reloaded
 # Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX),
@@ -34,13 +35,16 @@ LINUXCNC_REPO=${LINUXCNC_REPO:-https://github.com/LinuxCNC/linuxcnc.git}
 LINUXCNC_COMMIT=${LINUXCNC_COMMIT:-514be4f657}
 LINUXCNC_DIR=${LINUXCNC_DIR:-$HOME/linuxcnc-dev}
 KOGNA_IF=${KOGNA_IF:-}
-DRY=0; DO_LINUXCNC=1; DO_ICONS=1; IMAGE=0
+DRY=0; DO_LINUXCNC=1; DO_ICONS=1; IMAGE=0; DO_KMOTIONXCNC=1
+KMOTIONXCNC_REPO=${KMOTIONXCNC_REPO:-https://github.com/TomKerekes/KMotionXCNC.git}
+KMOTIONXCNC_DIR=${KMOTIONXCNC_DIR:-$HOME/KMotionXCNC}
 for a in "$@"; do
     case $a in
         --dry-run) DRY=1;;
         --no-linuxcnc) DO_LINUXCNC=0;;
         --no-icons) DO_ICONS=0;;
         --image) IMAGE=1;;
+        --no-kmotionxcnc) DO_KMOTIONXCNC=0;;
         -h|--help) sed -n '2,20p' "$0"; exit 0;;
         *) echo "unknown option $a"; exit 2;;
     esac
@@ -201,6 +205,22 @@ fi
 
 step "the KMotion tool (tools/kmotion)"
 run make -C "$KMOTIONX_DIR/KMotionX/tools/kmotion/shim"
+
+step "KMotionXCNC: $KMOTIONXCNC_REPO in $KMOTIONXCNC_DIR (the web CNC application)"
+# the Angular app, built once with Node (Debian's nodejs and npm) into KMotionXCNC/kmx, which kmxWeb
+# (KMotionX's web server, bin/kmxWeb) serves at http://localhost:8080/kmx; the KMotionXCNC icon
+# starts kmxWeb and the browser. A build downloads the app's packages (a few minutes)
+if [ $DO_KMOTIONXCNC = 1 ]; then
+    run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q nodejs npm
+    if [ ! -d "$KMOTIONXCNC_DIR/.git" ]; then
+        run git clone --depth 1 "$KMOTIONXCNC_REPO" "$KMOTIONXCNC_DIR"
+    else note "already cloned ($(git -C "$KMOTIONXCNC_DIR" log -1 --format=%h 2>/dev/null)); not pulled"; fi
+    if [ -d "$KMOTIONXCNC_DIR/kmx" ] && [ "$KMOTIONXCNC_DIR/kmx" -nt "$KMOTIONXCNC_DIR/ng2/package.json" ]; then
+        note "already built (KMotionXCNC/kmx)"
+    else
+        run bash -c "cd '$KMOTIONXCNC_DIR/ng2' && npm install --no-audit --no-fund --loglevel=error && npm run build"
+    fi
+else note "skipped (--no-kmotionxcnc)"; fi
 
 if [ $DO_ICONS = 1 ]; then
     step "desktop icons"

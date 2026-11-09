@@ -1,0 +1,23 @@
+#!/bin/bash
+# kmotionxcnc: KMotionXCNC, the web CNC application (github.com/TomKerekes/KMotionXCNC: an Angular app
+# served by KMotionX's kmxWeb), from a desktop launcher. Starts kmxWeb on port 8080 with the
+# KMotionXCNC checkout as its document root if it is not running, then opens the browser at
+# http://localhost:8080/kmx. kmxWeb talks to the board through KMotionServer, like the KMotion tool
+# and LinuxCNC do - close LinuxCNC first, they would share the board.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # .../KMotionX/KMotionX/desktop
+root=$(cd "$here/../.." && pwd)                        # the KMotionX checkout
+app="${KMOTIONXCNC_DIR:-$HOME/KMotionXCNC}"
+port=8080
+log="${XDG_CACHE_HOME:-$HOME/.cache}/kmotionx/kmxweb.log"
+mkdir -p "$(dirname "$log")"
+if [ ! -d "$app/kmx" ]; then
+    msg="KMotionXCNC is not built: $app/kmx is missing. install-vm.sh builds it (the KMotionXCNC step), or: cd $app/ng2 && npm install && npm run build"
+    command -v zenity >/dev/null && zenity --error --no-markup --text="$msg" || echo "$msg" >&2
+    exit 1
+fi
+kmxweb="$root/bin/kmxWeb"; [ -x "$kmxweb" ] || kmxweb="$HOME/.kmotionx/bin/kmxWeb"
+if ! pgrep -x kmxWeb >/dev/null; then
+    (cd "$app" && setsid nohup "$kmxweb" -document_root "$app" -listening_port $port >>"$log" 2>&1 < /dev/null &)
+    for i in 1 2 3 4 5 6 7 8 9 10; do curl -fs "http://localhost:$port/kmx/" >/dev/null 2>&1 && break; sleep 0.5; done
+fi
+xdg-open "http://localhost:$port/kmx/" 2>/dev/null || sensible-browser "http://localhost:$port/kmx/"

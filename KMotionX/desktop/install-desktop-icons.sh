@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool kogna-console motion-log-plotter pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console motion-log-plotter pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc kmotionxcnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 stale="linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop"   # earlier names of the bench launcher, removed on an install
 builtin_configs="kmotion-minirouter kmotion-3link kmotion-sim"   # the launchers written above, by hand
 sizes="16 32 48 64 128 256"
@@ -214,6 +214,21 @@ Icon=document-open
 Terminal=true
 Categories=Science;Engineering;
 Keywords=kmotion;kmotioncnc;linuxcnc;migrate;convert;
+END
+
+# --- KMotionXCNC, the web CNC application ---------------------------------------------------------
+note "KMotionXCNC (the web CNC application, desktop/kmotionxcnc: kmxWeb + the browser)"
+write_launcher kmotionxcnc <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=KMotionXCNC
+Comment=The web CNC application for a KFLOP or Kogna (kmxWeb serving KMotionXCNC at http://localhost:8080/kmx)
+Exec="$here/kmotionxcnc"
+Icon=applications-internet
+Terminal=false
+Categories=Science;Engineering;X-CNC;
+Keywords=kmotion;kmotionxcnc;cnc;web;
 END
 
 # --- the launchers trusted at every login -----------------------------------------------------
