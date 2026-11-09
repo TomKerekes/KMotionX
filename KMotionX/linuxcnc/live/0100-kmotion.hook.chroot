@@ -30,5 +30,7 @@ echo "==== kmotion hook: tidying"
 # the build trees' objects stay (a rebuild on the installed machine is incremental); the apt lists
 # and caches go (live-build cleans the rest)
 apt-get clean
+# KMotionXCNC's npm packages are needed only to build its app (KMotionXCNC/kmx stays): about 1 GB
+rm -rf "$HOME_DIR/KMotionXCNC/ng2/node_modules" "$HOME_DIR/KMotionXCNC/camx/node_modules" "$HOME_DIR/.npm"
 rm -f /etc/sudoers.d/README 2>/dev/null || true
 echo "==== kmotion hook: done"
