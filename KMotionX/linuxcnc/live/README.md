@@ -14,6 +14,5 @@ Windows host boots it in a throwaway VirtualBox VM. `~/live/build.log` has every
 KMotionXCNC (the web CNC application) is built into the image by install-vm.sh's KMotionXCNC step
 (Node, an npm build) and has its own icon. Known: the module's `make test` prints nothing inside
 the chroot (to be looked at); the disk installer must be given the user name `cnc`; in a VirtualBox VM the
-live system has no Guest Additions (Debian 13 ships only their ISO, `virtualbox-guest-additions-iso`; building
-them into the image for its kernel is a to-do), so the mouse works only as a USB tablet (`vm-test-iso.cmd` sets
-that) and the display does not follow the window. Real hardware is unaffected.
+Guest Additions are built into the image from Debian's `virtualbox-guest-additions-iso` for the image's
+kernel (shared clipboard, window-sized display); `vm-test-iso.cmd` gives the test VM a USB-tablet mouse. Real hardware is unaffected.

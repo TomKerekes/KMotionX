@@ -26,6 +26,26 @@ fi
 echo "==== kmotion hook: install-vm.sh --image (the whole install; a long while)"
 export DEBIAN_FRONTEND=noninteractive
 su - "$USERNAME" -c "bash ~/KMotionX/KMotionX/linuxcnc/install/install-vm.sh --image"
+echo "==== kmotion hook: VirtualBox Guest Additions (shared clipboard, window-sized display in a VM)"
+# Debian 13 ships the Additions only as an ISO (virtualbox-guest-additions-iso); their installer is run
+# here and the kernel modules built for the image's own kernel (rcvboxadd quicksetup: its setup at the
+# end of the installer builds for the build host's kernel and fails, harmlessly). On real hardware the
+# services find no VirtualBox and do nothing. A failure here leaves the image without them, no more
+(
+    set +e
+    apt-get install -y -q virtualbox-guest-additions-iso linux-headers-amd64 libarchive-tools bzip2
+    ga=/tmp/vbox-ga; rm -rf $ga; mkdir -p $ga
+    bsdtar -xf /usr/share/virtualbox/VBoxGuestAdditions.iso -C $ga VBoxLinuxAdditions.run
+    sh $ga/VBoxLinuxAdditions.run --nox11
+    for k in /lib/modules/*; do
+        v=${k#/lib/modules/}
+        [ -d "/usr/src/linux-headers-$v" ] && /sbin/rcvboxadd quicksetup "$v"
+    done
+    ls /lib/modules/*/misc/vboxguest.ko* 2>/dev/null && echo "   - the Additions' modules are built" || echo "   - the Additions' modules did not build: no shared clipboard in a VM"
+    rm -rf $ga
+    apt-get purge -y -q virtualbox-guest-additions-iso
+) || true
+
 echo "==== kmotion hook: tidying"
 # the build trees' objects stay (a rebuild on the installed machine is incremental); the apt lists
 # and caches go (live-build cleans the rest)
