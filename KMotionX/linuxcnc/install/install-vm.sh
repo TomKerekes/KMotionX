@@ -14,7 +14,7 @@
 #     --no-kmotionxcnc skip KMotionXCNC (the web CNC application: Node, a clone, an npm build)
 #     --image          building a live image (live/build.sh runs this in the chroot): no kernel headers
 #                      for the running kernel, no Guest Additions, no network profile, udev not reloaded
-# Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX),
+# Settings (environment): KMOTIONX_REPO, KMOTIONX_BRANCH, KMOTIONX_DIR (~/KMotionX), KMOTIONXCNC_BRANCH (kmotion-5.5.1),
 #     LINUXCNC_COMMIT (514be4f657), LINUXCNC_DIR (~/linuxcnc-dev),
 #     KOGNA_IF (the bridged interface to the Kogna, e.g. enp0s8: a DHCP profile is made for it)
 set -Eeuo pipefail   # -E: the ERR message below also fires for a command run inside a function
@@ -38,6 +38,9 @@ KOGNA_IF=${KOGNA_IF:-}
 DRY=0; DO_LINUXCNC=1; DO_ICONS=1; IMAGE=0; DO_KMOTIONXCNC=1
 KMOTIONXCNC_REPO=${KMOTIONXCNC_REPO:-https://github.com/TomKerekes/KMotionXCNC.git}
 KMOTIONXCNC_DIR=${KMOTIONXCNC_DIR:-$HOME/KMotionXCNC}
+# the branch with the KMotion 5.5.1 work (TP3 3rd-order planner, jerk, actuator limits); the
+# repository's default branch, linux-fixes-5.3.2, predates it
+KMOTIONXCNC_BRANCH=${KMOTIONXCNC_BRANCH:-kmotion-5.5.1}
 for a in "$@"; do
     case $a in
         --dry-run) DRY=1;;
@@ -213,7 +216,7 @@ step "KMotionXCNC: $KMOTIONXCNC_REPO in $KMOTIONXCNC_DIR (the web CNC applicatio
 if [ $DO_KMOTIONXCNC = 1 ]; then
     run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q nodejs npm
     if [ ! -d "$KMOTIONXCNC_DIR/.git" ]; then
-        run git clone --depth 1 "$KMOTIONXCNC_REPO" "$KMOTIONXCNC_DIR"
+        run git clone --depth 1 --branch "$KMOTIONXCNC_BRANCH" "$KMOTIONXCNC_REPO" "$KMOTIONXCNC_DIR"
     else note "already cloned ($(git -C "$KMOTIONXCNC_DIR" log -1 --format=%h 2>/dev/null)); not pulled"; fi
     if [ -d "$KMOTIONXCNC_DIR/kmx" ] && [ "$KMOTIONXCNC_DIR/kmx" -nt "$KMOTIONXCNC_DIR/ng2/package.json" ]; then
         note "already built (KMotionXCNC/kmx)"
