@@ -218,7 +218,10 @@ if [ $DO_KMOTIONXCNC = 1 ]; then
     if [ -d "$KMOTIONXCNC_DIR/kmx" ] && [ "$KMOTIONXCNC_DIR/kmx" -nt "$KMOTIONXCNC_DIR/ng2/package.json" ]; then
         note "already built (KMotionXCNC/kmx)"
     else
-        run bash -c "cd '$KMOTIONXCNC_DIR/ng2' && npm install --no-audit --no-fund --loglevel=error && npm run build"
+        # camx, the app's own library (prebuilt in camx/lib): its runtime packages, and linked into the
+        # app's node_modules (the build's "camx" alias resolves it as a module); then the app
+        run bash -c "cd '$KMOTIONXCNC_DIR/camx' && npm install --omit=dev --no-audit --no-fund --loglevel=error"
+        run bash -c "cd '$KMOTIONXCNC_DIR/ng2' && npm install --no-audit --no-fund --loglevel=error && npm install --no-save --no-audit --no-fund --loglevel=error ../camx && npm run build"
     fi
 else note "skipped (--no-kmotionxcnc)"; fi
 
