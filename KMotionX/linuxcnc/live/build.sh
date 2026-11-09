@@ -42,7 +42,7 @@ lb config \
     --firmware-chroot false \
     --firmware-binary false \
     --memtest none \
-    --bootappend-live "boot=live components username=cnc hostname=kmotion locales=en_US.UTF-8 keyboard-layouts=us" \
+    --bootappend-live "boot=live components persistence username=cnc hostname=kmotion locales=en_US.UTF-8 keyboard-layouts=us" \
     --iso-application "LinuxCNC on KMotion" \
     --iso-volume "KMotion-LinuxCNC" \
     --iso-publisher "Dynomotion" \
@@ -51,6 +51,8 @@ mkdir -p config/package-lists config/hooks/live
 cp "$here/kmotion.list.chroot" config/package-lists/
 cp "$here/0100-kmotion.hook.chroot" config/hooks/live/
 chmod +x config/hooks/live/0100-kmotion.hook.chroot
+# ("persistence" on the boot line: a volume labelled persistence on the stick, made by the desktop's
+# "Keep Changes on USB" - desktop/usb-persistence -, is taken up; without one it changes nothing.)
 # (--security/--updates false: one kernel. With them, the binary stage installed linux-image-amd64
 # again and got a newer kernel from the security mirror than the filesystem was built with; the
 # generic /live/vmlinuz then booted a kernel without its modules - no keyboard, no mouse. The
@@ -62,7 +64,8 @@ if [ -f live-image-amd64.hybrid.iso ]; then
     mv -f live-image-amd64.hybrid.iso "$iso"
     chown "$owner": "$iso" build.log 2>/dev/null || true
     echo "==== $(date) done: $WORK/$iso ($(du -h "$iso" | cut -f1))"
-    if [ -d /mnt/kmotion ] && [ -w /mnt/kmotion ]; then mv -f "$iso" /mnt/kmotion/ && echo "moved to /mnt/kmotion/$iso (the shared folder)"; fi
+    sha256sum "$iso" > "$iso.sha256"; chown "$owner": "$iso.sha256" 2>/dev/null || true   # published beside the ISO
+    if [ -d /mnt/kmotion ] && [ -w /mnt/kmotion ]; then mv -f "$iso" "$iso.sha256" /mnt/kmotion/ && echo "moved to /mnt/kmotion/$iso (the shared folder), with its .sha256"; fi
     echo "==== removing the chroot (14 GB); the package cache stays for the next build"
     lb clean --chroot 2>/dev/null || rm -rf chroot
 else

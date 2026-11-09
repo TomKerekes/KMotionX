@@ -1,0 +1,116 @@
+#!/bin/bash
+# usb-persistence: make the live USB stick this system was started from keep its changes
+# (settings, machine configurations, files, installed updates) from one start to the next.
+# From the desktop launcher "Keep Changes on USB", in a terminal window.
+#
+# A stick written from the ISO (balenaEtcher, Rufus in DD mode, dd) holds only the ISO image,
+# read-only, and the rest of the stick is unused. This adds a partition in that unused space,
+# an ext4 filesystem labelled "persistence" with a persistence.conf of "/ union": live-boot's
+# own mechanism, taken up at the next start when the boot line carries "persistence" (images
+# built by live/build.sh have it). The ISO part of the stick is not touched; only the
+# partition table in the first sector gains an entry.
+# With a volume already there, it reports it, and offers to empty it when it is not in use.
+export PATH=$PATH:/sbin:/usr/sbin
+medium=/run/live/medium
+min_free=$((2 * 1024 * 2048))       # sectors: at least 2 GB free on the stick
+
+finish() { echo; read -r -p "press Enter to close " _; exit "${1:-0}"; }
+stop() { echo; echo "$@"; finish 1; }
+
+echo "Keep Changes on USB: a persistence volume on the live USB stick"
+echo
+grep -qw 'boot=live' /proc/cmdline ||
+    stop "This system was not started as a live system (it is installed on a disk, or it is a
+virtual machine's own disk): it keeps its changes already. Nothing to do."
+mountpoint -q $medium ||
+    stop "The live medium is not mounted at $medium (started with 'toram'?): start the stick normally."
+src=$(findmnt -n -o SOURCE $medium)
+fs=$(findmnt -n -o FSTYPE $medium)
+kind=$(lsblk -ndo TYPE "$src" 2>/dev/null)
+case "$kind" in
+    part) disk=/dev/$(lsblk -ndo PKNAME "$src");;
+    disk) disk=$src;;
+    rom)  stop "This live system was started from a CD/DVD drive ($src), or from the ISO file in a virtual
+machine: there is nothing to write the changes to. Write the ISO to a USB stick and start from that.";;
+    *)    stop "This live system was started from $src (${kind:-unknown}), an ISO file on another boot
+tool's stick (Ventoy and the like). This helper handles a stick written directly from the ISO.";;
+esac
+dn=${disk#/dev/}
+[ -b "$disk" ] && [ -r "/sys/block/$dn/size" ] || stop "Cannot find the disk of $src."
+echo "Started from: $disk  $(lsblk -dno MODEL,SIZE,TRAN "$disk" | tr -s ' ')"
+
+boot_line_ok=0; grep -qw persistence /proc/cmdline && ! grep -qw nopersistence /proc/cmdline && boot_line_ok=1
+boot_line_help() {
+    echo "This image's boot menu does not ask for it by itself. At the boot menu, with \"Live system\""
+    echo "highlighted, press Tab (or e on a UEFI machine), add the word   persistence   to the end of"
+    echo "the line that starts with linux, and press Enter (F10 on UEFI). Newer images do this themselves."
+}
+
+# --- a volume is there already -------------------------------------------------------------
+vol=$(lsblk -lnpo NAME,LABEL "$disk" | awk '$2=="persistence"{print $1; exit}')
+if [ -n "$vol" ]; then
+    echo "This stick already has a persistence volume: $vol ($(lsblk -dno SIZE "$vol" | tr -d ' '))"
+    if findmnt -n -S "$vol" >/dev/null; then
+        used=$(df -h --output=used,size "$vol" | tail -1 | awk '{print $1 " of " $2}')
+        echo "It is in use: changes are being kept ($used used)."
+        echo
+        echo "To start over with a fresh system, start the stick once without it - at the boot menu press"
+        echo "Tab (e on UEFI), add   nopersistence   to the line that starts with linux - and run this again."
+        finish
+    fi
+    echo "It is not in use in this session."
+    [ $boot_line_ok = 1 ] || { echo; boot_line_help; }
+    echo
+    read -r -p "Empty it, so the stick starts fresh and keeps changes from then on? Type yes: " a
+    [ "$a" = "yes" ] || { echo "Left as it is."; finish; }
+    sudo mkfs.ext4 -q -F -L persistence "$vol" || stop "mkfs.ext4 failed on $vol."
+else
+    # --- the unused space behind the ISO ------------------------------------------------
+    [ "$fs" = "iso9660" ] ||
+        stop "The stick's live system is on a $fs filesystem, not the ISO image itself: it was written
+in a file-copy mode. Write it again as an image: balenaEtcher, or Rufus with \"Write in DD Image mode\"."
+    sudo sfdisk -d "$disk" 2>/dev/null | grep -q '^label: dos' ||
+        stop "The stick's partition table is not the ISO's own (MBR). Write the stick again from the ISO."
+    total=$(cat "/sys/block/$dn/size")                       # 512-byte sectors
+    end=$(( $(sudo isosize "$disk") / 512 ))                 # the ISO image's length
+    for p in /sys/block/"$dn"/"$dn"*; do                     # and no partition reaches beyond it?
+        [ -r "$p/start" ] || continue
+        e=$(( $(cat "$p/start") + $(cat "$p/size") )); [ "$e" -gt "$end" ] && end=$e
+    done
+    start=$(( (end + 2047) / 2048 * 2048 ))                  # on a 1 MiB boundary
+    free=$(( total - start ))
+    [ "$free" -ge "$min_free" ] ||
+        stop "The stick has $(( free > 0 ? free / 2048 : 0 )) MB unused behind the image: too little to keep
+changes in. Use a stick of 16 GB or more."
+    slot=""
+    for n in 3 4 2; do
+        sudo sfdisk -d "$disk" | grep -Eq "^${disk}p?$n :" || { slot=$n; break; }
+    done
+    [ -n "$slot" ] || stop "The stick's partition table has no free entry."
+    case "$dn" in *[0-9]) vol="${disk}p$slot";; *) vol="$disk$slot";; esac
+    echo "Unused behind the image: $(( free / 2048 / 1024 )) GB. It becomes the volume the changes are kept in"
+    echo "($vol). The live system on the stick itself is not changed."
+    echo
+    read -r -p "Go ahead? Type yes: " a
+    [ "$a" = "yes" ] || { echo "Nothing changed."; finish; }
+    echo "start=$start, type=83" | sudo sfdisk --quiet --no-reread --force -N "$slot" "$disk" ||
+        stop "The partition could not be added (sfdisk)."
+    sudo partx -a -n "$slot" "$disk" 2>/dev/null || sudo partprobe "$disk" 2>/dev/null
+    sudo udevadm settle
+    for _ in 1 2 3 4 5 6 7 8 9 10; do [ -b "$vol" ] && break; sleep 1; done
+    [ -b "$vol" ] || stop "The new partition was written but the system does not show it yet.
+Restart from the stick and run this again."
+    # only ever the partition just made: it begins behind the image
+    [ "$(cat "/sys/block/$dn/${vol#/dev/}/start")" = "$start" ] || stop "$vol is not the new partition; stopped."
+    echo "Making the filesystem..."
+    sudo mkfs.ext4 -q -F -L persistence "$vol" || stop "mkfs.ext4 failed on $vol."
+fi
+
+mnt=$(mktemp -d)
+sudo mount "$vol" "$mnt" && echo "/ union" | sudo tee "$mnt/persistence.conf" >/dev/null && sudo umount "$mnt" ||
+    stop "The volume's persistence.conf could not be written."
+rmdir "$mnt"; sync
+echo
+echo "Done. Restart from the stick: from then on everything you change is kept on it."
+[ $boot_line_ok = 1 ] || { echo; boot_line_help; }
+finish

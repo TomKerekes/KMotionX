@@ -48,3 +48,5 @@ if [ "$size" -gt 3000000000 ]; then
     rm -rf chroot binary
     df -h "$WORK" | tail -1
 fi
+# the checksum published beside the ISO (LIVE-USB.md has the user check it)
+( cd "$DEST" && sha256sum "$iso" > "$iso.sha256" && echo "==== $(date) checksum: $DEST/$iso.sha256" ) || true

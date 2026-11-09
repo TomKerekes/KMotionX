@@ -16,3 +16,17 @@ KMotionXCNC (the web CNC application) is built into the image by install-vm.sh's
 the chroot (to be looked at); the disk installer must be given the user name `cnc`; in a VirtualBox VM the
 Guest Additions are built into the image from Debian's `virtualbox-guest-additions-iso` for the image's
 kernel (shared clipboard, window-sized display); `vm-test-iso.cmd` gives the test VM a USB-tablet mouse. Real hardware is unaffected.
+
+**For users: [LIVE-USB.md](LIVE-USB.md)** - download, writing the stick, starting from it, keeping
+changes, installing to disk. The stick keeps changes through live-boot's persistence: the boot line
+carries `persistence` (build.sh's `--bootappend-live`), and the desktop's "Keep Changes on USB"
+(`desktop/usb-persistence`, a launcher only in the image) adds an ext4 volume labelled `persistence`
+with `/ union` in the stick's unused space behind the ISO image (MBR entry 3; the ISO's own
+entries are 1, type 0, and 2, the EFI image inside it). `vm-test-stick.cmd` tries exactly that in
+VirtualBox: the ISO converted to a virtual disk and enlarged, the VM started from the disk.
+`install-vm.sh` treats a live session (`boot=live`) as `--image`, so "Re-install LinuxCNC" works on
+a stick that keeps changes.
+
+**Publishing**: the build leaves `kmotion-linuxcnc-<date>.iso` and `.iso.sha256` on the shared
+folder; both go to https://dynomotion.com/Software/LinuxCNC/ (LIVE-USB.md names that address). The
+ISO is over 4 GB: the web server must serve files that large (and should support resumed downloads).

@@ -2,6 +2,8 @@
 
 Only the steps, for a Windows PC. `INSTALL.md` says why and what each one does.
 
+Without a VM and without installing anything: the live image, a USB stick the PC starts from, with all of this on it. See [../live/LIVE-USB.md](../live/LIVE-USB.md).
+
 ## On the Windows PC
 
 Nothing else is installed on Windows: no Python, no compiler. Everything else goes into the VM in step 11.

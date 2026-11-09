@@ -52,6 +52,9 @@ for a in "$@"; do
         *) echo "unknown option $a"; exit 2;;
     esac
 done
+# a session started from the live image (a USB stick that keeps its changes, running "Re-install
+# LinuxCNC"): the image's rules - its kernel has no headers package to match, the Guest Additions are its own
+if [ $IMAGE = 0 ] && grep -qw 'boot=live' /proc/cmdline 2>/dev/null; then IMAGE=1; fi
 run() { echo "+ $*"; [ $DRY = 1 ] || "$@"; }
 # apt-get runs with DEBIAN_FRONTEND=noninteractive: a package's configuration question (which
 # login manager when GNOME's and Xfce's are both in, say) keeps the current choice instead of
@@ -230,7 +233,7 @@ else note "skipped (--no-kmotionxcnc)"; fi
 
 if [ $DO_ICONS = 1 ]; then
     step "desktop icons"
-    run env LINUXCNC_DIR="$LINUXCNC_DIR" "$KMOTIONX_DIR/KMotionX/desktop/install-desktop-icons.sh"
+    run env LINUXCNC_DIR="$LINUXCNC_DIR" KMOTION_LIVE_IMAGE=$IMAGE "$KMOTIONX_DIR/KMotionX/desktop/install-desktop-icons.sh"
     # GNOME shows nothing on the desktop without its desktop-icons extension (Xfce needs none);
     # the launchers are in its applications menu either way
     # a GNOME desktop: gnome-shell installed (the /usr/share/gnome-shell directory alone is

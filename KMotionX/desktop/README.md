@@ -6,12 +6,13 @@ run as yourself, nothing outside your home directory:
 
     ~/KMotionX/KMotionX/desktop/install-desktop-icons.sh
 
-It puts nine launchers on the desktop and in the menu (Science / Engineering):
+It puts nine launchers on the desktop and in the menu (Science / Engineering), and a tenth, Keep Changes on USB, in a session started from the live image:
 
 - **KMotion** – the Linux KMotion tool (Digital I/O, Axis, C Programs, Config, Console).
 - **LinuxCNC (Minirouter)** – LinuxCNC with `configs/kmotion-minirouter/kmotion-minirouter.ini`: the bench, a KFLOP or a Kogna with nothing attached.
 - **Kogna COM Port** – the Kogna's virtual COM port in a terminal (`desktop/kogna-console`: tio on /dev/ttyACM0; the Kogna's USB attached to the machine, or to the VM with Devices > USB).
 - **Pull KMotionX** – brings this checkout up to date from GitHub in a terminal window (`desktop/pull-kmotionx`: git pull, and what came in).
+- **Keep Changes on USB** – only in a session started from the live image's USB stick (`desktop/usb-persistence`): makes a volume labelled `persistence` in the stick's unused space, after which the stick keeps settings, files and updates across restarts. See `linuxcnc/live/LIVE-USB.md`.
 - **Re-install LinuxCNC** – runs the installer again (`desktop/reinstall-linuxcnc`: `linuxcnc/install/install-vm.sh`, which skips what is done and rebuilds and installs what changed; asks for your password). Close LinuxCNC and the KMotion tool first.
 - **Migrate from KMotionCNC** – a LinuxCNC configuration from a KMotion installation's KMotionCNC Tool Setup, in a terminal window (`desktop/migrate-kmotioncnc` runs `linuxcnc/tools/migrate-kmotioncnc`; the Windows install through the shared folder).
 - **KMotionXCNC** – the web CNC application (`desktop/kmotionxcnc`: starts KMotionX's web server kmxWeb on port 8080 with the ~/KMotionXCNC checkout, built by install-vm.sh with Node, and opens the browser at http://localhost:8080/kmx). KMotionServer serves several clients at once, so it can run beside KMotion and LinuxCNC.

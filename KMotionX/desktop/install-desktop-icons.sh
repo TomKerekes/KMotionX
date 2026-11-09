@@ -22,7 +22,7 @@ icons="$data/icons/hicolor"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 [ -n "$desktop" ] || desktop="$HOME/Desktop"
 
-launchers="kmotion-tool kogna-console motion-log-plotter pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc kmotionxcnc linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
+launchers="kmotion-tool kogna-console motion-log-plotter pull-kmotionx reinstall-linuxcnc migrate-kmotioncnc kmotionxcnc usb-persistence linuxcnc-kmotion-minirouter linuxcnc-kmotion-3link linuxcnc-kmotion-sim"
 stale="linuxcnc-kmotion-kogna linuxcnc-kmotion-kflop"   # earlier names of the bench launcher, removed on an install
 builtin_configs="kmotion-minirouter kmotion-3link kmotion-sim"   # the launchers written above, by hand
 sizes="16 32 48 64 128 256"
@@ -175,6 +175,25 @@ Terminal=true
 Categories=Science;Engineering;
 Keywords=kmotion;linuxcnc;update;install;rebuild;
 END
+
+# --- the live USB stick: keep its changes ------------------------------------------------------
+# only where the system is (or is being built as) a live image: KMOTION_LIVE_IMAGE=1 from
+# install-vm.sh --image, or a session started with boot=live
+if [ "${KMOTION_LIVE_IMAGE:-0}" = 1 ] || grep -qw 'boot=live' /proc/cmdline 2>/dev/null; then
+    note "Keep Changes on USB (desktop/usb-persistence: a persistence volume on the live stick)"
+    write_launcher usb-persistence <<END
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Keep Changes on USB
+Comment=Make the live USB stick keep settings, configurations and files from one start to the next
+Exec="$here/usb-persistence"
+Icon=drive-removable-media
+Terminal=true
+Categories=System;
+Keywords=kmotion;live;usb;persistence;
+END
+fi
 
 # --- the clipboard helper: a Windows bitmap pasted in is offered as PNG too -----------------
 # VirtualBox's shared clipboard brings a Windows screenshot into the guest as image/bmp only;
