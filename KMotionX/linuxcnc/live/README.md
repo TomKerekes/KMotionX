@@ -14,8 +14,8 @@ Windows host boots it in a throwaway VirtualBox VM. `~/live/build.log` has every
 KMotionXCNC (the web CNC application) is built into the image by install-vm.sh's KMotionXCNC step
 (Node, an npm build) and has its own icon. Known: the module's `make test` prints nothing inside
 the chroot (to be looked at); the disk installer must be given the user name `cnc`; in a VirtualBox VM the
-Guest Additions are built into the image from Debian's `virtualbox-guest-additions-iso` for the image's
-kernel (shared clipboard, window-sized display); `vm-test-iso.cmd` gives the test VM a USB-tablet mouse. Real hardware is unaffected.
+Guest Additions' programs (VBoxService, VBoxClient) are in the image, from Debian's `virtualbox-guest-additions-iso`,
+on the kernel's own vboxguest module (shared clipboard, window-sized display); `vm-test-iso.cmd` gives the test VM a USB-tablet mouse. Real hardware is unaffected.
 
 **For users: [LIVE-USB.md](LIVE-USB.md)** - download, writing the stick, starting from it, keeping
 changes, installing to disk. The stick keeps changes through live-boot's persistence: the boot line

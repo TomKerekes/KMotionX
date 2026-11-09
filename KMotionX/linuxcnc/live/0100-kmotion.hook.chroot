@@ -27,21 +27,34 @@ echo "==== kmotion hook: install-vm.sh --image (the whole install; a long while)
 export DEBIAN_FRONTEND=noninteractive
 su - "$USERNAME" -c "bash ~/KMotionX/KMotionX/linuxcnc/install/install-vm.sh --image"
 echo "==== kmotion hook: VirtualBox Guest Additions (shared clipboard, window-sized display in a VM)"
-# Debian 13 ships the Additions only as an ISO (virtualbox-guest-additions-iso); their installer is run
-# here and the kernel modules built for the image's own kernel (rcvboxadd quicksetup: its setup at the
-# end of the installer builds for the build host's kernel and fails, harmlessly). On real hardware the
-# services find no VirtualBox and do nothing. A failure here leaves the image without them, no more
+# Debian 13 ships the Additions only as an ISO (virtualbox-guest-additions-iso). Only their programs
+# are taken from it (VBoxService, VBoxClient: the clipboard, the display size): the kernel's own
+# vboxguest module serves them, as it does on the VM this image is built on, so no modules are built
+# (INSTALL_NO_MODULE_BUILDS) and no kernel headers are needed. 7z reads the ISO (bsdtar finds no
+# files in it). Without a running systemd the installer puts init scripts in /etc/init.d, which
+# systemd turns into units at start: vboxadd (it builds and reloads modules) is masked, vboxadd-service
+# (VBoxService) starts in a VirtualBox VM only, and the session script says nothing on a real PC.
+# A failure here leaves the image without the Additions, no more
 (
     set +e
-    apt-get install -y -q virtualbox-guest-additions-iso linux-headers-amd64 libarchive-tools bzip2
+    apt-get install -y -q virtualbox-guest-additions-iso 7zip bzip2
     ga=/tmp/vbox-ga; rm -rf $ga; mkdir -p $ga
-    bsdtar -xf /usr/share/virtualbox/VBoxGuestAdditions.iso -C $ga VBoxLinuxAdditions.run
-    sh $ga/VBoxLinuxAdditions.run --nox11
-    for k in /lib/modules/*; do
-        v=${k#/lib/modules/}
-        [ -d "/usr/src/linux-headers-$v" ] && /sbin/rcvboxadd quicksetup "$v"
+    7z x -y -bd -o$ga /usr/share/virtualbox/VBoxGuestAdditions.iso VBoxLinuxAdditions.run >/dev/null
+    INSTALL_NO_MODULE_BUILDS=1 sh $ga/VBoxLinuxAdditions.run --nox11
+    ln -sf /dev/null /etc/systemd/system/vboxadd.service
+    update-rc.d -f vboxadd remove >/dev/null 2>&1
+    mkdir -p /etc/systemd/system/vboxadd-service.service.d
+    printf '[Unit]\nConditionVirtualization=oracle\n[Service]\nExecStartPre=-/sbin/modprobe vboxguest\n' \
+        > /etc/systemd/system/vboxadd-service.service.d/kmotion.conf
+    for f in /etc/X11/Xsession.d/98vboxadd-xclient /opt/VBoxGuestAdditions-*/other/98vboxadd-xclient; do
+        [ -f "$f" ] && sed -i 's/^\( *\)notify-send .*/\1:   # the image: quiet on a real PC/' "$f"
     done
-    ls /lib/modules/*/misc/vboxguest.ko* 2>/dev/null && echo "   - the Additions' modules are built" || echo "   - the Additions' modules did not build: no shared clipboard in a VM"
+    if [ -x /usr/bin/VBoxClient ] && [ -x /usr/sbin/VBoxService ] && ls /lib/modules/*/kernel/drivers/virt/vboxguest/vboxguest.ko* >/dev/null 2>&1; then
+        echo "   - the Additions' programs are installed, the kernel has its vboxguest module"
+    else
+        echo "   - the Additions are not complete: no shared clipboard in a VM"
+        ls -l /usr/bin/VBoxClient /usr/sbin/VBoxService /lib/modules/*/kernel/drivers/virt/vboxguest/ 2>&1 | sed 's/^/     /'
+    fi
     rm -rf $ga
     apt-get purge -y -q virtualbox-guest-additions-iso
 ) || true
