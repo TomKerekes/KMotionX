@@ -3,7 +3,7 @@
 # served by KMotionX's kmxWeb), from a desktop launcher. Starts kmxWeb on port 8080 with the
 # KMotionXCNC checkout as its document root if it is not running, then opens the browser at
 # http://localhost:8080/kmx. kmxWeb talks to the board through KMotionServer, like the KMotion tool
-# and LinuxCNC do - close LinuxCNC first, they would share the board.
+# and LinuxCNC do; the server serves several clients at once, so they can all run together.
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # .../KMotionX/KMotionX/desktop
 root=$(cd "$here/../.." && pwd)                        # the KMotionX checkout
 app="${KMOTIONXCNC_DIR:-$HOME/KMotionXCNC}"
