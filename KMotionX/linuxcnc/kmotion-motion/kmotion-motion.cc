@@ -2518,6 +2518,7 @@ static bool read_pccomm_config(KmPcCommConfig &pc)
     Ini ini;
     if (!ini_path || !ini.load(ini_path)) return false;
     pc.enabled = ini.num("KMOTION", "PC_COMM", 1) != 0;
+    pc.tool_length_immediately = ini.num("KMOTION", "TOOL_LENGTH_IMMEDIATELY", 0) != 0;
     if (const char *v = ini.get("EMC", "NML_FILE")) pc.nml_file = ini_relative(ini_path, v);
     if (const char *v = ini.get("RS274NGC", "PARAMETER_FILE")) pc.var_file = ini_relative(ini_path, v);
     if (const char *v = ini.get("TRAJ", "LINEAR_UNITS")) pc.machine_mm = !strncasecmp(v, "mm", 2) || !strncasecmp(v, "metric", 6);

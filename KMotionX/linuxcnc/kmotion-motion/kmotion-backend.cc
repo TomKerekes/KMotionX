@@ -179,6 +179,7 @@ struct KmBackend::Impl {
     double sync_lookahead = 0;          // the lookahead to put back after it
     int home_serial = 0;               // under smx
     unsigned home_ok_mask = 0, home_fail_mask = 0;
+    int home_tool_slot = -1;           // under smx: the board's tool slot after the last home program, -1 not read
     std::atomic<int> sp_state{2};      // board: the spindle as last told (1 CW, -1 CCW, 0 off; 2 not known yet:
                                        // a spindle left turning by an earlier session must still get its M5)
     std::atomic<double> sp_rpm{-1};    // ... what its S action got (-1: none yet): the RPM, or in CSS mode the surface speed
@@ -1332,6 +1333,7 @@ static void publish(KmBackend::Impl *d)
     s.tap_result = d->tap_result;
     s.home_serial = d->home_serial;
     s.home_ok_mask = d->home_ok_mask;
+    s.home_tool_slot = d->home_tool_slot;
     s.home_fail_mask = d->home_fail_mask;
     s.spindle_state = d->sp_state;
     s.spindle_rpm = d->sp_rpm;
@@ -1755,6 +1757,7 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
     unsigned ok_j = 0;                       // the joints homed, by LinuxCNC joint
     unsigned ok_ch = 0;                      // the program's answer (persist 121), by channel
     bool killed = false;
+    int tool_slot = -1;                      // the board's active tool slot after the program (TOOL_CHANGE's variable)
     int ch_of[8];
     for (int j = 0; j < 8; j++) {
         ch_of[j] = d->cfg.channel[j];
@@ -1828,13 +1831,28 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
             if (board_query(d, cmd, reply) == 0) ok_ch = (unsigned) strtol(reply, NULL, 10);
         }
     }
+    // a home program may leave another coordinate system and another tool active than it
+    // found: on a machine with a Z axis per spindle Carl's forces tool 1 (DefineCoordSystem
+    // with Z on tool 1's channel, the tool slot in TOOL_CHANGE's variable set to 1) whatever
+    // was loaded. The channel map follows the board's, as after a tool change, and the slot
+    // is read for the PC-command side, which tells LinuxCNC before the program's DRO settings run
+    if (!killed && chmask) {
+        follow_board_cs(d, "the home program");
+        const KmAction &tc = d->cfg.tool_change;
+        if (tc.type != KM_ACTION_NONE && (int) tc.p[1] >= 0) {
+            char q[64], r[MAX_LINE + 1];
+            snprintf(q, sizeof q, "GetPersistDec %d", (int) tc.p[1]);
+            if (board_query(d, q, r) == 0) tool_slot = (int) strtol(r, NULL, 10);
+        }
+    }
     // the joints homed where they stand: their channels zeroed now, after the program (its
-    // DefineCoordSystem and last moves are over), unless the run was stopped
+    // DefineCoordSystem and last moves are over; the channel the axis has now), unless the
+    // run was stopped
     if (!killed) {
         for (int j = 0; j < 8; j++) {
             if (!(zero_j & (1u << j))) continue;
             char cmd[64];
-            snprintf(cmd, sizeof cmd, "Zero%d", ch_of[j]);
+            snprintf(cmd, sizeof cmd, "Zero%d", d->cfg.channel[j]);
             if (board_write(d, cmd) == 0) ok_j |= 1u << j;
             else d->message(std::string("board command failed: ") + cmd);
         }
@@ -1848,6 +1866,7 @@ static void w_home(KmBackend::Impl *d, const KmHomeRequest &req)
         std::lock_guard<std::mutex> lock(d->smx);
         d->home_ok_mask = ok_j;
         d->home_fail_mask = jmask & ~ok_j;
+        d->home_tool_slot = tool_slot;
         d->home_serial++;
     }
     d->homing = false;
@@ -1858,6 +1877,7 @@ failed_all:
         std::lock_guard<std::mutex> lock(d->smx);
         d->home_ok_mask = 0;
         d->home_fail_mask = jmask;
+        d->home_tool_slot = -1;
         d->home_serial++;
     }
 }

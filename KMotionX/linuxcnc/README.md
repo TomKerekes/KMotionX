@@ -271,6 +271,12 @@ installation from scratch, with its scripts.
     in LinuxCNC they otherwise stay those of the last G43 through an M6, and a home program's
     set-DRO (`G10 L20`) run in that state folds the other tool's X and Y offsets into the
     fixture offset (seen on a machine with a spindle per tool: G54 Y took -6.244).
+    A home program may itself make another tool active (Carl's forces tool 1: its Z channel,
+    its slot in `TOOL_CHANGE`'s variable): after the program the channel map follows the
+    board's coordinate system, the slot is read, and before the program's held DRO settings
+    run LinuxCNC is brought in step by MDI - `M61 Q<tool>` for the table's tool in that
+    pocket, with `G43 H<tool>` under `TOOL_LENGTH_IMMEDIATELY` (also alone, when the tool is
+    right but other offsets are in force). If that line fails the DRO settings are dropped.
     Without the key and the remap, M6 is LinuxCNC's own: iocontrol's tool-change pins, looped
     back in the HAL file.
   - **Probing, G38.2-G38.5** (`[KMOTION] PROBE_BIT`, `PROBE_ACTIVE`): the planner runs the

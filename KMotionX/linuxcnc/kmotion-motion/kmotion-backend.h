@@ -224,6 +224,7 @@ struct KmState {
     int home_serial;              // counts finished homing runs; the masks below belong to the last
     unsigned home_ok_mask;        // joints homed by it (bit = LinuxCNC joint)
     unsigned home_fail_mask;      // joints it did not home (switch not found, aborted, program failed)
+    int home_tool_slot;           // the board's active tool slot after it (TOOL_CHANGE's variable), -1: not read
     int spindle_state;            // board: the spindle as last given to it: 1 CW, -1 CCW, 0 off, 2 not yet
     double spindle_rpm;           // ... what its S action got: the RPM, in CSS mode the surface speed
     bool spindle_css;             // board: in CSS mode (persist 110 = 2, G96)

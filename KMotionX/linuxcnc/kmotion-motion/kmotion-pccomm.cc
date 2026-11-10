@@ -200,7 +200,7 @@ static int set_mode(EMC_TASK_MODE mode)
 // more (its reload-tool step), right when the first held line goes - is held again and
 // tried once the GUI is done, at most three times. GET commands are answered during homing
 // as usual
-struct HeldMdi { std::string line; int tries; };
+struct HeldMdi { std::string line; int tries; bool gate = false; };   // gate: the lines behind it depend on it
 static std::deque<HeldMdi> held_mdi;
 static bool homing_now = false;         // the backend's homing flag, as the dispatcher last saw it
 static int home_serial_seen = 0;        // the backend's homing runs taken into account
@@ -223,7 +223,7 @@ static const int MDI_NO_MODE = -3;      // the switch to MDI mode did not hold (
 static int mdi(const std::string &line)
 {
     if (homing_now) {
-        held_mdi.push_back(HeldMdi{line, 0});
+        held_mdi.push_back(HeldMdi{line, 0, false});
         pclog("pccomm: MDI %s held until the homing is over\n", line.c_str());
         return 0;
     }
@@ -318,6 +318,42 @@ static bool tool_entry(int toolno, CANON_TOOL_TABLE &t)
     if (!tool_table_open() || toolno < 0) return false;
     int idx = tooldata_find_index_for_tool(toolno);
     return idx >= 0 && tooldata_get(&t, idx) == IDX_OK;
+}
+
+// After a homing: the board's home program may have made another tool active than
+// LinuxCNC has loaded (Carl's forces tool 1: its spindle's Z channel, its slot in
+// TOOL_CHANGE's variable). The MDI line that brings LinuxCNC in step, or "": M61 Q<tool> for
+// the table's tool in that slot when it is not the one loaded, with G43 H<tool> when the
+// offsets go with the tool (TOOL_LENGTH_IMMEDIATELY) - also alone, when the tool is right
+// but another tool's offsets are in force. It runs ahead of the program's held DRO settings
+// (G10 L20 takes the active tool offset into the fixture offset)
+static std::string tool_sync_line(int slot)
+{
+    EMC_STAT *st = snapshot();
+    if (!st || slot <= 0 || !tool_table_open()) return "";
+    CANON_TOOL_TABLE t;
+    int tool = -1;
+    for (int idx = 1; idx <= tooldata_last_index_get(); idx++)
+        if (tooldata_get(&t, idx) == IDX_OK && t.toolno > 0 && t.pocketno == slot) { tool = t.toolno; break; }
+    if (tool < 0) {
+        pclog("pccomm: after the homing the board's tool slot is %d: no tool in the table has that pocket, LinuxCNC's tool stays\n", slot);
+        return "";
+    }
+    const bool loaded = st->io.tool.toolInSpindle == tool;
+    const EmcPose &o = st->task.toolOffset;
+    const bool offsets = fabs(o.tran.x - t.offset.tran.x) < 1e-9 && fabs(o.tran.y - t.offset.tran.y) < 1e-9 &&
+                         fabs(o.tran.z - t.offset.tran.z) < 1e-9;
+    char line[96] = "";
+    if (cfg.tool_length_immediately) {
+        if (!loaded) snprintf(line, sizeof line, "M61 Q%d G43 H%d", tool, tool);
+        else if (!offsets) snprintf(line, sizeof line, "G43 H%d", tool);
+    } else if (!loaded) {
+        snprintf(line, sizeof line, "M61 Q%d", tool);
+    }
+    if (line[0])
+        pclog("pccomm: after the homing the board's tool slot is %d (tool %d); LinuxCNC has tool %d, offsets X%.4f Y%.4f Z%.4f: %s first\n",
+              slot, tool, st->io.tool.toolInSpindle, o.tran.x, o.tran.y, o.tran.z, line);
+    return line;
 }
 
 // GET/SET_TOOLTABLE_*: which field, and the G10 L1 word that sets it
@@ -625,17 +661,34 @@ static void pccomm_main()
                 pclog("pccomm: %zu held MDI line(s) dropped: the homing failed\n", held_mdi.size());
                 held_mdi.clear();
             }
+            if (!ks.home_fail_mask && ks.home_tool_slot > 0) {
+                // LinuxCNC's tool and offsets in step with the board's first, then the held lines
+                std::string sync = tool_sync_line(ks.home_tool_slot);
+                if (!sync.empty()) held_mdi.push_front(HeldMdi{sync, 0, true});
+            }
         }
         if (!homing_now && !held_mdi.empty() && homed_in_status(ks.home_ok_mask)) {
             std::deque<HeldMdi> lines;
             lines.swap(held_mdi);
-            for (const HeldMdi &h : lines) {
+            for (size_t i = 0; i < lines.size(); i++) {
+                const HeldMdi &h = lines[i];
                 int r = mdi(h.line);
                 if (r == MDI_NO_MODE && h.tries + 1 < 3) {
-                    held_mdi.push_back(HeldMdi{h.line, h.tries + 1});
+                    // held again with the lines behind it, in their order: a line may depend
+                    // on the one before (the DRO settings on the tool's offsets)
+                    held_mdi.push_back(HeldMdi{h.line, h.tries + 1, h.gate});
                     pclog("pccomm: held MDI %s: the mode switch did not hold, held again (%d)\n", h.line.c_str(), h.tries + 1);
-                } else {
-                    pclog("pccomm: held MDI %s -> %d\n", h.line.c_str(), r);
+                    for (size_t k = i + 1; k < lines.size(); k++) held_mdi.push_back(lines[k]);
+                    break;
+                }
+                pclog("pccomm: held MDI %s -> %d\n", h.line.c_str(), r);
+                if (r && h.gate && i + 1 < lines.size()) {
+                    // the tool and its offsets could not be put in step: a DRO setting now
+                    // would take the wrong tool's offsets into the fixture offset
+                    pclog("pccomm: %zu held MDI line(s) dropped: %s failed\n", lines.size() - i - 1, h.line.c_str());
+                    post_message("After homing, LinuxCNC's tool could not be set to the board's (" + h.line +
+                                 "): the home program's DRO settings were not applied");
+                    break;
                 }
             }
         }

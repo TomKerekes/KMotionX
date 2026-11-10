@@ -19,6 +19,7 @@ struct KmPcCommConfig {
     double min_spindle_override = 0.0;
     std::map<int, std::string> user_button;   // [KMOTION] USER_BUTTON_<n> = an MDI line
     double mdi_timeout = 600;             // seconds an MDI line from the board may take
+    bool tool_length_immediately = false; // [KMOTION] TOOL_LENGTH_IMMEDIATELY: a tool's offsets apply with the tool
 };
 
 // start the dispatcher thread (board mode only); log gets what the -l log gets
