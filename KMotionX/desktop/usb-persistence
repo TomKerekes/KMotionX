@@ -93,8 +93,11 @@ changes in. Use a stick of 16 GB or more."
     echo
     read -r -p "Go ahead? Type yes: " a
     [ "$a" = "yes" ] || { echo "Nothing changed."; finish; }
-    echo "start=$start, type=83" | sudo sfdisk --quiet --no-reread --force -N "$slot" "$disk" ||
-        stop "The partition could not be added (sfdisk)."
+    # sfdisk's own remarks stay out of sight unless it fails: on the disk the system runs from it
+    # always says "partition N is not defined yet" and "Re-reading the partition table failed:
+    # Device or resource busy" (partx below tells the kernel about the one new partition instead)
+    msg=$(echo "start=$start, type=83" | sudo sfdisk --quiet --no-reread --force -N "$slot" "$disk" 2>&1) ||
+        { echo "$msg"; stop "The partition could not be added (sfdisk)."; }
     sudo partx -a -n "$slot" "$disk" 2>/dev/null || sudo partprobe "$disk" 2>/dev/null
     sudo udevadm settle
     for _ in 1 2 3 4 5 6 7 8 9 10; do [ -b "$vol" ] && break; sleep 1; done
