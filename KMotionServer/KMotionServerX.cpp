@@ -108,6 +108,102 @@ typedef struct str_thdata
 //Array of console socket file descriptor
 int ConsolePipeHandle[MAX_BOARDS];
 
+// ---- a board's token, by connection ------------------------------------------------------
+// On Windows every client call first takes the system-wide named mutex "KMotionPipe", and a
+// client keeps that mutex for as long as it holds a board's token (KMotionDLL.cpp WaitToken:
+// "keep the pipe if we have the token"): any other process's call - a plain WriteLine too,
+// which asks for no token - waits until the token is released. KMotionX's CMutex is a mutex
+// inside one process (its name is a string), so here two client processes were not kept
+// apart: with the KMotion tool reading the status (one command, eleven reply lines, each a
+// request of its own), kmotion-motion's download WriteLine of 2.5 KB got in between two of
+// them; the board takes no input while its reply waits to be read, the write stalled until
+// libftdi's 5 s timeout and was abandoned part-sent ("usb bulk write failed"), the status
+// read behind it waited for the device mutex (bin/stallprobe two: within seconds).
+//
+// The server sees every client, so the exclusion is kept here: it knows which connection
+// holds each board's token. While one does, another connection's requests for that board
+// wait; its KMotionLock is answered KMOTION_IN_USE at once, as before. With the token free,
+// requests for a board are carried out one at a time, so that a token cannot be taken
+// while a tokenless request is under way. A connection that closes with the token gives it
+// back. (The library releases the token itself inside Failed(); the connection's own
+// ReleaseToken, which every client sends after a failure, ends the ownership here.)
+struct BoardGate
+{
+	int owner;      // the connection (its socket) that holds the token, -1: free
+	bool active;    // a request for this board is being carried out
+};
+static BoardGate Gate[MAX_BOARDS];
+static bool GateReady = false;
+static pthread_mutex_t GateMx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t GateCv = PTHREAD_COND_INITIALIZER;
+
+static bool GateApplies(int code, int board)
+{
+	// not for a request that does not talk to the board: the board list, the server's view
+	// of the connection, the console registration
+	// (nor for a code the switch below refuses: that ends the connection's thread)
+	// (the board is not set for ListLocations: the code is looked at first)
+	return code >= ENUM_WriteLineReadLine && code <= ENUM_SetConsole &&
+	       code != ENUM_ListLocations && code != ENUM_USBLocation && code != ENUM_SetConsole &&
+	       board >= 0 && board < MAX_BOARDS;
+}
+
+// before a request for the board from connection c. false: it is answered here with *result
+// and the library is not called
+static bool GateEnter(int board, int c, int code, int *result)
+{
+	pthread_mutex_lock(&GateMx);
+	if (!GateReady) { for (int i = 0; i < MAX_BOARDS; i++) { Gate[i].owner = -1; Gate[i].active = false; } GateReady = true; }
+	BoardGate &g = Gate[board];
+	for (;;)
+	{
+		bool others = g.owner != -1 && g.owner != c;
+		if (others && (code == ENUM_KMotionLock || code == ENUM_KMotionLockRecovery))
+		{
+			*result = KMOTION_IN_USE;         // without waiting, and without the device mutex
+			pthread_mutex_unlock(&GateMx);
+			return false;
+		}
+		if (others && code == ENUM_ReleaseToken)
+		{
+			*result = 0;                      // not this connection's token to release
+			pthread_mutex_unlock(&GateMx);
+			return false;
+		}
+		if (!others && !g.active) break;
+		pthread_cond_wait(&GateCv, &GateMx);
+	}
+	g.active = true;
+	pthread_mutex_unlock(&GateMx);
+	return true;
+}
+
+static void GateLeave(int board, int c, int code, int result)
+{
+	pthread_mutex_lock(&GateMx);
+	BoardGate &g = Gate[board];
+	if ((code == ENUM_KMotionLock || code == ENUM_KMotionLockRecovery) && result == KMOTION_LOCKED) g.owner = c;
+	if (code == ENUM_ReleaseToken && g.owner == c) g.owner = -1;
+	g.active = false;
+	pthread_cond_broadcast(&GateCv);
+	pthread_mutex_unlock(&GateMx);
+}
+
+// a connection has closed: a token it still held is given back
+static void GateDrop(int c)
+{
+	pthread_mutex_lock(&GateMx);
+	for (int i = 0; GateReady && i < MAX_BOARDS; i++)
+	{
+		if (Gate[i].owner != c) continue;
+		syslog(LOG_ERR, "Worker Thread. connection %d closed holding the token of board %d: released", c, i);
+		KMotionDLL.ReleaseToken(i);
+		Gate[i].owner = -1;
+	}
+	pthread_cond_broadcast(&GateCv);
+	pthread_mutex_unlock(&GateMx);
+}
+
 std::list<char*> ConsoleList[MAX_BOARDS];
 
 void MyErrExitThread(const char *s, int thread_socket){
@@ -512,6 +608,7 @@ void * InstanceThread(void *ptr){
 		
 	}
 	syslog(LOG_ERR,"Worker Thread. Exiting thread %d", thread_socket);
+	GateDrop(thread_socket);
 
 	// Flush the pipe to allow the client to read the pipe's contents
 	// before disconnecting. Then disconnect the pipe, and close the
@@ -549,7 +646,18 @@ void GetAnswerToRequest(char *chRequest, unsigned int nInBytes, char *chReply, u
 
 	chReply[0]=DEST_NORMAL;
 
-	switch (code)
+	// the board's token, by connection (see BoardGate): another connection's transaction first
+	bool gated = GateApplies(code, board);
+	bool answered = false;
+	if (gated && !GateEnter(board, hPipe, code, &result))
+	{
+		gated = false;
+		answered = true;
+		memcpy(chReply+1, &result,4);
+		*cbReplyBytes=1+4;
+	}
+
+	if (!answered) switch (code)
 	{
 
 	case ENUM_WriteLineReadLine:	// Send Code, board, string -- Get Dest byte, Result (int) and string
@@ -663,6 +771,8 @@ void GetAnswerToRequest(char *chRequest, unsigned int nInBytes, char *chReply, u
 
 	default: MyErrExitThread("Bad Request Code",hPipe);
 	}
+
+	if (gated) GateLeave(board, hPipe, code, result);
 
 	// before we send the answer back check if this pipe
 	// is the message handler for the board and there are
