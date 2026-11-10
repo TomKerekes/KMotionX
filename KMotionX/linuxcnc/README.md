@@ -266,6 +266,11 @@ installation from scratch, with its scripts.
     system (a Z axis per spindle: DefineCoordSystem with the other Z channel); the module reads
     it back after the program (as after the init programs) and its channel map follows, so the
     joints, enables, homing and jogs go by the new channel and Z stands where that channel is.
+    `[KMOTION] TOOL_LENGTH_IMMEDIATELY = 1` (KMotionCNC's Tool Length Immediately; the migration
+    carries it) makes the remap apply the new tool's offsets too - `G43 H<tool>`, `G49` for T0:
+    in LinuxCNC they otherwise stay those of the last G43 through an M6, and a home program's
+    set-DRO (`G10 L20`) run in that state folds the other tool's X and Y offsets into the
+    fixture offset (seen on a machine with a spindle per tool: G54 Y took -6.244).
     Without the key and the remap, M6 is LinuxCNC's own: iocontrol's tool-change pins, looped
     back in the HAL file.
   - **Probing, G38.2-G38.5** (`[KMOTION] PROBE_BIT`, `PROBE_ACTIVE`): the planner runs the

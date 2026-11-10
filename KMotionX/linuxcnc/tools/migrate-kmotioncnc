@@ -833,7 +833,11 @@ class Migration:
         if bits: w("OUTPUT_BITS = " + " ".join(str(b) for b in bits))
         w("NUM_DIO = 4")
         for n in sorted(mcodes): w(f"MCODE_{n} = {mcodes[n]}")
-        if tool_change: w(f"TOOL_CHANGE = {tool_change}             ; M6: the pocket and tool ID as ints in <var>, <var>+1")
+        if tool_change:
+            w(f"TOOL_CHANGE = {tool_change}             ; M6: the pocket and tool ID as ints in <var>, <var>+1")
+            w("# KMotionCNC's Tool Length Immediately: 1 = M6 applies the new tool's offsets itself (G43 H<tool> in the remap,")
+            w("# G49 for T0); 0 = they stay those of the last G43, as plain LinuxCNC. Read by ngc/kmotion_m6.ngc")
+            w(f"TOOL_LENGTH_IMMEDIATELY = {int(self.num('m_ToolLengthImmediately', 0))}")
         w("PC_COMM = 1")
         w("LIMIT_NEG_BITS = " + " ".join(str(b) for b in neg_bits))
         w("LIMIT_POS_BITS = " + " ".join(str(b) for b in pos_bits))

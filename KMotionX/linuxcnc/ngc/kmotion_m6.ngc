@@ -2,9 +2,25 @@
 (SUBROUTINE_PATH = ../../ngc - and this runs the board's tool change program: M198 is the mcodes/M198 wrapper, which)
 (sends the selected pocket and tool ID to kmotion-motion, which runs [KMOTION] TOOL_CHANGE with them in its)
 (persist variable and the next one as ints, KMotionCNC's M6 convention, and waits for the program. Then LinuxCNC)
-(is told the tool is in the spindle. The tool length offset is G43's business, as always.)
+(is told the tool is in the spindle. The tool's offsets - length, and X and Y on a machine with a spindle per)
+(tool - are G43's business in LinuxCNC and stay those of the last G43 through an M6. With [KMOTION])
+(TOOL_LENGTH_IMMEDIATELY = 1 the new tool's offsets apply here, as KMotionCNC's Tool Length Immediately does:)
+(a T1 M6 from MDI or the GUI's button then leaves no other tool's offsets in force - which a home program's)
+(set-DRO, G10 L20, would fold into the fixture offset.)
+(The offsets are asked for by the tool's number, G43 H, not as "the tool in the spindle": that holds whether or)
+(not the interpreter has taken the change in yet. T0, the unload, cancels them: G49.)
 o<kmotion_m6> sub
-M198 P#<_selected_pocket> Q#<_selected_tool>
-M61 Q#<_selected_tool>
+#<tool> = #<_selected_tool>
+M198 P#<_selected_pocket> Q#<tool>
+M61 Q#<tool>
+o100 if [EXISTS[#<_ini[KMOTION]TOOL_LENGTH_IMMEDIATELY>]]
+  o110 if [#<_ini[KMOTION]TOOL_LENGTH_IMMEDIATELY> NE 0]
+    o120 if [#<tool> GT 0]
+      G43 H#<tool>
+    o120 else
+      G49
+    o120 endif
+  o110 endif
+o100 endif
 o<kmotion_m6> endsub
 M2
