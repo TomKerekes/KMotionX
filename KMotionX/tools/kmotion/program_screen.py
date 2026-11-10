@@ -14,7 +14,7 @@ import kmx
 
 
 def sync_folder(folder):
-    """a rename or a new file in the folder reaches the disk now (it is the folder that holds the name)"""
+    """a file renamed or made in the folder reaches the disk now (it is the folder that holds the name)"""
     try:
         fd = os.open(folder, os.O_RDONLY)
         try:
@@ -23,39 +23,6 @@ def sync_folder(folder):
             os.close(fd)
     except OSError:
         pass
-
-
-def write_durably(path, text):
-    """the file on the disk when this returns, and at any power cut the old text or the new one,
-    never an empty file: written beside it, flushed, then renamed over it. (A machine is switched
-    off at the mains; write_text alone left an empty file on a live USB stick powered down
-    seconds after All.)"""
-    real = os.path.realpath(path)
-    folder = os.path.dirname(real)
-    tmp = os.path.join(folder, f".{os.path.basename(real)}.{os.getpid()}.tmp")
-    try:
-        try:
-            mode = os.stat(real).st_mode & 0o7777
-        except OSError:
-            mode = None                 # a new file: the mode open() gives
-        with open(tmp, "w") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        if mode is not None:
-            os.chmod(tmp, mode)
-        os.replace(tmp, real)
-    except OSError:
-        # a folder that takes no second file or no rename (some shared folders): in place
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        with open(real, "w") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-    sync_folder(folder)
 
 
 def keep_setting(settings, key, value):
@@ -377,7 +344,7 @@ class ProgramScreen(QWidget):
             self.files[self.thread - 1] = p
             keep_setting(self.settings, f"program/file{self.thread}", p)
         try:
-            write_durably(self.path, self.editor.toPlainText())
+            Path(self.path).write_text(self.editor.toPlainText())
         except OSError as e:
             QMessageBox.warning(self, "Save", f"cannot write {self.path}: {e}")
             return False
