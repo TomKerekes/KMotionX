@@ -77,7 +77,9 @@ From then on everything is kept: machine configurations, the files in your home 
 network settings, updates you install. The live system itself on the stick is never modified; the
 changes go to a separate volume in the stick's unused space.
 
-- Shut down from the menu before pulling the stick, as with any disk.
+- Shut down from the menu (Applications > Log Out > Shut Down) before pulling the stick or switching
+  the PC off: then nothing is lost. If the power is simply cut, what was saved in the last few
+  seconds may be missing; the KMotion tool's C programs are on the stick the moment they are saved.
 - **To start fresh again**: at the boot menu, with *Live system* highlighted, press **Tab** (on a
   UEFI machine **e**), add the word `nopersistence` to the end of the line that starts with `linux`,
   and start (Enter; **F10** on UEFI). Run **Keep Changes on USB** in that session: it offers to empty

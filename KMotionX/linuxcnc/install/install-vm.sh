@@ -54,7 +54,8 @@ for a in "$@"; do
 done
 # a session started from the live image (a USB stick that keeps its changes, running "Re-install
 # LinuxCNC"): the image's rules - its kernel has no headers package to match, the Guest Additions are its own
-if [ $IMAGE = 0 ] && grep -qw 'boot=live' /proc/cmdline 2>/dev/null; then IMAGE=1; fi
+LIVE_SESSION=0
+if grep -qw 'boot=live' /proc/cmdline 2>/dev/null; then IMAGE=1; LIVE_SESSION=1; fi
 run() { echo "+ $*"; [ $DRY = 1 ] || "$@"; }
 # apt-get runs with DEBIAN_FRONTEND=noninteractive: a package's configuration question (which
 # login manager when GNOME's and Xfce's are both in, say) keeps the current choice instead of
@@ -242,6 +243,20 @@ if [ $DO_ICONS = 1 ]; then
         run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q gnome-shell-extension-desktop-icons-ng
         run gnome-extensions enable ding@rastersoft.com || note "the desktop-icons extension is enabled at the next login"
         note "GNOME: the launchers are in the applications menu (the Windows key, type LinuxCNC); on the desktop after a log out and in"
+    fi
+fi
+
+if [ $IMAGE = 1 ]; then
+    step "the live stick: what is saved reaches it within seconds"
+    # a stick that keeps its changes (desktop/usb-persistence) in a machine that is switched off at
+    # the mains: the kernel's 30 s before written data goes to the disk, and ext4's 5 s journal, cut down
+    live="$KMOTIONX_DIR/KMotionX/linuxcnc/live"
+    run sudo install -m 644 "$live/90-kmotion-live.conf" /etc/sysctl.d/90-kmotion-live.conf
+    run sudo install -m 644 "$live/kmotion-persistence-commit.service" /etc/systemd/system/kmotion-persistence-commit.service
+    run sudo systemctl enable kmotion-persistence-commit.service
+    if [ $LIVE_SESSION = 1 ]; then      # a running live session (not the image's build): now, too
+        run sudo sysctl -q -p /etc/sysctl.d/90-kmotion-live.conf
+        run sudo systemctl start kmotion-persistence-commit.service
     fi
 fi
 

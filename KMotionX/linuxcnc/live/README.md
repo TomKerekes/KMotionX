@@ -27,6 +27,13 @@ VirtualBox: the ISO converted to a virtual disk and enlarged, the VM started fro
 `install-vm.sh` treats a live session (`boot=live`) as `--image`, so "Re-install LinuxCNC" works on
 a stick that keeps changes.
 
+A machine is switched off at the mains, and a stick that keeps changes must stand that: the image
+writes data out after 2 s instead of 30 (`90-kmotion-live.conf`, a sysctl file) and commits the
+volume's journal every second (`kmotion-persistence-commit.service`), both installed by
+`install-vm.sh` in image mode; the KMotion tool saves a C program through a flushed temporary file
+renamed over the old one. (First trial: a C program saved by All, the VM powered off seconds
+later, came back as an empty file.)
+
 **Publishing**: the build leaves `kmotion-linuxcnc-<date>.iso` and `.iso.sha256` on the shared
 folder; both go to https://dynomotion.com/Software/LinuxCNC/ (LIVE-USB.md names that address). The
 ISO is over 4 GB: the web server must serve files that large (and should support resumed downloads).

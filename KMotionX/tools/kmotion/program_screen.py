@@ -12,6 +12,58 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, Q
                                QComboBox, QTreeWidget, QTreeWidgetItem)
 import kmx
 
+
+def sync_folder(folder):
+    """a rename or a new file in the folder reaches the disk now (it is the folder that holds the name)"""
+    try:
+        fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def write_durably(path, text):
+    """the file on the disk when this returns, and at any power cut the old text or the new one,
+    never an empty file: written beside it, flushed, then renamed over it. (A machine is switched
+    off at the mains; write_text alone left an empty file on a live USB stick powered down
+    seconds after All.)"""
+    real = os.path.realpath(path)
+    folder = os.path.dirname(real)
+    tmp = os.path.join(folder, f".{os.path.basename(real)}.{os.getpid()}.tmp")
+    try:
+        try:
+            mode = os.stat(real).st_mode & 0o7777
+        except OSError:
+            mode = None                 # a new file: the mode open() gives
+        with open(tmp, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, real)
+    except OSError:
+        # a folder that takes no second file or no rename (some shared folders): in place
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        with open(real, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+    sync_folder(folder)
+
+
+def keep_setting(settings, key, value):
+    """setValue, and on the disk now: QSettings writes some time later by itself"""
+    settings.setValue(key, value)
+    settings.sync()
+    sync_folder(os.path.dirname(settings.fileName()))
+
 N_USER_THREADS = 7
 C_KEYWORDS = ("auto break case char const continue default do double else enum extern float for goto if int long "
               "register return short signed sizeof static struct switch typedef union unsigned void volatile while "
@@ -323,9 +375,9 @@ class ProgramScreen(QWidget):
             if not p:
                 return False
             self.files[self.thread - 1] = p
-            self.settings.setValue(f"program/file{self.thread}", p)
+            keep_setting(self.settings, f"program/file{self.thread}", p)
         try:
-            Path(self.path).write_text(self.editor.toPlainText())
+            write_durably(self.path, self.editor.toPlainText())
         except OSError as e:
             QMessageBox.warning(self, "Save", f"cannot write {self.path}: {e}")
             return False
@@ -344,14 +396,14 @@ class ProgramScreen(QWidget):
             self.thread_buttons[self.thread - 1].setChecked(True)      # stay
             return
         self.thread = t
-        self.settings.setValue("program/thread", t)
+        keep_setting(self.settings, "program/thread", t)
         self.load_file()
 
     def on_new(self):
         if self.editor.document().isModified() and not self.save_file():
             return
         self.files[self.thread - 1] = ""
-        self.settings.setValue(f"program/file{self.thread}", "")
+        keep_setting(self.settings, f"program/file{self.thread}", "")
         self.editor.setPlainText('#include "KMotionDef.h"\n\nmain()\n{\n\tprintf("Hello World\\n");\n}\n')
         self.editor.document().setModified(True)
         self.refresh_title()
@@ -368,9 +420,9 @@ class ProgramScreen(QWidget):
         if dlg.exec() != QDialog.Accepted or not dlg.selected:
             return
         p = dlg.selected
-        self.settings.setValue("program/open_dir", dlg.root())
+        keep_setting(self.settings, "program/open_dir", dlg.root())
         self.files[self.thread - 1] = p
-        self.settings.setValue(f"program/file{self.thread}", p)
+        keep_setting(self.settings, f"program/file{self.thread}", p)
         self.load_file()
 
     def on_save(self):

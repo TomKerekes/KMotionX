@@ -1,0 +1,11 @@
+[Unit]
+Description=Live USB stick: the volume that keeps the changes commits its journal every second
+ConditionPathIsDirectory=/run/live/persistence
+
+[Service]
+Type=oneshot
+# ext4's default is every 5 s; with 90-kmotion-live.conf a saved file is whole on the stick in ~3 s
+ExecStart=/bin/sh -c 'for m in /run/live/persistence/*; do mountpoint -q "$m" && mount -o remount,commit=1 "$m"; done; exit 0'
+
+[Install]
+WantedBy=multi-user.target
