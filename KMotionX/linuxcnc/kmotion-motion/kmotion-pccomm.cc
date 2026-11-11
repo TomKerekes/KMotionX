@@ -214,6 +214,44 @@ static bool homed_in_status(unsigned homed_mask)
     return true;
 }
 
+// The interpreter keeps a position of its own between MDI lines: task reads the machine's
+// into it (emcTaskPlanSynch) at a mode switch or an abort, not before each line. A board
+// program moves and zeroes axes behind it: KMotionCNC's "Zero" buttons (Carl's Zero 1.c: Z
+// down to the plate, Zero, up, Zero, then SET_Z 2.0) are started by an M code from MDI and
+// not waited for, so task is idle in MDI mode when the program's set-DRO arrives - no mode
+// switch, no resync - and G10 L20, which computes the offset from the interpreter's
+// position (interp_convert.cc: z = cz + offset - z), used the Z of before the program:
+// G54 Z took -8.386 for -2.0 and the next job cut 6.4 in too deep (2026-11-10).
+//
+// So before a line for the board: task's status is waited for until it shows the position
+// the board has (the backend's, from the same status read that carried the command - task
+// is a cycle or two behind it), then task is told to resync the interpreter
+// (EMC_TASK_PLAN_SYNCH, which it takes in MDI mode). A position still changing after the
+// wait - a program setting a DRO while an axis moves - is logged, and the latest is taken.
+static void pose_to_array(const EmcPose &p, double out[8]);
+static void resync_interpreter()
+{
+    KmState ks;
+    km->state(ks);
+    auto same = [&ks] {
+        double p[8];
+        pose_to_array(nml.st->motion.traj.position, p);
+        for (int i = 0; i < 8; i++) if (fabs(p[i] - ks.pos[i]) > 1e-6) return false;
+        return true;
+    };
+    if (!wait_until(same, 2.0)) {
+        double p[8];
+        EMC_STAT *st = snapshot();
+        if (st) {
+            pose_to_array(st->motion.traj.position, p);
+            pclog("pccomm: LinuxCNC's position X%.5f Y%.5f Z%.5f has not come to the board's X%.5f Y%.5f Z%.5f in 2 s (an axis is moving?): the latest is taken\n",
+                  p[0], p[1], p[2], ks.pos[0], ks.pos[1], ks.pos[2]);
+        }
+    }
+    EMC_TASK_PLAN_SYNCH c;
+    if (send(c)) pclog("pccomm: task did not take the interpreter resync (EMC_TASK_PLAN_SYNCH)\n");
+}
+
 // an MDI line, as the GUI would send it, through to the end of its motion: task takes an
 // MDI line in MDI mode only ("Must be in MDI mode to issue MDI command"), so the mode is
 // switched, and goes back to what it was afterwards (an operator jogging in MANUAL keeps
@@ -231,6 +269,7 @@ static int mdi(const std::string &line)
     if (!st || !idle(st)) return -1;
     EMC_TASK_MODE prev = st->task.mode;
     if (set_mode(EMC_TASK_MODE::MDI)) return MDI_NO_MODE;
+    resync_interpreter();       // the board may have moved or zeroed an axis since task last looked
     pclog("pccomm: MDI %s\n", line.c_str());
     EMC_TASK_PLAN_EXECUTE c;
     snprintf(c.command, sizeof c.command, "%s", line.c_str());
