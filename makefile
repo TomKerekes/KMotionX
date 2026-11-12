@@ -37,6 +37,13 @@ subdirs: $(SUBDIRS)
 $(SUBDIRS):
 	$(MAKE) -C $@
 
+# what links what: under make -j a directory starts when the libraries it links are in bin/
+# (in one job the order of SUBDIRS did it; in parallel KMotionServer linked before libKMotionX was there)
+KMotionDLL: KMotionX/src
+GCodeInterpreter: KMotionDLL
+KMotionServer KMotionX/examples/test KMotionX/examples/KFlopConsole: KMotionDLL
+KMotionX/examples/ExecuteGCode KMotionX/examples/kmxWeb KMotionX/examples/LinkProbe KMotionX/JNI: GCodeInterpreter
+
 INSTALL=install
 
 install: subdirs

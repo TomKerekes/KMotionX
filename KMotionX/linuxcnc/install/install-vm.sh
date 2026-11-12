@@ -113,15 +113,15 @@ if [ ! -d "$KMOTIONX_DIR/.git" ]; then
 else note "already cloned ($(git -C "$KMOTIONX_DIR" log -1 --format=%h 2>/dev/null)); not pulled - git pull yourself when you want the latest"; fi
 if [ $DRY = 0 ]; then cd "$KMOTIONX_DIR"; fi
 [ -f "$KMOTIONX_DIR/config.mak" ] || run bash -c "cd '$KMOTIONX_DIR' && ./configure"
-# plain make, never -j: the subdirectory builds race (see the build notes)
-run make -C "$KMOTIONX_DIR"
+# (make -j works since the top makefile says which directory links which library)
+run make -C "$KMOTIONX_DIR" -j"$(nproc)"
 # a tree built before the runpath fix (include.mk: realpath of an install dir that did not
 # exist yet gave the binaries no runpath, and KMotionServer could not find libKMotionX.so):
 # relink everything
 if [ -x "$KMOTIONX_DIR/bin/KMotionServer" ] && ! readelf -d "$KMOTIONX_DIR/bin/KMotionServer" 2>/dev/null | grep -q 'RUNPATH\|RPATH'; then
     note "the binaries have no library runpath (an older build): relinking"
     run make -C "$KMOTIONX_DIR" clean
-    run make -C "$KMOTIONX_DIR"
+    run make -C "$KMOTIONX_DIR" -j"$(nproc)"
 fi
 run sudo make -C "$KMOTIONX_DIR" install
 # the install relinks bin/ as root: one more make as yourself makes the files yours again

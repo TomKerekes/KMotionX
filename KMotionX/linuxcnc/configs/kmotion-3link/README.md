@@ -108,8 +108,8 @@ ahead. A VirtualBox VM is fine. What Tom's laptop runs, to reproduce it (Debian 
   Then `source ~/linuxcnc-dev/scripts/rip-environment` in every terminal that runs it
   (`linuxcnc` alone opens the config picker: `configs/sim/gmoccapy` is a good first check).
 
-- **KMotionX:** Tom's fork, `master` (github.com/TomKerekes/KMotionX). Plain `make`, never
-  `make -j` (the subdirectory builds race) and never inside a subdirectory; the libraries
+- **KMotionX:** Tom's fork, `master` (github.com/TomKerekes/KMotionX). `make` or `make -j$(nproc)`
+  at the top, never inside a subdirectory; the libraries
   and KMotionServer go to `/usr/local` and `~/.kmotionx` with `sudo make install`.
 
       sudo apt install libftdi1-dev

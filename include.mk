@@ -52,6 +52,9 @@ all: $(ODIR) $(EXECUTABLE)
 $(ODIR):
 	mkdir $@
 	
+# the objects' directory first, whatever the order the jobs of a make -j start in
+$(OBJECTS): | $(ODIR)
+
 $(EXECUTABLE): $(OBJECTS) 
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $(BINDIR)/$@
 
