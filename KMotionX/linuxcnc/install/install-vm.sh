@@ -124,8 +124,11 @@ if [ -x "$KMOTIONX_DIR/bin/KMotionServer" ] && ! readelf -d "$KMOTIONX_DIR/bin/K
     run make -C "$KMOTIONX_DIR" -j"$(nproc)"
 fi
 run sudo make -C "$KMOTIONX_DIR" install
-# the install relinks bin/ as root: one more make as yourself makes the files yours again
-run make -C "$KMOTIONX_DIR"
+# (the install builds nothing in a built tree. A makefile from before that linked everything again
+# on every make, as root here: give back what such an install left)
+if [ -n "$(find "$KMOTIONX_DIR/bin" ! -user "$USER" -print -quit 2>/dev/null)" ]; then
+    run sudo chown -R "$USER:" "$KMOTIONX_DIR/bin"
+fi
 run sudo chown -R "$USER:" "$HOME/.kmotionx"
 if [ ! -f /etc/udev/rules.d/90-kflop.rules ]; then
     # (90-: after Debian's 50-udev-default, which overrode the old 10.kflop.rules' mode)

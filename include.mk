@@ -41,7 +41,9 @@ dummy := $(shell test -d $(BINDIR) || mkdir -p $(BINDIR))
  
 OBJECTS=$(SOURCES:%.cpp=$(ODIR)/%.o)
 
-all: $(ODIR) $(EXECUTABLE)
+# the file in bin/ is the target: with its bare name as the target, a file make never found,
+# every make linked every library and program again
+all: $(BINDIR)/$(EXECUTABLE)
 
 # the dependency files -MMD writes: without them a header change rebuilt nothing, and kmxWeb's
 # objects from before CoordMotion.h grew read the library pointer 72 bytes off (it crashed at start).
@@ -55,8 +57,8 @@ $(ODIR):
 # the objects' directory first, whatever the order the jobs of a make -j start in
 $(OBJECTS): | $(ODIR)
 
-$(EXECUTABLE): $(OBJECTS) 
-	$(CC) $(OBJECTS) $(LDFLAGS) -o $(BINDIR)/$@
+$(BINDIR)/$(EXECUTABLE): $(OBJECTS) 
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 
 #GNU style	
 $(ODIR)/%.o: %.cpp
@@ -68,6 +70,7 @@ $(ODIR)/%.o: %.CPP
 
 clean:
 	@echo "Cleaning... $(shell pwd)"
-	rm -rf $(ODIR) $(EXECUTABLE)
+	rm -rf $(ODIR)
+	rm -f $(BINDIR)/$(EXECUTABLE)
 
 .PHONY: clean

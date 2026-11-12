@@ -31,9 +31,15 @@ $(BIN)/linkprobe3: probe3.cc
 $(BIN)/rawusb: rawusb.cc
 	$(CXX) -O2 -std=c++20 -I/usr/include/libftdi1 -o $@ $< -lftdi1
 # the backend's object exists once kmotion-motion has been built (install-vm.sh builds it after this tree)
-linktest: linktest.cc
-	@if [ -f $(BACKEND) ]; then $(CXX) $(FLAGS) -I$(BUILD_ROOT)/KMotionX/linuxcnc/kmotion-motion -o $(BIN)/linktest $< $(BACKEND) $(LIBS); \
-	else echo "linktest: kmotion-motion is not built yet (make -C KMotionX/linuxcnc/kmotion-motion), skipped"; fi
+# and is linked again when that object is newer, not on every make
+ifneq ($(wildcard $(BACKEND)),)
+linktest: $(BIN)/linktest
+$(BIN)/linktest: linktest.cc $(BACKEND)
+	$(CXX) $(FLAGS) -I$(BUILD_ROOT)/KMotionX/linuxcnc/kmotion-motion -o $@ $< $(BACKEND) $(LIBS)
+else
+linktest:
+	@echo "linktest: kmotion-motion is not built yet (make -C KMotionX/linuxcnc/kmotion-motion), skipped"
+endif
 
 clean:
 	rm -f $(BIN)/linkprobe $(BIN)/linkprobe2 $(BIN)/linkprobe3 $(BIN)/rawusb $(BIN)/linktest
