@@ -1233,7 +1233,7 @@ char *get_tok_str(int v, CValue *cv)
     case TOK_CLLONG:
     case TOK_CULLONG:
         /* XXX: not quite exact, but only useful for testing  */
-        sprintf(p, "%llu", cv->ull);
+        sprintf(p, "%llu", (unsigned long long)cv->ull);
         break;
     case TOK_CCHAR:
     case TOK_LCHAR:
@@ -9346,8 +9346,13 @@ int tcc_add_library(TCCState *s, const TCHAR *libraryname)
 
     /* then we look for the static library */
     for(i = 0; i < s->nb_library_paths; i++) {
+#ifdef _UNICODE
         _sntprintf(buf, sizeof(buf)/sizeof(TCHAR), _T("%hs/lib%s.a"),
                  s->library_paths[i], libraryname);
+#else   // the path is a narrow string and so is the format: no h
+        _sntprintf(buf, sizeof(buf)/sizeof(TCHAR), _T("%s/lib%s.a"),
+                 s->library_paths[i], libraryname);
+#endif
         if (tcc_add_file_internal(s, buf, 0) == 0)
             return 0;
     }

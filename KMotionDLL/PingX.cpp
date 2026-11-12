@@ -348,7 +348,7 @@ void *ScanKFLOPs(void *lpdwParam)
                     // Notify the main thread or perform any necessary actions
                     // For example, you could use a condition variable or an event
                     // to signal that the list has changed.
-                    log_info("Device %d: Bus %d, Address %d, LocId=%d, SerialNumber=%s, Description=%s", i, KFLOPs[i].bus_number, KFLOPs[i].device_address, KFLOPs[i].LocId, KFLOPs[i].SerialNumber, KFLOPs[i].Description);
+                    log_info("Device %zu: Bus %d, Address %d, LocId=%d, SerialNumber=%s, Description=%s", i, KFLOPs[i].bus_number, KFLOPs[i].device_address, KFLOPs[i].LocId, KFLOPs[i].SerialNumber, KFLOPs[i].Description);
                 }
                 
             }

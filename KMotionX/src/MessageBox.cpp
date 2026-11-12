@@ -11,15 +11,15 @@ int AfxMessageBox(const char *value, int type)
 	return mb_callback(L"AfxMessageBox", kmx::strtowstr(value).c_str(), type);
 }
 
-int MessageBox(long hwnd, const char *value, const char *title, int type)
+int MessageBox(void *hwnd, const char *value, const char *title, int type)
 {
 	return mb_callback(kmx::strtowstr(title).c_str(), kmx::strtowstr(value).c_str(), type);
 }
-int MessageBoxW(long hwnd, const wchar_t *value, const wchar_t *title, int type)
+int MessageBoxW(void *hwnd, const wchar_t *value, const wchar_t *title, int type)
 {
 	return mb_callback(title, value, type);
 }
-int MessageBoxW(long hwnd, std::wstring value, const wchar_t *title, int type)
+int MessageBoxW(void *hwnd, std::wstring value, const wchar_t *title, int type)
 {
 	return mb_callback(title, value.c_str(), type);
 }

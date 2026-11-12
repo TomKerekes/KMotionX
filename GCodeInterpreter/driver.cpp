@@ -603,14 +603,16 @@ int read_tool_file(      /* ARGUMENT VALUES             */
 			}
 
 			//TODO check toofile parsing /PH
-			char s[256+60];
+			char s[1000];             // as long as buffer: the rest of any line fits
+			char CommentText[1000];   // sscanf writes to characters, not to a CString;
+			char ImageText[1000];     // what is scanned out of s fits
 			strcpy(s,buffer+n);
-			Image[0] = 0;
-			Comment[0] = 0;
+			ImageText[0] = 0;
+			CommentText[0] = 0;
 			BOOL bImageSuccess = TRUE;
 			BOOL bCommentSuccess = TRUE;
 			if(strstr(s," \"\"") != s){
-        		if(sscanf(s, " \"%[^\"]\"%n", Comment,&n) != 1){
+        		if(sscanf(s, " \"%[^\"]\"%n", CommentText,&n) != 1){
           			bCommentSuccess = FALSE;
         		}
 			} else {
@@ -618,10 +620,12 @@ int read_tool_file(      /* ARGUMENT VALUES             */
 			}
 
 			if(strstr(s+n," \"\"") != s+n){
-				if(sscanf(s+n, " \"%[^\"]\"", Image) != 1){
+				if(sscanf(s+n, " \"%[^\"]\"", ImageText) != 1){
 					bCommentSuccess = FALSE;
 				}
 			}
+			Comment = CommentText;
+			Image = ImageText;
 			if(!bImageSuccess)
 			{
 				DRIVER_ERROR_CF2(_T("Bad input line \"%s\" in tool file, no quotation marks for comment"), buffer);

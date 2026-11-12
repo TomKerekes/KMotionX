@@ -66,7 +66,7 @@ CKMotionIO::CKMotionIO()
 	Mutex = new CMutex(FALSE,"KMotionIO",NULL);
 
 	m_Connected=false;
-	ConnectSocket = NULL;
+	ConnectSocket = 0;
 	SendAbortOnConnect=true;
 	FailMessageAlreadyShown=false;
 	Token=0;
@@ -207,7 +207,7 @@ SOCKET CKMotionIO::ConnectToKognaSocket(CString* pReason, unsigned long ipAddres
 		pthread_mutex_unlock(KognaListMutex);
 	}
 #endif
-	return NULL;
+	return 0;
 }
 void * DoExecuteShell(void *lpdwParam)
 {
@@ -291,7 +291,7 @@ SOCKET CKMotionIO::TryConnectToSocket(CString* pReason, unsigned long ipAddress,
 	setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &unacked_ms, sizeof unacked_ms);
 	return s;
 #endif	
-	return NULL;
+	return 0;
 }
 
 
@@ -459,7 +459,7 @@ bool CKMotionIO::RequestedDeviceAvail(CString *Reason)
 			return true;
 		}
 		ConnectSocket = ConnectToKognaSocket(Reason, Requested_ID, port);
-		if (ConnectSocket != NULL)
+		if (ConnectSocket != 0)
 		{
 			Mutex->Unlock();
 			return true;
@@ -1500,7 +1500,7 @@ int CKMotionIO::Failed()
 	if(ConnectSocket)
 	{
 		close(ConnectSocket);
-		ConnectSocket = NULL;
+		ConnectSocket = 0;
 	}
     if(_ftdi_usb_close(ftdi) < 0)
     {

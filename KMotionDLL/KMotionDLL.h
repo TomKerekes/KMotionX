@@ -115,7 +115,7 @@ public:
 	int WriteLineWithEcho(const char *s);
 	int ReadLineTimeOut(char *buf, int TimeOutms=20000);
 	int ListLocations(int *nlocations, int *list);
-	int WaitToken(char* CallerID);
+	int WaitToken(const char* CallerID);
 	int WaitToken(bool display_msg=true, int TimeOut_ms=20000, const char *CallerID=NULL);
 	int KMotionLock(const char *CallerID=NULL);
 	int USBLocation();

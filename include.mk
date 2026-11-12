@@ -10,6 +10,8 @@ CFLAGS+=-g -c -fmessage-length=0 -fPIC -MMD -MP
 CFLAGS+=-std=c++20
 #exceptions on warnings default
 CFLAGS+=-Wall
+# style only, in sources shared with the Windows tree, which stay as they are there
+CFLAGS+=-Wno-misleading-indentation -Wno-format-truncation -Wno-sign-compare
 #wflag set by others might exclude specific warnings
 CFLAGS+=$(W_FLAGS)
 CFLAGS+=$(IFLAGS)

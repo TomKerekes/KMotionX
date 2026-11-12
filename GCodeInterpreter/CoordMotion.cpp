@@ -3065,7 +3065,7 @@ int CCoordMotion::StraightFeedAccelRapid(double DesiredFeedRate_in_per_sec, doub
 	CString errmsg;
 	if (CheckSoftLimits(x,y,z,a,b,c,u,v,errmsg)) 
 	{
-		std::string FunctionType;
+		CString FunctionType;
 		if (RapidMode) FunctionType=" Straight Traverse";
 		else FunctionType=" Straight Feed";
 		

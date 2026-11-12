@@ -876,7 +876,7 @@ void SortSymbolTable(void)
 		*p++ =NewTable[i];
 	}
 
-	delete NewTable;
+	tcc_free(NewTable);
 }
 
 
@@ -1017,7 +1017,6 @@ int ReadElf(TCCState *s1, const char *InFile)
 {
 	FILE *f;
 	int i;
-	unsigned int VersionAddress = 0;
 	Elf32_Ehdr file_hdr;                   /* FILE HEADER STRUCTURE              */
 	Elf32_Shdr sect_hdr, const_hdr, symbol_hdr, strtab_hdr;
 
@@ -1036,8 +1035,8 @@ int ReadElf(TCCState *s1, const char *InFile)
 	int HeaderStringTableSize = sect_hdr.sh_size;
 
 	char *HeaderStringTable = (char *)malloc(HeaderStringTableSize + 1);
-	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  return 1; }
-	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable;  return 1; }
+	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { free(HeaderStringTable);  return 1; }
+	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { free(HeaderStringTable);  return 1; }
 
 	//find 3 section headers
 	const_hdr.sh_name = strtab_hdr.sh_name = symbol_hdr.sh_name = 0;
@@ -1045,7 +1044,7 @@ int ReadElf(TCCState *s1, const char *InFile)
 	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) return 1;  // seek to section headers
 	for (i = 0; i < file_hdr.e_shnum; i++)
 	{
-		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  return 1; }
+		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { free(HeaderStringTable);  return 1; }
 
 		if (strcmp(HeaderStringTable + sect_hdr.sh_name, ".const") == 0)
 			const_hdr = sect_hdr;
@@ -1057,7 +1056,7 @@ int ReadElf(TCCState *s1, const char *InFile)
 		if (const_hdr.sh_name != 0 && strtab_hdr.sh_name != 0 && symbol_hdr.sh_name != 0) break;
 	}
 
-	delete HeaderStringTable;
+	free(HeaderStringTable);
 
 	if (i == file_hdr.e_shnum) return 1;
 
@@ -1066,14 +1065,14 @@ int ReadElf(TCCState *s1, const char *InFile)
 	int StringTableSize = strtab_hdr.sh_size;
 
 	char *StringTable = (char *)malloc(StringTableSize + 1);
-	if (fseek(f, StringsOffset, SEEK_SET)) { delete StringTable;  return 1; }
-	if (fread(StringTable, StringTableSize, 1, f) != 1) { delete StringTable;  return 1; }
+	if (fseek(f, StringsOffset, SEEK_SET)) { free(StringTable);  return 1; }
+	if (fread(StringTable, StringTableSize, 1, f) != 1) { free(StringTable);  return 1; }
 
 	// read in all symbols
 	Elf32_Sym *Syms = (Elf32_Sym *)malloc(symbol_hdr.sh_size * sizeof(Elf32_Sym));
-	if (Syms==NULL) { delete StringTable; return 1; }
-	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  return 1; }  // seek to symbols
-	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { delete StringTable; delete Syms;  return 1; }
+	if (Syms==NULL) { free(StringTable); return 1; }
+	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { free(StringTable); free(Syms);  return 1; }  // seek to symbols
+	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { free(StringTable); free(Syms);  return 1; }
 
 	// go through the symbols and pass them to TCC 
 	for (i = 0; i < (int)(symbol_hdr.sh_size / sizeof(Elf32_Sym)); i++)
@@ -1094,8 +1093,8 @@ int ReadElf(TCCState *s1, const char *InFile)
 		}
 	}
 
-	delete StringTable;
-	delete Syms;
+	free(StringTable);
+	free(Syms);
 	return 0;
 }
 

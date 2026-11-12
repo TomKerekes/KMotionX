@@ -186,7 +186,7 @@ int CKMotionDLL::KMotionLockRecovery()
 //    display a message (return value = KMOTION_NOT_CONNECTED)
 
 
-int CKMotionDLL::WaitToken(char* CallerID)
+int CKMotionDLL::WaitToken(const char* CallerID)
 {
 	return WaitToken(false, 100000, CallerID);
 }
@@ -2323,8 +2323,8 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 	int HeaderStringTableSize = sect_hdr.sh_size;
 
 	char* HeaderStringTable = (char*)malloc(HeaderStringTableSize + 1);
-	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  return 1; }
-	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable;  return 1; }
+	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { free(HeaderStringTable);  return 1; }
+	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { free(HeaderStringTable);  return 1; }
 
 
 	//find 3 section headers
@@ -2333,7 +2333,7 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) {fclose(f); return 1;}  // seek to section headers
 	for (i = 0; i < file_hdr.e_shnum; i++)
 	{
-		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  return 1; }
+		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { free(HeaderStringTable);  return 1; }
 
 		if (strcmp(HeaderStringTable + sect_hdr.sh_name, ".const") == 0)
 			const_hdr = sect_hdr;
@@ -2345,7 +2345,7 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 		if (const_hdr.sh_name != 0 && strtab_hdr.sh_name != 0 && symbol_hdr.sh_name != 0) break;
 	}
 
-	delete HeaderStringTable;
+	free(HeaderStringTable);
 
 	if (i == file_hdr.e_shnum) return 1;
 
@@ -2354,13 +2354,13 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 	int StringTableSize = strtab_hdr.sh_size;
 
 	char* StringTable = (char*)malloc(StringTableSize + 1);
-	if (fseek(f, StringsOffset, SEEK_SET)) { delete StringTable;  return 1; }
-	if (fread(StringTable, StringTableSize, 1, f) != 1) { delete StringTable;  return 1; }
+	if (fseek(f, StringsOffset, SEEK_SET)) { free(StringTable);  return 1; }
+	if (fread(StringTable, StringTableSize, 1, f) != 1) { free(StringTable);  return 1; }
 
 	// read in all symbols
 	Elf32_Sym* Syms = (Elf32_Sym*)malloc(symbol_hdr.sh_size * sizeof(Elf32_Sym));
-	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  return 1; }  // seek to symbols
-	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { delete StringTable; delete Syms;  return 1; }
+	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { free(StringTable); free(Syms);  return 1; }  // seek to symbols
+	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { free(StringTable); free(Syms);  return 1; }
 
 	// go through the symbols looking for the Version 
 	int count = 0;
@@ -2375,8 +2375,8 @@ int CKMotionDLL::CheckElfSize(const char* InFile, int* size_text, int* size_bss,
 		if (strcmp("__stop_.data", name) == 0)  { end_data = Syms[i].st_value; count++; }
 	}
 
-	delete StringTable;
-	delete Syms;
+	free(StringTable);
+	free(Syms);
 	fclose(f);
 
 	*size_text = end_text - start_text;
@@ -2433,16 +2433,16 @@ int CKMotionDLL::ExtractElfVersionString(const TCHAR *InFile, char *Version)
 	int HeaderStringTableSize = sect_hdr.sh_size;
 
 	char *HeaderStringTable = (char *)malloc(HeaderStringTableSize + 1);
-	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  fclose(f); return 1; }
-	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable; fclose(f); return 1; }
+	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { free(HeaderStringTable);  fclose(f); return 1; }
+	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { free(HeaderStringTable); fclose(f); return 1; }
 
 	//find 3 section headers
 	const_hdr.sh_name = strtab_hdr.sh_name = symbol_hdr.sh_name = 0;
 
-	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) {delete HeaderStringTable; fclose(f); return 1;}  // seek to section headers
+	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) {free(HeaderStringTable); fclose(f); return 1;}  // seek to section headers
 	for (i = 0; i < file_hdr.e_shnum; i++)
 	{
-		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  fclose(f); return 1; }
+		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { free(HeaderStringTable);  fclose(f); return 1; }
 
 		if (strcmp(HeaderStringTable + sect_hdr.sh_name, ".const") == 0)
 			const_hdr = sect_hdr;
@@ -2454,7 +2454,7 @@ int CKMotionDLL::ExtractElfVersionString(const TCHAR *InFile, char *Version)
 		if (const_hdr.sh_name != 0 && strtab_hdr.sh_name != 0 && symbol_hdr.sh_name != 0) break;
 	}
 
-	delete HeaderStringTable;
+	free(HeaderStringTable);
 
 	if (i == file_hdr.e_shnum) {fclose(f); return 1;}
 
@@ -2463,13 +2463,13 @@ int CKMotionDLL::ExtractElfVersionString(const TCHAR *InFile, char *Version)
 	int StringTableSize = strtab_hdr.sh_size;
 
 	char *StringTable = (char *)malloc(StringTableSize + 1);
-	if (fseek(f, StringsOffset, SEEK_SET)) { delete StringTable;  fclose(f); return 1; }
-	if (fread(StringTable, StringTableSize, 1, f) != 1) { delete StringTable;  fclose(f); return 1; }
+	if (fseek(f, StringsOffset, SEEK_SET)) { free(StringTable);  fclose(f); return 1; }
+	if (fread(StringTable, StringTableSize, 1, f) != 1) { free(StringTable);  fclose(f); return 1; }
 
 	// read in all symbols
 	Elf32_Sym *Syms = (Elf32_Sym *)malloc(symbol_hdr.sh_size * sizeof(Elf32_Sym));
-	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  fclose(f); return 1; }  // seek to symbols
-	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { delete StringTable; delete Syms;  fclose(f); return 1; }
+	if (fseek(f, symbol_hdr.sh_offset, SEEK_SET)) { free(StringTable); free(Syms);  fclose(f); return 1; }  // seek to symbols
+	if (fread(Syms, symbol_hdr.sh_size, 1, f) != 1) { free(StringTable); free(Syms);  fclose(f); return 1; }
 
 	// go through the symbols looking for the Version 
 	for (i = 0; i < (int)(symbol_hdr.sh_size / sizeof(Elf32_Sym)); i++)
@@ -2478,18 +2478,18 @@ int CKMotionDLL::ExtractElfVersionString(const TCHAR *InFile, char *Version)
 		{
 			// found it
 			// seek to it in .const
-			if (fseek(f, Syms[i].st_value - const_hdr.sh_addr + const_hdr.sh_offset, SEEK_SET)) { delete StringTable; delete Syms;  fclose(f); return 1; }
+			if (fseek(f, Syms[i].st_value - const_hdr.sh_addr + const_hdr.sh_offset, SEEK_SET)) { free(StringTable); free(Syms);  fclose(f); return 1; }
 			// read it
-			if (fread(Version, 50, 1, f) != 1) { delete StringTable; delete Syms;  fclose(f); return 1; }
+			if (fread(Version, 50, 1, f) != 1) { free(StringTable); free(Syms);  fclose(f); return 1; }
 			fclose(f);
-			delete StringTable;
-			delete Syms;
+			free(StringTable);
+			free(Syms);
 			return 0;
 		}
 	}
 
-	delete StringTable;
-	delete Syms;
+	free(StringTable);
+	free(Syms);
 	fclose(f);
 	return 0;
 }
@@ -2650,25 +2650,25 @@ int CKMotionDLL::ElfLoad(const TCHAR *InFile, unsigned int *EntryPoint, int Pack
 	int HeaderStringTableSize = sect_hdr.sh_size;
 
 	char *HeaderStringTable = (char *)malloc(HeaderStringTableSize + 1);
-	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { delete HeaderStringTable;  fclose(f); return 1; }
-	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { delete HeaderStringTable;  fclose(f); return 1; }
+	if (fseek(f, HeaderStringsOffset, SEEK_SET)) { free(HeaderStringTable);  fclose(f); return 1; }
+	if (fread(HeaderStringTable, HeaderStringTableSize, 1, f) != 1) { free(HeaderStringTable);  fclose(f); return 1; }
 
 
 	*EntryPoint = file_hdr.e_entry; // return the entry point
 
 	//identify all the sections that have data to be placed in memory
 
-	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) { delete HeaderStringTable; fclose(f); return 1;}  // seek to section headers
+	if (fseek(f, file_hdr.e_shoff, SEEK_SET)) { free(HeaderStringTable); fclose(f); return 1;}  // seek to section headers
 	for (i = 0; i < file_hdr.e_shnum; i++)
 	{
-		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { delete HeaderStringTable;  fclose(f); return 1; }
+		if (fread(&sect_hdr, sizeof(sect_hdr), 1, f) != 1) { free(HeaderStringTable);  fclose(f); return 1; }
 
 		if (sect_hdr.sh_type == SHT_PROGBITS && (sect_hdr.sh_flags & SHF_ALLOC) == SHF_ALLOC)
 		{
 			if (iLoadSections == MAX_SECTIONS)
 			{
 				MessageBox(NULL, Translate("Too many Sections in ELF File"), _T("KMotion"), MB_ICONSTOP|MB_OK|MB_TOPMOST|MB_SETFOREGROUND|MB_SYSTEMMODAL);
-				delete HeaderStringTable;  
+				free(HeaderStringTable);  
 				fclose(f);
 				return 1;
 			}
@@ -2676,7 +2676,7 @@ int CKMotionDLL::ElfLoad(const TCHAR *InFile, unsigned int *EntryPoint, int Pack
 		}
 	}
 
-	delete HeaderStringTable;
+	free(HeaderStringTable);
 	
 	// now load them all
 	for (i = 0; i < iLoadSections; i++)
@@ -2693,12 +2693,12 @@ int CKMotionDLL::ElfLoad(const TCHAR *InFile, unsigned int *EntryPoint, int Pack
 		}
 
 		// read the data
-		if (fread(buffer, LoadSections[i].sh_size, 1, f) != 1) {delete buffer; fclose(f); return 1; }
+		if (fread(buffer, LoadSections[i].sh_size, 1, f) != 1) {free(buffer); fclose(f); return 1; }
 
 		// write it to DSP
-		if (!mem_write(buffer, LoadSections[i].sh_size, LoadSections[i].sh_addr, 0)) { delete buffer; fclose(f); return 1; }
+		if (!mem_write(buffer, LoadSections[i].sh_size, LoadSections[i].sh_addr, 0)) { free(buffer); fclose(f); return 1; }
 
-		delete buffer;
+		free(buffer);
 	}
 
 	fclose(f);

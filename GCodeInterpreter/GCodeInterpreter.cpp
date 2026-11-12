@@ -67,7 +67,8 @@ CGCodeInterpreter::CGCodeInterpreter(CCoordMotion *CoordM)
 	m_UserFnMCode = NULL;
 	m_ScreenScriptCallback = NULL;
 
-	m_InvokeThreadID = m_InterpretThreadID = -1;
+	m_InterpretThreadID = -1;
+	m_InvokeThreadID = -1;
 }
 
 CGCodeInterpreter::~CGCodeInterpreter()
