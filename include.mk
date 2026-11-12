@@ -39,11 +39,13 @@ dummy := $(shell test -d $(BINDIR) || mkdir -p $(BINDIR))
  
 OBJECTS=$(SOURCES:%.cpp=$(ODIR)/%.o)
 
-# the dependency files -MMD writes: without them a header change rebuilt nothing, and kmxWeb's
-# objects from before CoordMotion.h grew read the library pointer 72 bytes off (it crashed at start)
--include $(OBJECTS:.o=.d)
-
 all: $(ODIR) $(EXECUTABLE)
+
+# the dependency files -MMD writes: without them a header change rebuilt nothing, and kmxWeb's
+# objects from before CoordMotion.h grew read the library pointer 72 bytes off (it crashed at start).
+# After all: the first rule read is what a plain make builds, and above it that was the first
+# object of the first .d file - a tree that had been built once compiled one file and linked nothing
+-include $(OBJECTS:.o=.d)
 
 $(ODIR):
 	mkdir $@
