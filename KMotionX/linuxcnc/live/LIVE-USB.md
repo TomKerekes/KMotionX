@@ -24,14 +24,23 @@ Optional, to check the download arrived whole: compare the SHA-256 of the file w
 
 ## 1. Write the stick
 
-Everything on the stick is erased. The image must be written *as an image*, not copied as a file.
+Everything on the stick is erased. The image must be written as a disk image (Rufus calls this
+**DD Image mode**), not copied onto the stick as files (Rufus's **ISO Image mode**, the one it
+recommends: do not take it).
 
-**balenaEtcher** (Windows, macOS, Linux; https://etcher.balena.io): Flash from file, pick the ISO;
-Select target, pick the stick; Flash.
+**balenaEtcher** (Windows, macOS, Linux; https://etcher.balena.io) is the simplest, it asks nothing:
+Flash from file, pick the ISO; Select target, pick the stick; Flash.
 
-**Rufus** (Windows; https://rufus.ie): pick the stick under Device, SELECT the ISO, START. Rufus asks
-how to write it: choose **Write in DD Image mode**. Leave its "Persistent partition size" at 0 (the
-stick's own "Keep Changes on USB" icon does that, step 3).
+**Rufus** (Windows; https://rufus.ie):
+
+1. Under Device pick the stick, and with SELECT the ISO. Leave "Persistent partition size" at 0 (the
+   stick's own "Keep Changes on USB" icon does that, step 3).
+2. Press START.
+3. Rufus now asks how to write it ("ISOHybrid image detected"), with *Write in ISO Image mode
+   (Recommended)* already selected. **Change it to "Write in DD Image mode"**, then OK.
+
+A stick written in ISO Image mode is laid out Rufus's way, not the image's, and **Keep Changes on
+USB** finds no room on it: write it again in DD Image mode.
 
 **Linux**: find the stick's device with `lsblk` (the whole stick, `/dev/sdX`, not `/dev/sdX1`), then
 
@@ -45,6 +54,17 @@ format it: that is how a Linux stick looks to Windows.
 Plug the stick in, switch the PC on, and press its boot-menu key as it starts: usually **F12** (Dell,
 Lenovo, Acer), **F9** or **Esc** (HP), **F8** or **Esc** (Asus), **F11** (MSI, ASRock), **F2/F10** on
 some others. Pick the USB stick, then **Live system (amd64)** in the menu that follows.
+
+Getting the boot menu, which is not the PC's setup (BIOS) screen:
+
+- Tap the key repeatedly from the moment the PC is switched on, rather than holding it. On a laptop
+  the F keys may need **Fn** held as well.
+- From Windows use **Restart**, not Shut down: after a Windows shut-down many PCs start too fast to
+  see the key.
+- If the setup screen comes up instead, change nothing: leave it without saving (usually Esc) and
+  try again, or look there for an entry called Boot Menu or Boot Override.
+- Without any key, from Windows: hold **Shift** and click **Restart**, then **Use a device** and
+  pick the USB stick.
 
 - Secure Boot can normally stay on: the image starts through Debian's signed boot loader. If the PC
   refuses the stick, switch Secure Boot off in the PC's setup and try again.
@@ -64,6 +84,12 @@ Connect a KFLOP by USB. Connect a Kogna by Ethernet with its IP setting at 0, in
 Either way the wired connection comes up by itself, nothing to set. `ip -4 addr` in a terminal shows
 the addresses.
 
+**Back to the PC's own system**: shut down from the menu (Applications > Log Out > Shut Down), wait
+until the PC has switched itself off, then pull the stick and switch the PC on as usual. Nothing on
+the PC's disk was changed. If the PC then does not start Windows by itself, open the boot menu
+again with the same key and pick **Windows Boot Manager** (or the PC's disk); if it needs that at
+every start, put Windows Boot Manager first in the boot order in the PC's setup.
+
 ## 3. Keep your changes on the stick
 
 As written, the stick is read-only: whatever you change is held in memory and gone at power-off.
@@ -77,8 +103,8 @@ From then on everything is kept: machine configurations, the files in your home 
 network settings, updates you install. The live system itself on the stick is never modified; the
 changes go to a separate volume in the stick's unused space.
 
-- Shut down from the menu (Applications > Log Out > Shut Down) before pulling the stick or switching
-  the PC off: then nothing is lost. If the power is simply cut, what was saved in the last few
+- Shut down from the menu (Applications > Log Out > Shut Down) and wait until the PC is off before
+  pulling the stick: then nothing is lost. If the power is simply cut, what was saved in the last few
   seconds may be missing or incomplete.
 - **To start fresh again**: at the boot menu, with *Live system* highlighted, press **Tab** (on a
   UEFI machine **e**), add the word `nopersistence` to the end of the line that starts with `linux`,
