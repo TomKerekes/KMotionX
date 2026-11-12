@@ -6,7 +6,7 @@ client of KMotionServer, so it works beside LinuxCNC's kmotion-motion or kmxWeb 
 same board; the board token serializes the commands.
 
     sudo apt install python3-pyside6.qtwidgets python3-pyside6.qtgui   # once
-    make -C shim                                                      # builds ../../bin/libkmx_c.so
+    make -C shim                 # builds ../../bin/libkmx_c.so (the make at the top of KMotionX does it too)
     python3 kmotion_tool.py
 
 - `shim/kmx_c.cpp` is the only C++: an `extern "C"` layer over `CKMotionDLL` (open, console

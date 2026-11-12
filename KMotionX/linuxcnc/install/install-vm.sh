@@ -211,6 +211,7 @@ else
 fi
 
 step "the KMotion tool (tools/kmotion)"
+# (the make at the top builds it too; this is for a tree whose makefile is from before that)
 run make -C "$KMOTIONX_DIR/KMotionX/tools/kmotion/shim"
 
 step "KMotionXCNC: $KMOTIONXCNC_REPO in $KMOTIONXCNC_DIR (the web CNC application)"

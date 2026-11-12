@@ -12,6 +12,8 @@ SUBDIRS+=KMotionX/examples/ExecuteGCode
 SUBDIRS+=KMotionX/examples/kmxWeb
 SUBDIRS+=KMotionX/examples/LinkProbe
 SUBDIRS+=TCC67
+# libkmx_c.so, the C interface the KMotion tool loads: make clean removes it with the rest of bin/
+SUBDIRS+=KMotionX/tools/kmotion/shim
 
 ifeq ($(BUILD_JNI),true)
 SUBDIRS+=KMotionX/JNI
@@ -41,7 +43,7 @@ $(SUBDIRS):
 # (in one job the order of SUBDIRS did it; in parallel KMotionServer linked before libKMotionX was there)
 KMotionDLL: KMotionX/src
 GCodeInterpreter: KMotionDLL
-KMotionServer KMotionX/examples/test KMotionX/examples/KFlopConsole: KMotionDLL
+KMotionServer KMotionX/examples/test KMotionX/examples/KFlopConsole KMotionX/tools/kmotion/shim: KMotionDLL
 KMotionX/examples/ExecuteGCode KMotionX/examples/kmxWeb KMotionX/examples/LinkProbe KMotionX/JNI: GCodeInterpreter
 
 INSTALL=install

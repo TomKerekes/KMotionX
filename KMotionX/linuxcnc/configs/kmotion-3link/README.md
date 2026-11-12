@@ -118,7 +118,7 @@ ahead. A VirtualBox VM is fine. What Tom's laptop runs, to reproduce it (Debian 
       make -C ~/KMotionX/KMotionX/linuxcnc/kmotion-motion      # kmotion-motion, kmotion-mcode
 
   Optional, the KMotion tool (`KMotionX/tools/kmotion`): `sudo apt install
-  python3-pyside6.qtwidgets python3-pyside6.qtgui` and `make -C ~/KMotionX/KMotionX/tools/kmotion/shim`.
+  python3-pyside6.qtwidgets python3-pyside6.qtgui` (its library, `bin/libkmx_c.so`, is built by the `make` above).
 
 - **This config:** `cd ~/KMotionX/KMotionX/linuxcnc/configs/kmotion-3link && linuxcnc
   kmotion-3link.ini` (after the rip-environment). The paths in `kmotion-3link.hal` and
