@@ -9,12 +9,18 @@ LDFLAGS = -shared -L$(KMOTIONX_DIR)/bin -Wl,-rpath,$(KMOTIONX_DIR)/bin
 LIBS = -lKMotion -lKMotionX -lpthread
 TARGET = $(KMOTIONX_DIR)/bin/libkmx_c.so
 
+# the headers kmx_c.cpp read, written by the compiler: the library holds CKMotionDLL's layout, so
+# a change in KMotionDLL.h rebuilds it (the makefile too: a tree built before this has no kmx_c.d)
+DEPFILE = kmx_c.d
+
 all: $(TARGET)
 
-$(TARGET): kmx_c.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+$(TARGET): kmx_c.cpp makefile
+	$(CXX) $(CXXFLAGS) -MMD -MP -MF $(DEPFILE) -MT $@ -o $@ $< $(LDFLAGS) $(LIBS)
+
+-include $(DEPFILE)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(DEPFILE)
 
 .PHONY: all clean
