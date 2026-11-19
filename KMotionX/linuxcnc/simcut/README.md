@@ -71,7 +71,11 @@ T5 Dovetail-z .750 60deg.wrl
 ```
 
 These are KMotionCNC's VRML tool images, spun about Z by the engine, at scale 1 (as a Tool
-Table Image in KMotionCNC). A tool without an image cuts as a flat end mill of the tool table's
+Table Image in KMotionCNC). The tool of a move is the one the preview's tool changes give it,
+else the tool in the spindle when the program was loaded. The preview's interpreter records an
+M6, but not an M61 - which is how KMotionX's M6 remap (`ngc/kmotion_m6.ngc`) sets the tool - so
+with that remap the patch `patches/gcodemodule-m61-tool-change.patch` is needed, else every move
+is cut with the tool that was in the spindle. A tool without an image cuts as a flat end mill of the tool table's
 diameter (`D`); a tool number the table does not have cuts as `STOCK_DEFAULT_DIAMETER` (0: nothing). A Create Tool dialog like KMotionCNC's is not
 written yet; its images can be made there and copied.
 

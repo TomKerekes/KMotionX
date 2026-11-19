@@ -38,6 +38,15 @@ same flaw: it does nothing until the tool has moved). With the patch the buffer 
 recognises the trail by its first point, and gremlin redraws once the logger's trail is not
 the one it had before the clear. No timing is involved.
 
+## For the preview: M61 records the tool
+
+`gcodemodule-m61-tool-change.patch` (`src/emc/rs274ngc/gcodemodule.cc`, the interpreter the GUIs
+parse a program with for the preview): an `M61 Qn` is recorded as a tool change, as an M6 is. The
+module ignored M61, so a program whose M6 is remapped to `ngc/kmotion_m6.ngc` - which puts the tool in
+the spindle with `M61 Q` - showed no tool change at all in the preview: every vertex carried the tool
+of before the first change, and the Stock (`simcut/`) cut the whole program with the tool that was in
+the spindle, or with none. Rebuild the module with `make -C ~/linuxcnc-dev/src ../lib/python/gcode.so`.
+
 ## For `[RS274NGC] RIGID_TAP_CYCLES`
 
 `interp-rigid-tap-cycles.patch` (`src/emc/rs274ngc/`): with the key set, the interpreter's

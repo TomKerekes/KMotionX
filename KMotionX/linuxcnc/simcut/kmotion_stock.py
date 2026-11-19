@@ -24,9 +24,10 @@ What the Stock is cut with
     cut can follow the tool along it (KMotionCNC plots long moves in pieces of 0.05 s).  A traverse
     cuts as a rapid (red), a feed or arc as a feed (blue); dwell and tool change markers are poses
     without a move.  Arcs come already segmented.
-  - The tool of each vertex: the tool number the preview recorded there.  Its shape is the tool
-    image named for it in [KMOTION] TOOL_IMAGES (KMotionCNC's VRML tool images, at scale 1), else
-    a flat end mill of the tool table's diameter.
+  - The tool of each vertex: the tool the preview recorded there (its tool changes, M6; with the
+    gcodemodule patch of KMotionX/linuxcnc/patches also M61, which the M6 remap uses), else the
+    tool in the spindle.  Its shape is the tool image named for it in [KMOTION] TOOL_IMAGES
+    (KMotionCNC's VRML tool images, at scale 1), else a flat end mill of the tool table's diameter.
   - The tool direction (4 and 5 axis): from the A, B and C positions the renderer recorded at each
     vertex, turned as KMotionCNC's viewer turns the tool: about X by A, then about Y by B, then
     about Z by C.  The part is taken as fixed and the tool as pivoting (RTCP), whatever the
@@ -341,25 +342,41 @@ def split_moves(tips, lines, tools, flags, axis, piece):
     return out_tips, out_lines, out_tools, out_flags, out_axis
 
 
-def program_poses(geom, stock, images, diameters, default_diameter=0.0, piece=0.0):
+def vertex_tools(geom, spindle_tool=0):
+    """The tool number at every vertex, (n,) int64.  The renderer records at each vertex an
+    ordinal into its list of tool changes (geom.tool_numbers: entry 0 is "none yet"), not the
+    number itself.  Where no change has been recorded the tool is the one in the spindle: a
+    program that changes no tool cuts with it, and so do the moves before its first change."""
+    ordinals = np.asarray(geom.tools, dtype=np.int64)
+    numbers = list(getattr(geom, "tool_numbers", None) or [None])
+    table = np.array([int(n) if n is not None else 0 for n in numbers] or [0], dtype=np.int64)
+    known = (ordinals >= 0) & (ordinals < len(table))
+    tools = table[np.where(known, ordinals, 0)]
+    if spindle_tool:
+        tools = np.where(tools == 0, int(spindle_tool), tools)
+    return tools
+
+
+def program_poses(geom, stock, images, diameters, default_diameter=0.0, piece=0.0, spindle_tool=0):
     """Feed the program's vertices to the engine as poses.  Returns the per-pose line numbers
     (int64) and tip positions, or None when the program has no vertices.
 
     geom: rs274.glcanon_bake.ProgramGeometry; stock: kmotion_simcut.Stock; images: ToolImages;
     diameters: {tool number: diameter} from the tool table (machine units); default_diameter for a tool
     number that is not in it (0: such a tool cuts nothing); piece: a move longer than this is given in
-    pieces (split_moves), 0 for none."""
+    pieces (split_moves), 0 for none; spindle_tool: the tool in the spindle, for vertices before any
+    tool change (vertex_tools)."""
     if geom is None or getattr(geom, "is_empty", True) or len(geom) == 0:
         return None
     tips = tip_positions(geom)
     kinds = geom.kinds
-    tools = geom.tools
+    tools = vertex_tools(geom, spindle_tool)
     index_of = {}
     for number in np.unique(tools):
         number = int(number)
         dia = float(diameters.get(number, default_diameter) or 0.0)
         index_of[number] = stock.add_tool_image(images.image(number), 1.0, (0.0, 0.0, 0.0), dia)
-    tool_index = np.vectorize(index_of.__getitem__, otypes=[np.int32])(tools.astype(np.int64))
+    tool_index = np.vectorize(index_of.__getitem__, otypes=[np.int32])(tools)
     tips, lines, tool_index, flags, axis = split_moves(tips, np.asarray(geom.lines, dtype=np.int64), tool_index,
                                                         pose_flags(kinds), tool_axes(geom), piece)
     stock.add_poses(np.ascontiguousarray(tips), tool_index, flags, axis)
@@ -436,8 +453,9 @@ class StockPart(glcanon_scene.Part):
             self._define(self.settings.box)
             return
         box = stock_box(canon, self.settings)
-        log.info("program: %d vertices, lines %s..%s, tools %s, box %s", len(geom), int(geom.lines.min()), int(geom.lines.max()),
-                 sorted(set(int(t) for t in np.unique(geom.tools))), box)
+        spindle = int(getattr(stat, "tool_in_spindle", 0) or 0)
+        log.info("program: %d vertices, lines %s..%s, tool changes %s, tool in the spindle %d, box %s", len(geom),
+                 int(geom.lines.min()), int(geom.lines.max()), list(getattr(geom, "tool_numbers", []))[1:], spindle, box)
         self._define(box)
         diameters = {}
         for t in getattr(canon, "tools", ()) or ():
@@ -448,7 +466,7 @@ class StockPart(glcanon_scene.Part):
                 pass
         try:
             fed = program_poses(geom, self.stock, self.images, diameters, self.settings.default_diameter,
-                                self._piece(stat))
+                                self._piece(stat), spindle)
         except Exception:
             log.exception("the program could not be given to the Stock")
             fed = None
@@ -456,8 +474,8 @@ class StockPart(glcanon_scene.Part):
             log.info("program: nothing given to the Stock")
             return
         self._lines, self._tips = fed
-        log.info("program: %d poses given (pieces of %.3g), tool table diameters %s, defined %s", self.stock.nb_poses(),
-                 self._piece(stat), diameters, self.stock.defined())
+        log.info("program: %d poses given (pieces of %.3g) with tools %s, tool table diameters %s, defined %s", self.stock.nb_poses(),
+                 self._piece(stat), sorted(set(vertex_tools(geom, spindle).tolist())), diameters, self.stock.defined())
         if self.settings.follow and self._is_running(stat):
             log.info("a run is on: following it")
             self._start_run()

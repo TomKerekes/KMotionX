@@ -1,0 +1,21 @@
+diff --git a/src/emc/rs274ngc/gcodemodule.cc b/src/emc/rs274ngc/gcodemodule.cc
+index cb51aee861..5535a16420 100644
+--- a/src/emc/rs274ngc/gcodemodule.cc
++++ b/src/emc/rs274ngc/gcodemodule.cc
+@@ -562,9 +562,15 @@ void CHANGE_TOOL() {
+     parse_state.canon->change_tool(parse_state.selected_tool);
+ }
+ 
+-void CHANGE_TOOL_NUMBER(int /*pocket*/) {
++void CHANGE_TOOL_NUMBER(int pocket) {
+     maybe_new_line();
+     if(parse_state.interp_error) return;
++    // KMotionX: M61 Qn puts tool n in the spindle without a change, and what follows is cut
++    // with it - an M6 remapped to the board's tool change sets the tool this way. The renderer
++    // records it as it does an M6, so the preview's vertices carry the right tool (the Stock
++    // cuts with its shape). Q0 is no tool.
++    int toolno = pocket > 0 ? GET_EXTERNAL_TOOL_TABLE(pocket).toolno : 0;
++    parse_state.canon->change_tool(toolno);
+ }
+ 
+ void RELOAD_TOOLDATA(void) {
