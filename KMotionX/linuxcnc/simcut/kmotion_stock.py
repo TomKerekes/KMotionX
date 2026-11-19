@@ -66,6 +66,19 @@ from rs274 import glcanon_bake, glcanon_gl, glcanon_scene
 import kmotion_simcut as sim
 
 log = logging.getLogger("kmotion_stock")
+#: The part's own log, /tmp/kmotion-stock.log (KMOTION_STOCK_LOG names another file, an empty
+#: value none): what it did with each program and run, and its errors, whatever the GUI does
+#: with Python's logging.
+_log_file = os.environ.get("KMOTION_STOCK_LOG", "/tmp/kmotion-stock.log")
+if _log_file and not any(getattr(h, "_kmotion_stock", False) for h in log.handlers):
+    try:
+        _h = logging.FileHandler(_log_file)
+        _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
+        _h._kmotion_stock = True
+        log.addHandler(_h)
+        log.setLevel(logging.INFO)
+    except OSError:
+        pass
 
 _debug_file = os.environ.get("KMOTION_STOCK_DEBUG")
 
@@ -418,9 +431,14 @@ class StockPart(glcanon_scene.Part):
         self._lines = self._tips = None
         geom = getattr(canon, "program_geometry", None)
         if geom is None or getattr(geom, "is_empty", True):
+            log.info("program: none or empty (canon %s); the Stock is %s", type(canon).__name__,
+                     "the ini's box" if self.settings.box else "not defined")
             self._define(self.settings.box)
             return
-        self._define(stock_box(canon, self.settings))
+        box = stock_box(canon, self.settings)
+        log.info("program: %d vertices, lines %s..%s, tools %s, box %s", len(geom), int(geom.lines.min()), int(geom.lines.max()),
+                 sorted(set(int(t) for t in np.unique(geom.tools))), box)
+        self._define(box)
         diameters = {}
         for t in getattr(canon, "tools", ()) or ():
             try:
@@ -435,13 +453,18 @@ class StockPart(glcanon_scene.Part):
             log.exception("the program could not be given to the Stock")
             fed = None
         if fed is None:
+            log.info("program: nothing given to the Stock")
             return
         self._lines, self._tips = fed
+        log.info("program: %d poses given (pieces of %.3g), tool table diameters %s, defined %s", self.stock.nb_poses(),
+                 self._piece(stat), diameters, self.stock.defined())
         if self.settings.follow and self._is_running(stat):
+            log.info("a run is on: following it")
             self._start_run()
             self._follow(stat)
         else:
             self.stock.cut_all()
+            log.info("cut all")
 
     def _piece(self, stat):
         """The longest piece of a move: STOCK_PIECE, else 0.05 inch in the machine's units."""
@@ -518,6 +541,7 @@ class StockPart(glcanon_scene.Part):
         running = self._is_running(stat)
         if running and not self._running:
             self._start_run()
+            log.info("run started (line %s): the Stock is uncut again", getattr(stat, "motion_line", "?"))
             told = True
         if running:
             done = self._progress(stat)
@@ -528,19 +552,29 @@ class StockPart(glcanon_scene.Part):
         elif self._running:
             self._running = False
             self.stock.cut_all()
+            log.info("run over: cut all (it had come to %d poses)", self._done)
             told = True
         return told
 
     def tick(self):
         """Called on a timer by install(): True when the picture should be drawn again (the
-        engine is cutting, or has just finished, or the run changed).  The run is followed here
+        engine is cutting, has meshes waiting to be drawn, or the run changed).  The run is followed here
         too, not only when the GUI redraws: a run that ends, or is refused before it moves,
         changes nothing a GUI redraws on, and the Stock would stay as it was."""
         told = False
         if self._stat is not None:
             told = self._follow(self._stat)
         busy = self.stock.busy()
-        again = busy or self._was_busy or told
+        pending = self.stock.pending() > 0                     # meshes handed over since the last frame
+        if self._was_busy and not busy:
+            try:
+                st = self.stock.stats()
+                log.info("engine idle: %d poses cut, lattice %s (step %.4g), %.0f triangles, %.1f MB, volume %.4f, failed %s, %d meshes waiting",
+                         st["applied"], st["nodes"], st["step"][0], st["triangles"], st["bytes"] / 1e6, st["volume"][2],
+                         self.stock.failed(), self.stock.pending())
+            except Exception:
+                log.exception("stats")
+        again = busy or self._was_busy or told or pending
         self._was_busy = busy
         return again
 
@@ -591,7 +625,9 @@ class StockPart(glcanon_scene.Part):
         if gen != self._generation:
             self._delete_slots()
             self._generation = gen
+        taken = 0
         for index, verts, tris in self.stock.take_meshes():
+            taken += 1
             old = self._slots.pop(index, None)
             if old is not None:
                 self._delete_slot(old)
@@ -642,7 +678,11 @@ class StockPart(glcanon_scene.Part):
         if ctx.canon is not self._canon:
             self.load_program(ctx.canon, ctx.stat)
         self._follow(ctx.stat)
+        before = len(self._slots)
         self._upload()
+        self._frames = getattr(self, "_frames", 0) + 1
+        if len(self._slots) != before or self._frames in (1, 10, 100):
+            log.info("frame %d: %d meshes drawn (generation %s)", self._frames, len(self._slots), self._generation)
         if not self._slots:
             return
         shader = self._ensure_shader(ctx.caps)
@@ -747,6 +787,7 @@ def install(widget, inifile, ini_dir=None):
                 widget.tkRedraw()
             widget.after(100, tk_tick)
         widget.after(100, tk_tick)
-    log.info("Stock installed: resolution %g, follow %s, tool images %s", settings.resolution,
-             settings.follow, settings.tool_images or "none")
+    log.info("Stock installed in %s (%s): resolution %g, follow %s, tool images %s, redraws by %s", type(widget).__name__,
+             type(widget).__module__, settings.resolution, settings.follow, settings.tool_images or "none",
+             "GLib" if hasattr(widget, "queue_draw") else "Tk" if hasattr(widget, "after") else "nobody")
     return part

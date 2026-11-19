@@ -205,6 +205,15 @@ public:
 		S.UnlockMeshes();
 		return out;
 	}
+	// meshes changed since take_meshes last took them: what a frame would upload now
+	int pending()
+	{
+		S.LockMeshes();
+		int n = 0, total = S.NbMeshes();
+		for (int i = 0; i < total; i++) if (S.Mesh(i).changed) n++;
+		S.UnlockMeshes();
+		return n;
+	}
 	void republish() { S.Republish(); }
 	bool wait_surface(int ms) { py::gil_scoped_release nogil; return S.WaitSurface(ms); }
 };
@@ -258,6 +267,7 @@ PYBIND11_MODULE(kmotion_simcut, m)
 		.def("generation", &Stock::generation)
 		.def("nb_meshes", &Stock::nb_meshes)
 		.def("take_meshes", &Stock::take_meshes)
+		.def("pending", &Stock::pending, "meshes changed since take_meshes, waiting to be drawn")
 		.def("republish", &Stock::republish)
 		.def("wait_surface", &Stock::wait_surface, py::arg("milliseconds"));
 }
