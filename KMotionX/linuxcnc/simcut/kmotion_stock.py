@@ -13,7 +13,7 @@ what it hands over.
 install() adds a StockPart to the widget's scene, before the program lines, and times redraws
 while the engine cuts.  stock_rc.py does that from [DISPLAY] USER_COMMAND_FILE; README.md has the
 ini keys ([KMOTION] STOCK, STOCK_RESOLUTION, STOCK_BOX, STOCK_FILE, STOCK_FOLLOW, TOOL_IMAGES,
-TOOL_IMAGE_DIR, STOCK_LINE_WIDTH, STOCK_DEFAULT_DIAMETER, STOCK_PIECE).
+TOOL_IMAGE_DIR, STOCK_LINE_WIDTH, STOCK_DEFAULT_DIAMETER, STOCK_PIECE, STOCK_TOOL_SHAPE).
 
 What the Stock is cut with
   - The block: the program's (WORKPIECE,BOX,...) comment (the first one; a cylinder or tube is
@@ -196,6 +196,7 @@ class Settings:
             os.path.join(here, "..", "..", "..", "KMotion", "Data", "ToolImages"))
         self.line_width = float(get("STOCK_LINE_WIDTH", "1.5"))
         self.default_diameter = float(get("STOCK_DEFAULT_DIAMETER", "0"))
+        self.tool_shape = get("STOCK_TOOL_SHAPE", "1").strip() not in ("0", "no", "off")
         self.piece = get("STOCK_PIECE")                      # None: 0.05 inch in the machine's units
         coords = (ini.find("TRAJ", "COORDINATES") or "XYZ").upper()
         self.rotary = any(a in coords for a in "ABC")
@@ -850,6 +851,130 @@ class StockPart(glcanon_scene.Part):
             self._define(stock_box(self._canon, self.settings))
 
 
+# ---------------------------------------------------------------------------- the tool, drawn from its image
+
+def simplify_profile(h, r, tol):
+    """The profile with points that lie within tol of the line between their neighbours left out
+    (Douglas-Peucker), so that a tool image of hundreds of points draws as a few dozen rings."""
+    pts = list(zip(h, r))
+    if len(pts) <= 2:
+        return pts
+    keep = [False] * len(pts)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(pts) - 1)]
+    while stack:
+        a, b = stack.pop()
+        (ha, ra), (hb, rb) = pts[a], pts[b]
+        dx, dy = hb - ha, rb - ra
+        length = math.hypot(dx, dy) or 1e-12
+        far, at = 0.0, -1
+        for i in range(a + 1, b):
+            hi, ri = pts[i]
+            d = abs(dx * (ri - ra) - dy * (hi - ha)) / length
+            if d > far:
+                far, at = d, i
+        if at >= 0 and far > tol:
+            keep[at] = True
+            stack.append((a, at))
+            stack.append((at, b))
+    return [pt for pt, k in zip(pts, keep) if k]
+
+
+def revolve_profile(h, r, open_above, slices=24, tol=None):
+    """A tool's profile (heights above the tip, radii) as a surface of revolution about Z: float32
+    (N, 6) position and normal triangles, wound counter-clockwise seen from outside, as LinuxCNC's
+    glcanon_bake.cylinder_mesh is.  The tip is at z = 0.  A flat tip and a closed top are capped;
+    an open tool ends at its last profile point (the image's length)."""
+    h = [float(v) for v in h]
+    r = [float(v) for v in r]
+    if len(h) < 2:
+        return np.zeros((0, 6), dtype=np.float32)
+    if tol is None:
+        tol = 0.01 * max(max(r), 1e-9)
+    pts = simplify_profile(h, r, tol)
+    cs = [(math.cos(2 * math.pi * i / slices), math.sin(2 * math.pi * i / slices)) for i in range(slices + 1)]
+    out = []
+
+    def ring(z, rad, i):
+        c, sn = cs[i]
+        return rad * c, rad * sn, z
+
+    for (h0, r0), (h1, r1) in zip(pts[:-1], pts[1:]):
+        dh, dr = h1 - h0, r1 - r0
+        length = math.hypot(dh, dr)
+        if length <= 0:
+            continue
+        nr, nz = dh / length, -dr / length            # outward: the segment's direction turned a quarter
+        for i in range(slices):
+            c0, s0 = cs[i]
+            c1, s1 = cs[i + 1]
+            n0 = (nr * c0, nr * s0, nz)
+            n1 = (nr * c1, nr * s1, nz)
+            b0 = ring(h0, r0, i) + n0
+            b1 = ring(h0, r0, i + 1) + n1
+            t0 = ring(h1, r1, i) + n0
+            t1 = ring(h1, r1, i + 1) + n1
+            if r1 > 0:
+                out.append(b0); out.append(t1); out.append(t0)
+            if r0 > 0:
+                out.append(b0); out.append(b1); out.append(t1)
+    if pts[0][1] > 0:                                   # a flat tip: a disk facing down
+        z, rad = pts[0]
+        for i in range(slices):
+            out.append((0.0, 0.0, z, 0.0, 0.0, -1.0))
+            out.append(ring(z, rad, i + 1) + (0.0, 0.0, -1.0))
+            out.append(ring(z, rad, i) + (0.0, 0.0, -1.0))
+    if not open_above and pts[-1][1] > 0:               # a closed top: a disk facing up
+        z, rad = pts[-1]
+        for i in range(slices):
+            out.append((0.0, 0.0, z, 0.0, 0.0, 1.0))
+            out.append(ring(z, rad, i) + (0.0, 0.0, 1.0))
+            out.append(ring(z, rad, i + 1) + (0.0, 0.0, 1.0))
+    return np.array(out, dtype=np.float32).reshape(-1, 6)
+
+
+class ImageToolPart(glcanon_scene.ToolPart):
+    """LinuxCNC's tool marker, drawing the tool in the spindle as its tool image where it has one:
+    the image's profile spun about the tool's axis, at the marker's place, with the marker's
+    lighting and transparency.  A tool without an image, and a lathe, get LinuxCNC's own marker."""
+
+    def __init__(self, images):
+        self.images = images
+        self._meshes = {}
+
+    def mesh_for(self, tool):
+        path = self.images.image(tool) if tool else ""
+        if not path:
+            return None
+        try:
+            key = (path, os.path.getmtime(path))
+        except OSError:
+            return None
+        if key not in self._meshes:
+            try:
+                h, r, open_above = sim.read_tool_image(path)
+                self._meshes[key] = revolve_profile(h, r, open_above)
+                log.info("tool %s drawn from %s: %d profile points", tool, os.path.basename(path), len(h))
+            except Exception:
+                log.exception("the tool image %s could not be drawn", path)
+                self._meshes[key] = None
+        return self._meshes[key]
+
+    def _draw_at_tool(self, ctx, pos, rx, ry, rz):
+        mesh = None
+        if not ctx.is_lathe:
+            try:
+                mesh = self.mesh_for(int(getattr(ctx.stat, "tool_in_spindle", 0) or 0))
+            except Exception:
+                mesh = None
+        if mesh is None or len(mesh) == 0:
+            return glcanon_scene.ToolPart._draw_at_tool(self, ctx, pos, rx, ry, rz)
+        ctx.mv.translate(*pos)
+        self._apply_rotary(ctx, rx, ry, rz)
+        glBlendColor(0, 0, 0, ctx.colors["tool_alpha"])
+        ctx.prim.draw_cone(ctx, ctx.colors["cone"], mesh_verts=mesh)
+
+
 # ---------------------------------------------------------------------------- hooking in
 
 def _want_axis_positions():
@@ -877,6 +1002,9 @@ def install(widget, inifile, ini_dir=None):
     scene = widget.scene
     scene.insert_before(scene.program, part, lambda ctx: part.visible)
     widget.kmotion_stock = part
+    if settings.tool_shape and getattr(scene, "tool", None) is not None:
+        part.tool_part = ImageToolPart(part.images)
+        scene.replace(scene.tool, part.tool_part)      # the gate (show_tool) stays
 
     # redraws while the engine cuts: GTK (gremlin) or Tk (AXIS); another toolkit calls part.tick()
     # on a timer of its own and redraws when it says so
@@ -894,7 +1022,7 @@ def install(widget, inifile, ini_dir=None):
                 widget.tkRedraw()
             widget.after(100, tk_tick)
         widget.after(100, tk_tick)
-    log.info("Stock installed in %s (%s): resolution %g, follow %s, tool images %s, redraws by %s", type(widget).__name__,
-             type(widget).__module__, settings.resolution, settings.follow, settings.tool_images or "none",
-             "GLib" if hasattr(widget, "queue_draw") else "Tk" if hasattr(widget, "after") else "nobody")
+    log.info("Stock installed in %s (%s): resolution %g, follow %s, tool images %s, tool drawn from its image %s, redraws by %s",
+             type(widget).__name__, type(widget).__module__, settings.resolution, settings.follow, settings.tool_images or "none",
+             settings.tool_shape, "GLib" if hasattr(widget, "queue_draw") else "Tk" if hasattr(widget, "after") else "nobody")
     return part

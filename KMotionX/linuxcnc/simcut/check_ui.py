@@ -84,5 +84,28 @@ check(len(h) == 3 and abs(max(r) - 0.125) < 1e-6 and abs(h[1] - 0.125) < 1e-4, "
 dlg.entries[3].set_text("0.01")
 check(dlg.create() is None and dlg.message.get_text(), "sizes that make no tool are refused with a reason: %r" % dlg.message.get_text())
 dlg.destroy()
+
+# the tool drawn from its image: the mesh of revolution
+import math, numpy as np
+f = os.path.join(td, "dove.wrl")
+assert sim.write_tool_image(f, sim.SIMTOOL_DOVETAIL, [0.75, 60, 0.3125, 0.375, 2.0], 36, "") is None
+h, r, open_ = sim.read_tool_image(f)
+pts = kmotion_stock.simplify_profile(h, r, 0.01 * max(r))
+check(4 <= len(pts) <= 12, "a dovetail's %d profile points simplify to %d corners" % (len(h), len(pts)))
+m = kmotion_stock.revolve_profile(h, r, open_)
+tri = m.reshape(-1, 3, 6)
+a, b, cc = tri[:, 0, :3], tri[:, 1, :3], tri[:, 2, :3]
+face = np.cross(b - a, cc - a)
+n = tri[:, :, 3:].mean(axis=1)
+okk = np.linalg.norm(face, axis=1) > 1e-9
+check(m.dtype == np.float32 and m.shape[1] == 6 and (np.einsum("ij,ij->i", face[okk], n[okk]) > 0).all(),
+      "the dovetail's mesh: %d triangles, all wound counter-clockwise seen from outside" % (len(m) // 3))
+check(abs(m[:, 2].min()) < 1e-6 and abs(m[:, 2].max() - 2.0) < 1e-6 and abs(np.hypot(m[:, 0], m[:, 1]).max() - 0.375) < 1e-4,
+      "from the tip at z 0 to the length 2, radius 0.375 at most")
+m2 = kmotion_stock.revolve_profile([0, 1], [0.125, 0.125], False, slices=8)
+m3 = kmotion_stock.revolve_profile([0, 1], [0.125, 0.125], True, slices=8)
+check(len(m2) == 8 * 6 + 8 * 3 * 2 and len(m3) == 8 * 6 + 8 * 3, "a closed end mill has two caps, an open one the bottom only")
+tp = kmotion_stock.ImageToolPart(ti)
+check(tp.mesh_for(3) is None, "a tool without an image draws LinuxCNC's own marker")
 print("ui test", "passed" if not fails else "FAILED (%d)" % fails)
 sys.exit(1 if fails else 0)

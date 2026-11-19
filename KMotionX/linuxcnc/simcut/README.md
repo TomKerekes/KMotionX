@@ -49,6 +49,7 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
    ;STOCK_LINE_WIDTH = 1.5         ; the path lines are kept in front of the surface by this many pixels
    ;STOCK_DEFAULT_DIAMETER = 0     ; a tool number that is not in the tool table cuts as a flat end mill of this diameter (0: nothing)
    ;STOCK_PIECE = 0.05             ; a move longer than this (machine units) is cut in pieces of it, so the cut follows the tool along it
+   ;STOCK_TOOL_SHAPE = 1           ; the tool marker drawn from the tool's image (0: LinuxCNC's cone or cylinder)
    ```
 
    `configs/kmotion-sim` (AXIS) and `configs/kmotion-minirouter` (gmoccapy) have these.
@@ -99,6 +100,11 @@ the command line (sizes in the machine's units, the tip at height 0):
 
 Put the file in `KMotion/Data/ToolImages` (or name its folder) and the tool's line in `TOOL_IMAGES`.
 Any VRML tool image KMotionCNC displays works the same way: the engine spins it about Z.
+
+The tool marker in the preview is drawn from the image as well, where the tool in the spindle has
+one: the profile spun about the tool's axis, at the marker's place, in the marker's colour and
+transparency. A tool without an image keeps LinuxCNC's cone or cylinder. `STOCK_TOOL_SHAPE = 0`
+keeps LinuxCNC's marker for every tool.
 
 These are KMotionCNC's VRML tool images, spun about Z by the engine, at scale 1 (as a Tool
 Table Image in KMotionCNC). The tool of a move is the one the preview's tool changes give it,
