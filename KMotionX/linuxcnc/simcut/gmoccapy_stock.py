@@ -1,6 +1,8 @@
 # gmoccapy_stock.py : the Stock's buttons in gmoccapy
 # Copyright (c) 2026 DynoMotion Incorporated.  SPDX-License-Identifier: MIT
-"""Two buttons on gmoccapy's tool table page, for the Stock (kmotion_stock.py):
+"""gmoccapy's buttons for the Stock (kmotion_stock.py).  Under the preview, beside the show/hide
+dimensions toggle, a toggle that shows or hides the Stock (kept in gmoccapy's preferences as
+view_stock, like the others).  On the tool table page:
 
   Tool image...   a tool image (KMotionCNC's VRML tool images) for the tool selected in the table.
                   The file's name goes into the tool's comment as "[name.wrl]", the table is saved
@@ -18,7 +20,8 @@ import os
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gtk, GdkPixbuf  # noqa: E402
+from gi.repository import Gtk, Gdk, GdkPixbuf  # noqa: E402
+import cairo  # noqa: E402
 
 import kmotion_simcut as sim  # noqa: E402
 import kmotion_stock  # noqa: E402
@@ -285,6 +288,59 @@ def on_create_tool(_button, app, part):
         dlg.destroy()
 
 
+def stock_icon(size=32):
+    """A small picture of a cut block, for the toggle under the preview: drawn here, so that it
+    follows no theme file."""
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    c = cairo.Context(surface)
+    s = size / 32.0
+    c.scale(s, s)
+    # the block, seen a little from above: top face lighter, front darker
+    c.move_to(4, 12); c.line_to(22, 12); c.line_to(28, 6); c.line_to(10, 6); c.close_path()
+    c.set_source_rgb(0.72, 0.74, 0.77); c.fill()
+    c.rectangle(4, 12, 18, 14); c.set_source_rgb(0.55, 0.57, 0.60); c.fill()
+    c.move_to(22, 12); c.line_to(28, 6); c.line_to(28, 20); c.line_to(22, 26); c.close_path()
+    c.set_source_rgb(0.45, 0.47, 0.50); c.fill()
+    # a slot cut across the top, blue as a feed cut
+    c.move_to(7, 10); c.line_to(25, 10); c.line_to(26.5, 8.5); c.line_to(8.5, 8.5); c.close_path()
+    c.set_source_rgb(0.25, 0.56, 0.92); c.fill()
+    c.rectangle(4, 12, 18, 2.5); c.set_source_rgb(0.20, 0.45, 0.80); c.fill()
+    return Gtk.Image.new_from_pixbuf(Gdk.pixbuf_get_from_surface(surface, 0, 0, size, size))
+
+
+def install_view_toggle(app, part):
+    """The show/hide Stock toggle under the preview, after the dimensions toggle."""
+    dim = getattr(app.widgets, "tbtn_view_dimension", None)
+    if dim is None or dim.get_parent() is None:
+        return None
+    box = dim.get_parent()
+    btn = Gtk.ToggleButton()
+    btn.set_image(stock_icon())
+    btn.set_always_show_image(True)
+    btn.set_tooltip_text("Show or hide the Stock (the material removal)")
+    w, h = dim.get_size_request()
+    if w > 0 and h > 0:
+        btn.set_size_request(w, h)
+    btn.set_halign(dim.get_halign())
+    btn.set_valign(dim.get_valign())
+    shown = app.prefs.getpref("view_stock", True, bool)
+    part.set_visible(shown)
+    btn.set_active(shown)
+
+    def toggled(b):
+        part.set_visible(b.get_active())
+        app.prefs.putpref("view_stock", b.get_active())
+        app.widgets.gremlin.queue_draw()
+    btn.connect("toggled", toggled)
+    box.pack_start(btn, False, False, 0)
+    try:
+        box.reorder_child(btn, box.get_children().index(dim) + 1)
+    except (ValueError, AttributeError):
+        pass
+    btn.show_all()
+    return btn
+
+
 def _button(label, tooltip, callback, *args):
     b = Gtk.Button(label=label)
     b.set_size_request(56, 56)
@@ -295,11 +351,16 @@ def _button(label, tooltip, callback, *args):
 
 
 def install(app, part):
-    """The two buttons on the tool table page of gmoccapy (app: the gmoccapy object)."""
+    """gmoccapy's buttons for the Stock (app: the gmoccapy object): the show/hide toggle under the
+    preview and the two on the tool table page."""
+    try:
+        install_view_toggle(app, part)
+    except Exception:
+        log.exception("the Stock toggle under the preview")
     te = app.widgets.tooledit1
     buttonbox = te.wTree.get_object("buttonbox")
     buttonbox.pack_start(_button("Tool\nimage", "A tool image (shape) for the tool selected in the table: the Stock cuts with it",
                                  on_tool_image, app, part), False, False, 0)
     buttonbox.pack_start(_button("Create\ntool", "A basic tool's image from its sizes, as KMotionCNC's Create Tool", on_create_tool, app, part),
                          False, False, 0)
-    log.info("gmoccapy: Tool image and Create tool buttons on the tool table page")
+    log.info("gmoccapy: the Stock toggle under the preview, Tool image and Create tool on the tool table page")

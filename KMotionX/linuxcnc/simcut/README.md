@@ -19,7 +19,8 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
   preview's geometry and the machine's status, draws what the engine hands over.
   `kmotion_stock.install(widget, inifile)` is all a GUI has to call.
 - `stock_rc.py` - does that call as the GUI's `[DISPLAY] USER_COMMAND_FILE`.
-- `gmoccapy_stock.py` - under gmoccapy, two buttons on the tool table page: **Tool image...**
+- `gmoccapy_stock.py` - under gmoccapy, a show/hide Stock toggle under the preview beside the
+  dimensions toggle (kept as `view_stock` in gmoccapy's preferences), and two buttons on the tool table page: **Tool image...**
   gives the selected tool a tool image, **Create tool...** makes one from a basic tool's sizes
   (KMotionCNC's Create Tool). `tool_image.py` does the latter from the command line.
 - `stock-demo.ngc` - a 9 x 6 x 1 inch block, two slots and a rapid that crashes into it, cut
@@ -156,8 +157,9 @@ uploads (each block's vertices, their extent and kinds) and the matrices of a fr
 
 ## Not yet
 
-- Buttons to show or hide the Stock and the path lines, and to save, load and unload Stock
-  files (the part has `set_visible`, `save`, `load`, `unload` for a GUI to call).
+- Buttons to save, load and unload Stock files (the part has `save`, `load`, `unload` for a GUI
+  to call); the show/hide toggle is gmoccapy's only (`set_visible` for another GUI). gmoccapy's own
+  tool path toggle hides the path lines so that the cut surface can be seen.
 - The tool image lives in the tool's comment, not in a column of the table (LinuxCNC's table
   has none); the buttons are gmoccapy's only, other GUIs edit the comment or `TOOL_IMAGES`.
 - Several `(WORKPIECE,...)` pieces, cylinders and tubes as such (one box for now).
