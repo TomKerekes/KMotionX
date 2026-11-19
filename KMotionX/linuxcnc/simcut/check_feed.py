@@ -162,9 +162,10 @@ def main():
     part._follow(stat)
     check(part._done == before, "a line number seen again (a loop, a late status) never takes cuts back")
     stat.task_mode, stat.interp_state = 1, 1
-    part._follow(stat)
-    check(not part._running and part.stock.wait_idle(60000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
-          "the run over: the whole program is cut again")
+    part._stat = stat                                   # as draw() leaves it
+    again = part.tick()                                 # the timer, not a redraw, notices the end of the run
+    check(again and not part._running and part.stock.wait_idle(60000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
+          "the run over, seen by the timer with no redraw: the whole program is cut again")
     print("check-feed", "passed" if not fails else "FAILED (%d)" % fails)
     return 1 if fails else 0
 

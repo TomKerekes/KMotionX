@@ -384,6 +384,7 @@ class StockPart(glcanon_scene.Part):
         self._slots = {}
         self._generation = None
         self._was_busy = False
+        self._stat = None                                      # the GUI's status, as last drawn with (tick)
         self._loaded = False
         if settings.stock_file:
             err, lo, hi, res = self.stock.load(settings.stock_file)
@@ -510,25 +511,36 @@ class StockPart(glcanon_scene.Part):
         return max(d, min(count, n))
 
     def _follow(self, stat):
+        """The run as the status tells it: True when the engine was told something."""
         if not self.settings.follow or self._lines is None:
-            return
+            return False
+        told = False
         running = self._is_running(stat)
         if running and not self._running:
             self._start_run()
+            told = True
         if running:
             done = self._progress(stat)
             if done > self._done:
                 self._done = done
                 self.stock.cut_to(done)
+                told = True
         elif self._running:
             self._running = False
             self.stock.cut_all()
+            told = True
+        return told
 
     def tick(self):
         """Called on a timer by install(): True when the picture should be drawn again (the
-        engine is cutting, or has just finished)."""
+        engine is cutting, or has just finished, or the run changed).  The run is followed here
+        too, not only when the GUI redraws: a run that ends, or is refused before it moves,
+        changes nothing a GUI redraws on, and the Stock would stay as it was."""
+        told = False
+        if self._stat is not None:
+            told = self._follow(self._stat)
         busy = self.stock.busy()
-        again = busy or self._was_busy
+        again = busy or self._was_busy or told
         self._was_busy = busy
         return again
 
@@ -626,6 +638,7 @@ class StockPart(glcanon_scene.Part):
         return 1.5 * line_width * per_pixel
 
     def draw(self, ctx):
+        self._stat = ctx.stat
         if ctx.canon is not self._canon:
             self.load_program(ctx.canon, ctx.stat)
         self._follow(ctx.stat)
