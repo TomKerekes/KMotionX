@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..e39e10b477 100644
+index cae34386ee..57652b2142 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -29,6 +29,7 @@
@@ -199,7 +199,20 @@ index cae34386ee..e39e10b477 100644
          if self.widgets.ntb_main.get_current_page() != 0:
              self.command.mode(linuxcnc.MODE_MANUAL)
              self.command.wait_complete()
-@@ -3150,6 +3261,19 @@ class gmoccapy(object):
+@@ -3092,6 +3203,12 @@ class gmoccapy(object):
+         else:
+             self.widgets.chk_ignore_limits.set_sensitive(False)
+ 
++        # KMotionX: the tool reload that reload_tool() put off until the machine is on
++        if getattr(self, "_reload_tool_when_on", 0):
++            self._reload_tool_when_on = 0
++            self.reload_tool()
++            self.command.mode(linuxcnc.MODE_MANUAL)
++
+     def on_hal_status_override_limits_changed(self, object, state, limits_list):
+         # object = hal_status from glade file
+         # state = true if override_limit is active
+@@ -3150,6 +3267,19 @@ class gmoccapy(object):
              self.widgets.ntb_jog.set_current_page(0)
              return
  
@@ -219,7 +232,7 @@ index cae34386ee..e39e10b477 100644
          # if MDI button is not sensitive, we are not ready for MDI commands
          # so we have to abort external commands and get back to manual mode
          # This will happen mostly, if we are in settings mode, as we do disable the mode button
-@@ -3364,14 +3488,33 @@ class gmoccapy(object):
+@@ -3364,14 +3494,33 @@ class gmoccapy(object):
          self.initialized = True
  
      # kill keyboard and estop machine before closing
@@ -255,7 +268,7 @@ index cae34386ee..e39e10b477 100644
          Gtk.main_quit()
  
      def on_focus_out(self, widget, data=None):
-@@ -4369,6 +4512,13 @@ class gmoccapy(object):
+@@ -4369,6 +4518,13 @@ class gmoccapy(object):
  
      def on_chk_ignore_limits_toggled(self, widget, data=None):
          if self.widgets.chk_ignore_limits.get_active():
@@ -269,3 +282,16 @@ index cae34386ee..e39e10b477 100644
             self.command.override_limits()
  
      def on_tbtn_fullsize_preview_toggled(self, widget, data=None):
+@@ -5569,6 +5725,12 @@ class gmoccapy(object):
+         tool_to_load = self.prefs.getpref("tool_in_spindle", 0, int)
+         if tool_to_load == 0:
+             return
++        # KMotionX: a machine that is always homed is "all homed" at start-up, in E-stop, and task
++        # refuses the MDI until it is on ("cannot be executed until the machine is out of E-stop and
++        # turned on"): the reload waits for Machine on then (on_hal_status_state_on)
++        if self.stat.task_state != linuxcnc.STATE_ON:
++            self._reload_tool_when_on = tool_to_load
++            return
+         self.load_tool = True
+         self.tool_change = True
+ 

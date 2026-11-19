@@ -17,6 +17,11 @@ a session as always):
   `configs/kmotion-3link/autostart.py` turns it on before the GUI is up), and the exit
   button stays available while the machine is on (stock gmoccapy disables it then, since
   its exit would turn the machine off; the window's close button works either way).
+  The same patch puts the tool reload at start-up (`reload_tool`, the "reload tool" setting:
+  `M61 Q<tool> G43` for the tool the last session left in the spindle) off until the machine is
+  on: gmoccapy runs it from the all-homed signal, which on an always-homed machine comes at
+  start-up, in E-stop, and task refused it with "command (EMC_TASK_PLAN_EXECUTE) cannot be
+  executed until the machine is out of E-stop and turned on" at every start.
 
 The gmoccapy patch also adds `[DISPLAY] CLEAR_PLOT_AT_FIRST_MACHINE_ON = 1`: a machine
 whose position is unknown until its axes are enabled (serial servos read 0 until they are
