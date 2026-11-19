@@ -6,6 +6,7 @@
 #                  "stdafx.h", which must find this folder's stand-in and not KMotionCNC's)
 #   make check     imports the module and cuts a slot
 #   make check-feed stock-demo.ngc through LinuxCNC's interpreter and kmotion_stock into the engine
+#   make check-ui   the gmoccapy buttons and the Create tool dialog with stand-ins (needs a display)
 #   make clean
 KMOTIONX_DIR ?= $(abspath $(CURDIR)/../../..)
 ENGINE_DIR := $(KMOTIONX_DIR)/PC VC Examples/KMotionCNC
@@ -41,8 +42,10 @@ check: $(MODULE)
 LINUXCNC_DIR ?= $(HOME)/linuxcnc-dev
 check-feed: $(MODULE)
 	LINUXCNC_DIR=$(LINUXCNC_DIR) python3 check_feed.py
+check-ui: $(MODULE)
+	LINUXCNC_DIR=$(LINUXCNC_DIR) python3 check_ui.py
 
 clean:
 	rm -rf build $(MODULE) __pycache__
 
-.PHONY: all check check-feed clean
+.PHONY: all check check-feed check-ui clean

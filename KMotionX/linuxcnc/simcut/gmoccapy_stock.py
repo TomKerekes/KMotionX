@@ -17,26 +17,44 @@ import os
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gtk, GdkPixbuf  # noqa: E402
 
 import kmotion_simcut as sim  # noqa: E402
 import kmotion_stock  # noqa: E402
 
 log = logging.getLogger("kmotion_stock")
 
-#: The basic tools: label, the engine's type, its sizes (label, default) in the order SetBasic takes
-#: them, and the pattern of the file name
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+#: The basic tools, as KMotionCNC's Create Tool has them: label, the engine's type, its sizes in the
+#: order SetBasic takes them as (letter, name, default) - the letters are the ones on the picture -
+#: the picture (KMotionCNC's, pictures/) and the pattern of the file name
 TOOL_TYPES = [
-    ("End mill", sim.SIMTOOL_ENDMILL, [("Diameter", "0.25"), ("Length", "1.5")], "EndMill D{0} L{1}"),
-    ("Ball nose", sim.SIMTOOL_BALL, [("Diameter", "0.25"), ("Length", "1.5")], "Ball D{0} L{1}"),
-    ("V bit", sim.SIMTOOL_V, [("Diameter", "0.5"), ("Angle of the point (degrees, side to side)", "60"),
-                              ("Tip diameter (0: a point)", "0"), ("Length", "2")], "V D{0} A{1} T{2} L{3}"),
-    ("T slot", sim.SIMTOOL_TSLOT, [("Diameter", "0.75"), ("Height of the cutter", "0.25"), ("Neck diameter", "0.3125"),
-                                  ("Length", "2")], "TSlot D{0} H{1} N{2} L{3}"),
-    ("Dovetail", sim.SIMTOOL_DOVETAIL, [("Diameter", "0.75"), ("Angle between side and bottom (degrees)", "60"),
-                                        ("Height of the cutter", "0.3125"), ("Neck diameter", "0.375"), ("Length", "2")],
+    ("End mill", sim.SIMTOOL_ENDMILL, [("D", "Diameter", "0.25"), ("L", "Length", "1.5")], "ToolEndMill", "EndMill D{0} L{1}"),
+    ("Ball nose", sim.SIMTOOL_BALL, [("D", "Diameter", "0.25"), ("L", "Length", "1.5")], "ToolBallNose", "Ball D{0} L{1}"),
+    ("V", sim.SIMTOOL_V, [("D", "Diameter", "0.5"), ("A", "Angle (degrees)", "60"), ("T", "Tip diameter (0: a point)", "0"),
+                          ("L", "Length", "2")], "ToolV", "V D{0} A{1} T{2} L{3}"),
+    ("T slot", sim.SIMTOOL_TSLOT, [("D", "Diameter", "0.75"), ("H", "Height", "0.25"), ("N", "Neck diameter", "0.3125"),
+                                  ("L", "Length", "2")], "ToolTSlot", "TSlot D{0} H{1} N{2} L{3}"),
+    ("Dovetail", sim.SIMTOOL_DOVETAIL, [("D", "Diameter", "0.75"), ("A", "Angle (degrees)", "60"), ("H", "Height", "0.3125"),
+                                        ("N", "Neck diameter", "0.375"), ("L", "Length", "2")], "ToolDovetail",
      "Dovetail D{0} A{1} H{2} N{3} L{4}"),
 ]
+PICTURE_WIDTH = 240
+
+
+def picture(name):
+    """KMotionCNC's picture of a basic tool with its sizes lettered, as a Gtk.Image (empty if missing)."""
+    path = os.path.join(HERE, "pictures", name + ".png")
+    try:
+        pb = GdkPixbuf.Pixbuf.new_from_file(path)
+        pb = pb.scale_simple(PICTURE_WIDTH, int(pb.get_height() * PICTURE_WIDTH / pb.get_width()), GdkPixbuf.InterpType.BILINEAR)
+        return Gtk.Image.new_from_pixbuf(pb)
+    except Exception as e:
+        log.error("tool picture %s: %s", path, e)
+        return Gtk.Image()
+
 
 COMMENT_COLUMN = 16         # of the tool table widget's model (gladevcp tooledit: KEYWORDS' ';')
 TOOL_COLUMN = 1
@@ -58,14 +76,20 @@ class CreateToolDialog(Gtk.Dialog):
         self.add_button("_Cancel", Gtk.ResponseType.CANCEL)
         self.add_button("_Create", Gtk.ResponseType.OK)
         self.set_default_response(Gtk.ResponseType.OK)
-        box = self.get_content_area()
-        box.set_spacing(6)
-        box.set_border_width(10)
+        outer = self.get_content_area()
+        outer.set_spacing(6)
+        outer.set_border_width(10)
+        columns = Gtk.Box(spacing=16)
+        outer.pack_start(columns, True, True, 0)
+        self.picture_box = Gtk.Box()                        # the picture of the type, KMotionCNC's
+        columns.pack_start(self.picture_box, False, False, 0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        columns.pack_start(box, True, True, 0)
 
         row = Gtk.Box(spacing=6)
         row.pack_start(Gtk.Label(label="Tool", xalign=0), False, False, 0)
         self.combo = Gtk.ComboBoxText()
-        for label, _kind, _sizes, _pattern in TOOL_TYPES:
+        for label, _kind, _sizes, _picture, _pattern in TOOL_TYPES:
             self.combo.append_text(label)
         self.combo.set_active(0)
         self.combo.connect("changed", self._on_type_changed)
@@ -75,8 +99,8 @@ class CreateToolDialog(Gtk.Dialog):
         self.grid = Gtk.Grid(row_spacing=4, column_spacing=8)
         box.pack_start(self.grid, False, False, 0)
         self.entries = []
-        box.pack_start(Gtk.Label(label="Sizes in the machine's units; the tip is at height 0, the tool closed at its length.",
-                                 xalign=0, wrap=True), False, False, 0)
+        box.pack_start(Gtk.Label(label="Sizes in the machine's units, the letters as on the picture; the tip is at height 0, "
+                                       "the tool closed at its length.", xalign=0, wrap=True, max_width_chars=44), False, False, 0)
 
         row = Gtk.Box(spacing=6)
         row.pack_start(Gtk.Label(label="File", xalign=0), False, False, 0)
@@ -92,7 +116,7 @@ class CreateToolDialog(Gtk.Dialog):
         self.assign.set_active(bool(tool))
         box.pack_start(self.assign, False, False, 0)
 
-        self.message = Gtk.Label(label="", xalign=0, wrap=True)
+        self.message = Gtk.Label(label="", xalign=0, wrap=True, max_width_chars=44)
         box.pack_start(self.message, False, False, 0)
         self._name_edited = False
         self.file_entry.connect("changed", self._on_name_edited)
@@ -104,15 +128,20 @@ class CreateToolDialog(Gtk.Dialog):
     def _on_type_changed(self, combo):
         for child in self.grid.get_children():
             self.grid.remove(child)
+        for child in self.picture_box.get_children():
+            self.picture_box.remove(child)
         self.entries = []
-        _label, _kind, sizes, _pattern = TOOL_TYPES[combo.get_active()]
-        for r, (label, default) in enumerate(sizes):
-            self.grid.attach(Gtk.Label(label=label, xalign=0), 0, r, 1, 1)
+        _label, _kind, sizes, picture_name, _pattern = TOOL_TYPES[combo.get_active()]
+        self.picture_box.pack_start(picture(picture_name), False, False, 0)
+        self.picture_box.show_all()
+        for r, (letter, name, default) in enumerate(sizes):
+            self.grid.attach(Gtk.Label(label="<b>%s</b>" % letter, use_markup=True, xalign=0.5), 0, r, 1, 1)
+            self.grid.attach(Gtk.Label(label=name, xalign=0), 1, r, 1, 1)
             e = Gtk.Entry(text=default)
             e.set_width_chars(10)
             e.set_activates_default(True)
             e.connect("changed", self._on_size_changed)
-            self.grid.attach(e, 1, r, 1, 1)
+            self.grid.attach(e, 2, r, 1, 1)
             self.entries.append(e)
         self.grid.show_all()
         self._name_edited = False
@@ -130,7 +159,7 @@ class CreateToolDialog(Gtk.Dialog):
         return [float(e.get_text().strip().replace(",", ".")) for e in self.entries]
 
     def _suggest_name(self):
-        _label, _kind, _sizes, pattern = TOOL_TYPES[self.combo.get_active()]
+        _label, _kind, _sizes, _picture, pattern = TOOL_TYPES[self.combo.get_active()]
         try:
             name = pattern.format(*[number_text(v) for v in self.sizes()])
         except ValueError:
@@ -151,7 +180,7 @@ class CreateToolDialog(Gtk.Dialog):
 
     def create(self):
         """Write the tool image.  The file's path, or None with the reason shown in the dialog."""
-        label, kind, size_labels, _pattern = TOOL_TYPES[self.combo.get_active()]
+        label, kind, size_labels, _picture, _pattern = TOOL_TYPES[self.combo.get_active()]
         try:
             sizes = self.sizes()
         except ValueError:
@@ -161,7 +190,7 @@ class CreateToolDialog(Gtk.Dialog):
         if not path:
             self.message.set_text("The file needs a name.")
             return None
-        comment = "%s: %s" % (label, ", ".join("%s %s" % (sl[0].split(" (")[0], number_text(v)) for sl, v in zip(size_labels, sizes)))
+        comment = "%s: %s" % (label, ", ".join("%s %s" % (sl[1].split(" (")[0], number_text(v)) for sl, v in zip(size_labels, sizes)))
         try:
             err = sim.write_tool_image(path, kind, sizes, 36, comment)
         except Exception as e:
