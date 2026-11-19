@@ -88,10 +88,10 @@ def main():
     i = int(np.nonzero(geom.lines == 7)[0][-1])
     tip = kmotion_stock.tip_positions(geom)
     print("  line 7 ends at drawn Z %.4f, tip Z %.4f, with a length offset of %.2f in force" % (pos[i][2], tip[i][2], geom.tool_offset_at(i)[2]))
-    check(abs(tip[i][2] - (-0.25)) < 1e-4, "the tool tip is where the program says (Z -0.25): the preview draws the tip")
+    check(abs(tip[i][2] - (-0.875)) < 1e-4, "the tool tip is where the program says (Z -0.875): the preview draws the tip")
 
     box = kmotion_stock.stock_box(canon, type("S", (), {"box": None})())
-    check(box is not None and np.allclose(box[0], (1, 1, -0.5)) and np.allclose(box[1], (5, 3, 0)), "the Stock box from the WORKPIECE comment: %s" % (box,))
+    check(box is not None and np.allclose(box[0], (-0.4, -0.6, -1)) and np.allclose(box[1], (0.6, 0.2, -0.75)), "the Stock box from the WORKPIECE comment: %s" % (box,))
 
     stock = sim.Stock()
     stock.define(box[0], box[1], 0.01)
@@ -101,15 +101,15 @@ def main():
     stock.cut_all()
     check(stock.wait_idle(60000), "cut")
     st = stock.stats()
-    block = 4 * 2 * 0.5
+    block = 1.0 * 0.8 * 0.25
     removed = block - st["volume"][2]
-    # slot 1 (0.25 wide, 0.25 deep, through the block, 4 long), slot 2 (0.125 deep, through, 2 long) less its
-    # crossing of slot 1, and the rapid inside the block (0.1 deep, from X1 to X3 with round ends) less its
-    # crossing of slot 2
+    # slot 1 (0.25 wide, 0.125 deep, through the block, 1 long), slot 2 (0.0625 deep, through, 0.8 long) less
+    # its crossing of slot 1, and the rapid inside the block (0.05 deep, from X-0.15 to X0.35 with round ends)
+    # less its crossing of slot 2
     import math
-    expect = (0.25 * 0.25 * 4 + 0.25 * 0.125 * 2 - 0.25 * 0.25 * 0.125
-              + (0.25 * 2 + math.pi * 0.125 ** 2) * 0.1 - 0.25 * 0.25 * 0.1)
-    check(abs(removed - expect) < 0.04 * expect, "removed %.4f cubic inch of %.4f expected (lattice %s)" % (removed, expect, st["nodes"]))
+    expect = (0.25 * 0.125 * 1.0 + 0.25 * 0.0625 * 0.8 - 0.25 * 0.25 * 0.0625
+              + (0.25 * 0.5 + math.pi * 0.125 ** 2) * 0.05 - 0.25 * 0.25 * 0.05)
+    check(abs(removed - expect) < 0.05 * expect, "removed %.4f cubic inch of %.4f expected (lattice %s)" % (removed, expect, st["nodes"]))
     meshes = stock.take_meshes()
     kinds = set()
     for _slot, v, t in meshes:
@@ -141,23 +141,23 @@ def main():
     check(part.stock.wait_idle(60000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
           "the part cuts the whole program when it is loaded while the machine is idle")
     stat.task_mode, stat.interp_state = 2, 2            # MODE_AUTO, running
-    stat.motion_line = 8                                # G1 X5.5: the first slot, the tool half way along it
-    stat.actual_position = (3.0, 2.0, -0.25 + 0.5, 0, 0, 0, 0, 0, 0)
+    stat.motion_line = 8                                # G1 X0.75: the first slot, the tool half way along it
+    stat.actual_position = (0.1, -0.2, -0.875 + 0.5, 0, 0, 0, 0, 0, 0)
     stat.tool_offset = (0, 0, 0.5, 0, 0, 0, 0, 0, 0)
     part._follow(stat)
-    check(part._running and 0 < part._done < part.stock.nb_poses() and abs(part._tips[part._done - 1][0] - 3.0) <= 0.06,
-          "a run started: the Stock is cut again up to the piece the tool is on (%d poses of %d, the last at X %.3f for the tool at X 3)"
+    check(part._running and 0 < part._done < part.stock.nb_poses() and abs(part._tips[part._done - 1][0] - 0.1) <= 0.06,
+          "a run started: the Stock is cut again up to the piece the tool is on (%d poses of %d, the last at X %.3f for the tool at X 0.1)"
           % (part._done, part.stock.nb_poses(), part._tips[part._done - 1][0]))
     part.stock.wait_idle(60000)
     st = part.stock.stats()
-    check(st["applied"] == part._done and 0.09 < block - st["volume"][2] < 0.16,
-          "... and the engine has cut %d poses, %.4f cubic inch (half of the first slot: 0.125)" % (st["applied"], block - st["volume"][2]))
-    stat.motion_line = 12                               # the second slot, G1 Y3.5, the tool a little way in
-    stat.actual_position = (3.0, 1.3, -0.125 + 0.5, 0, 0, 0, 0, 0, 0)
+    check(st["applied"] == part._done and 0.011 < block - st["volume"][2] < 0.021,
+          "... and the engine has cut %d poses, %.4f cubic inch (half of the first slot: 0.0156)" % (st["applied"], block - st["volume"][2]))
+    stat.motion_line = 12                               # the second slot, G1 Y0.4, the tool a little way in
+    stat.actual_position = (0.1, -0.4, -0.8125 + 0.5, 0, 0, 0, 0, 0, 0)
     part._follow(stat)
-    check(abs(part._tips[part._done - 1][1] - 1.3) <= 0.06, "later in the run: up to the piece of line 12 the tool is on (%d poses, the last at Y %.3f for the tool at Y 1.3)" % (part._done, part._tips[part._done - 1][1]))
+    check(abs(part._tips[part._done - 1][1] - (-0.4)) <= 0.06, "later in the run: up to the piece of line 12 the tool is on (%d poses, the last at Y %.3f for the tool at Y -0.4)" % (part._done, part._tips[part._done - 1][1]))
     stat.motion_line = 8
-    stat.actual_position = (4.0, 2.0, 0.25, 0, 0, 0, 0, 0, 0)
+    stat.actual_position = (0.3, -0.2, -0.5 + 0.5, 0, 0, 0, 0, 0, 0)
     before = part._done
     part._follow(stat)
     check(part._done == before, "a line number seen again (a loop, a late status) never takes cuts back")
