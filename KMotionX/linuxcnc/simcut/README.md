@@ -19,10 +19,10 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
   preview's geometry and the machine's status, draws what the engine hands over.
   `kmotion_stock.install(widget, inifile)` is all a GUI has to call.
 - `stock_rc.py` - does that call as the GUI's `[DISPLAY] USER_COMMAND_FILE`.
-- `stock-demo.ngc` - a program with a `(WORKPIECE,BOX,...)` comment, two slots and a rapid that
-  crashes into the block. Small and low (within X -0.55 to 0.75, Y -0.8 to 0.4, Z -0.875 to -0.5,
-  with a tool length offset in force), so that it runs on a bench with short travel such as the
-  Minirouter bench configuration's simulated switches, and on kmotion-sim.
+- `stock-demo.ngc` - a 10 x 6 x 1 inch block, two slots and a rapid that crashes into it, cut
+  with T1 and its length offset. The block's top is at Z-1 and the retracts at Z-0.5, so that a
+  length offset of up to half an inch stays under a Z limit near 0 (kmotion-sim's is 0.12). The
+  Minirouter bench's simulated limit switches (`BenchLoop.c`) are made at 12 inches for it.
 
 ## Setting it up
 
@@ -51,7 +51,7 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
 3. Load a program whose first lines declare the stock, as `stock-demo.ngc` does:
 
    ```
-   (WORKPIECE,BOX,XMIN=-0.4,YMIN=-0.6,ZMIN=-1,XMAX=0.6,YMAX=0.2,ZMAX=-0.75)
+   (WORKPIECE,BOX,XMIN=0,YMIN=0,ZMIN=-2,XMAX=10,YMAX=6,ZMAX=-1)
    ```
 
    LinuxCNC reads the comment in the coordinate system active at that line (G5x, G92), so the

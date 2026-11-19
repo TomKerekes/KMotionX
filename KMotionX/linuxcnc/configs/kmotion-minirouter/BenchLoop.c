@@ -14,7 +14,8 @@
 //                                  (Home.c reads them; all three home searches go negative)
 //                        51 52 53  negative limit switch: made below -1500/-2500/-3500 counts
 //                                  (500 past the home switch, so a home search stops before it)
-//                        54 55 56  positive limit switch: made above +2000 counts
+//                        54 55 56  positive limit switch: made above +30480 counts (12 inch at
+//                                  2540 counts/inch: room for a 10 inch demo, the soft limits being 10)
 //                      ([KMOTION] LIMIT_NEG_BITS = 51 52 53, LIMIT_POS_BITS = 54 55 56)
 //                      A real machine sets SIMULATE_SWITCHES 0 below and in the ini either names
 //                      its real switches' input bits (Home.c and the limit watch read whatever
@@ -39,9 +40,9 @@ static void SimulateSwitches(void)
 	SetStateBit(52, ch1->Dest < -2500.0);
 	SetStateBit(53, ch2->Dest < -3500.0);
 
-	SetStateBit(54, ch0->Dest > 2000.0);
-	SetStateBit(55, ch1->Dest > 2000.0);
-	SetStateBit(56, ch2->Dest > 2000.0);
+	SetStateBit(54, ch0->Dest > 30480.0);
+	SetStateBit(55, ch1->Dest > 30480.0);
+	SetStateBit(56, ch2->Dest > 30480.0);
 }
 
 int main()

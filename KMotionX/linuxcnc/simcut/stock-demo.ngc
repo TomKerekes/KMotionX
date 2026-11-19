@@ -1,18 +1,18 @@
-(Stock demo: a block cut by two slots and a rapid that crashes into it; T1 a 1/4 inch flat end mill with its length offset)
-(Small and low, for a bench whose travel is short: X-0.55 to 0.75, Y-0.8 to 0.4, Z-0.875 to -0.5; the block's top at Z-0.75)
-(WORKPIECE,BOX,XMIN=-0.4,YMIN=-0.6,ZMIN=-1,XMAX=0.6,YMAX=0.2,ZMAX=-0.75)
+(Stock demo: a 10 x 6 x 1 inch block cut by two slots and a rapid that crashes into it; T1 a 1/4 inch flat end mill with its length offset)
+(Between X-0.5 and 10.5, Y-0.5 and 6.5, Z-1.25 and -0.5; the block's top at Z-1 leaves room for a tool length offset under a Z limit near 0)
+(WORKPIECE,BOX,XMIN=0,YMIN=0,ZMIN=-2,XMAX=10,YMAX=6,ZMAX=-1)
 G20 G90 G17 G54 G94
 T1 M6 G43 H1
-G0 X-0.55 Y-0.2 Z-0.5
-G1 Z-0.875 F20
-G1 X0.75
+G0 X-0.5 Y3 Z-0.5
+G1 Z-1.25 F20
+G1 X10.5
 G0 Z-0.5
-G0 X0.1 Y-0.8
-G1 Z-0.8125
-G1 Y0.4
+G0 X5 Y-0.5
+G1 Z-1.125
+G1 Y6.5
 G0 Z-0.5
-G0 X-0.15 Y-0.45
-G0 Z-0.8
-G0 X0.35
+G0 X2 Y1.5
+G0 Z-1.1
+G0 X8
 G0 Z-0.5
 M2
