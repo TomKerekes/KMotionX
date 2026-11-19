@@ -16,3 +16,8 @@ include $(BUILD_ROOT)/include.mk
 
 
 
+
+# the token hand-over rules (BoardGate.h), driven with a fake clock: no board, no server
+.PHONY: check
+check: gatetest.cpp BoardGate.h
+	mkdir -p build && $(CXX) -std=c++11 -pthread -Wall -o build/gatetest gatetest.cpp && ./build/gatetest

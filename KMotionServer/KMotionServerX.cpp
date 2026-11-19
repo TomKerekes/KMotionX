@@ -63,6 +63,7 @@ either expressed or implied, of the FreeBSD Project.
 #include <KMotionDLL_Direct.h>
 #include "KMotionLocal.h"
 #include "KMotionX.h"
+#include "BoardGate.h"
 
 #ifdef DEBUG
 const char LOCK_CODES[][22]={"KMOTION_LOCKED","KMOTION_IN_USE","KMOTION_NOT_CONNECTED"};
@@ -127,15 +128,16 @@ int ConsolePipeHandle[MAX_BOARDS];
 // while a tokenless request is under way. A connection that closes with the token gives it
 // back. (The library releases the token itself inside Failed(); the connection's own
 // ReleaseToken, which every client sends after a failure, ends the ownership here.)
-struct BoardGate
-{
-	int owner;      // the connection (its socket) that holds the token, -1: free
-	bool active;    // a request for this board is being carried out
-};
-static BoardGate Gate[MAX_BOARDS];
-static bool GateReady = false;
-static pthread_mutex_t GateMx = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t GateCv = PTHREAD_COND_INITIALIZER;
+// A connection whose KMotionLock was refused is remembered as the board's waiter, and when
+// the owner releases the token it is kept for the waiter for 30 ms (three of the library's
+// 10 ms retries, WaitToken): any other connection's KMotionLock meanwhile is answered
+// KMOTION_IN_USE, the waiter's is granted. Without this a client that reads the status back
+// to back (kmotion-motion: a 24 ms read every 20 ms) took the token again within
+// microseconds of releasing it, and the KMotion tool's 10 ms retries almost never landed in
+// between ("no status for 3 s" in its status bar). The hold expires by itself, so a waiter
+// that gave up blocks nobody. On Windows the system-wide "KMotionPipe" mutex, kept by the
+// token's holder, is the waiting list. The rules are in BoardGate.h; gatetest.cpp checks them.
+static BoardGates<MAX_BOARDS> Gates(KMOTION_IN_USE);
 
 static bool GateApplies(int code, int board)
 {
@@ -148,60 +150,32 @@ static bool GateApplies(int code, int board)
 	       board >= 0 && board < MAX_BOARDS;
 }
 
+static GateReq GateRequest(int code)
+{
+	if (code == ENUM_KMotionLock || code == ENUM_KMotionLockRecovery) return GATE_LOCK;
+	if (code == ENUM_ReleaseToken) return GATE_RELEASE;
+	return GATE_OTHER;
+}
+
 // before a request for the board from connection c. false: it is answered here with *result
 // and the library is not called
 static bool GateEnter(int board, int c, int code, int *result)
 {
-	pthread_mutex_lock(&GateMx);
-	if (!GateReady) { for (int i = 0; i < MAX_BOARDS; i++) { Gate[i].owner = -1; Gate[i].active = false; } GateReady = true; }
-	BoardGate &g = Gate[board];
-	for (;;)
-	{
-		bool others = g.owner != -1 && g.owner != c;
-		if (others && (code == ENUM_KMotionLock || code == ENUM_KMotionLockRecovery))
-		{
-			*result = KMOTION_IN_USE;         // without waiting, and without the device mutex
-			pthread_mutex_unlock(&GateMx);
-			return false;
-		}
-		if (others && code == ENUM_ReleaseToken)
-		{
-			*result = 0;                      // not this connection's token to release
-			pthread_mutex_unlock(&GateMx);
-			return false;
-		}
-		if (!others && !g.active) break;
-		pthread_cond_wait(&GateCv, &GateMx);
-	}
-	g.active = true;
-	pthread_mutex_unlock(&GateMx);
-	return true;
+	return Gates.enter(board, c, GateRequest(code), result);
 }
 
 static void GateLeave(int board, int c, int code, int result)
 {
-	pthread_mutex_lock(&GateMx);
-	BoardGate &g = Gate[board];
-	if ((code == ENUM_KMotionLock || code == ENUM_KMotionLockRecovery) && result == KMOTION_LOCKED) g.owner = c;
-	if (code == ENUM_ReleaseToken && g.owner == c) g.owner = -1;
-	g.active = false;
-	pthread_cond_broadcast(&GateCv);
-	pthread_mutex_unlock(&GateMx);
+	Gates.leave(board, c, GateRequest(code), result == KMOTION_LOCKED);
 }
 
 // a connection has closed: a token it still held is given back
 static void GateDrop(int c)
 {
-	pthread_mutex_lock(&GateMx);
-	for (int i = 0; GateReady && i < MAX_BOARDS; i++)
-	{
-		if (Gate[i].owner != c) continue;
-		syslog(LOG_ERR, "Worker Thread. connection %d closed holding the token of board %d: released", c, i);
-		KMotionDLL.ReleaseToken(i);
-		Gate[i].owner = -1;
-	}
-	pthread_cond_broadcast(&GateCv);
-	pthread_mutex_unlock(&GateMx);
+	Gates.drop(c, [c](int board) {
+		syslog(LOG_ERR, "Worker Thread. connection %d closed holding the token of board %d: released", c, board);
+		KMotionDLL.ReleaseToken(board);
+	});
 }
 
 std::list<char*> ConsoleList[MAX_BOARDS];
