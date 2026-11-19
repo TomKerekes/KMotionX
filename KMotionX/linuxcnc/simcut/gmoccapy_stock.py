@@ -1,8 +1,10 @@
 # gmoccapy_stock.py : the Stock's buttons in gmoccapy
 # Copyright (c) 2026 DynoMotion Incorporated.  SPDX-License-Identifier: MIT
 """gmoccapy's buttons for the Stock (kmotion_stock.py).  Under the preview, beside the show/hide
-dimensions toggle, a toggle that shows or hides the Stock (kept in gmoccapy's preferences as
-view_stock, like the others).  On the tool table page:
+dimensions toggle, two toggles: the Stock shown or hidden, and the program's path lines shown or
+hidden (KMotionCNC's Stock and Paths buttons; gmoccapy's own pencil toggle is the live plot).  Both
+are kept in gmoccapy's preferences, view_stock and view_paths, like the others.  On the tool table
+page:
 
   Tool image...   a tool image (KMotionCNC's VRML tool images) for the tool selected in the table.
                   The file's name goes into the tool's comment as "[name.wrl]", the table is saved
@@ -308,37 +310,72 @@ def stock_icon(size=32):
     return Gtk.Image.new_from_pixbuf(Gdk.pixbuf_get_from_surface(surface, 0, 0, size, size))
 
 
-def install_view_toggle(app, part):
-    """The show/hide Stock toggle under the preview, after the dimensions toggle."""
-    dim = getattr(app.widgets, "tbtn_view_dimension", None)
-    if dim is None or dim.get_parent() is None:
-        return None
-    box = dim.get_parent()
+def paths_icon(size=32):
+    """A small picture of a tool path, for the toggle that shows or hides the program's lines."""
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    c = cairo.Context(surface)
+    s = size / 32.0
+    c.scale(s, s)
+    c.set_line_width(2.2)
+    c.set_line_join(cairo.LINE_JOIN_ROUND)
+    c.set_source_rgb(0.92, 0.92, 0.92)
+    c.move_to(4, 26)
+    for i, x in enumerate(range(7, 29, 4)):
+        c.line_to(x, 6 if i % 2 == 0 else 26)
+    c.stroke()
+    c.set_source_rgb(0.92, 0.26, 0.22)                 # a rapid to the start
+    c.set_dash([2.5, 2.0])
+    c.move_to(2, 4); c.line_to(4, 26); c.stroke()
+    return Gtk.Image.new_from_pixbuf(Gdk.pixbuf_get_from_surface(surface, 0, 0, size, size))
+
+
+def _toggle_after(app, anchor, icon, tooltip, pref, default, apply):
+    """A toggle button like anchor (gmoccapy's dimensions toggle), after it in its row; its state
+    is gmoccapy's preference pref, applied through apply(state), which also runs at the start."""
+    box = anchor.get_parent()
     btn = Gtk.ToggleButton()
-    btn.set_image(stock_icon())
+    btn.set_image(icon)
     btn.set_always_show_image(True)
-    btn.set_tooltip_text("Show or hide the Stock (the material removal)")
-    w, h = dim.get_size_request()
+    btn.set_tooltip_text(tooltip)
+    w, h = anchor.get_size_request()
     if w > 0 and h > 0:
         btn.set_size_request(w, h)
-    btn.set_halign(dim.get_halign())
-    btn.set_valign(dim.get_valign())
-    shown = app.prefs.getpref("view_stock", True, bool)
-    part.set_visible(shown)
-    btn.set_active(shown)
+    btn.set_halign(anchor.get_halign())
+    btn.set_valign(anchor.get_valign())
+    state = app.prefs.getpref(pref, default, bool)
+    apply(state)
+    btn.set_active(state)
 
     def toggled(b):
-        part.set_visible(b.get_active())
-        app.prefs.putpref("view_stock", b.get_active())
+        apply(b.get_active())
+        app.prefs.putpref(pref, b.get_active())
         app.widgets.gremlin.queue_draw()
     btn.connect("toggled", toggled)
     box.pack_start(btn, False, False, 0)
     try:
-        box.reorder_child(btn, box.get_children().index(dim) + 1)
+        box.reorder_child(btn, box.get_children().index(anchor) + 1)
     except (ValueError, AttributeError):
         pass
     btn.show_all()
     return btn
+
+
+def install_view_toggles(app, part):
+    """The Stock and Paths toggles under the preview, after the dimensions toggle."""
+    dim = getattr(app.widgets, "tbtn_view_dimension", None)
+    if dim is None or dim.get_parent() is None:
+        return None
+    gremlin = app.widgets.gremlin
+
+    def show_program(on):
+        try:
+            gremlin.set_property("show_program", on)
+        except TypeError:                                  # not a property of this widget: the attribute then
+            gremlin.show_program = on
+    paths = _toggle_after(app, dim, paths_icon(), "Show or hide the program's path lines (the cut surface shows better without them)",
+                          "view_paths", True, show_program)
+    stock = _toggle_after(app, dim, stock_icon(), "Show or hide the Stock (the material removal)", "view_stock", True, part.set_visible)
+    return stock, paths
 
 
 def _button(label, tooltip, callback, *args):
@@ -354,13 +391,13 @@ def install(app, part):
     """gmoccapy's buttons for the Stock (app: the gmoccapy object): the show/hide toggle under the
     preview and the two on the tool table page."""
     try:
-        install_view_toggle(app, part)
+        install_view_toggles(app, part)
     except Exception:
-        log.exception("the Stock toggle under the preview")
+        log.exception("the Stock and Paths toggles under the preview")
     te = app.widgets.tooledit1
     buttonbox = te.wTree.get_object("buttonbox")
     buttonbox.pack_start(_button("Tool\nimage", "A tool image (shape) for the tool selected in the table: the Stock cuts with it",
                                  on_tool_image, app, part), False, False, 0)
     buttonbox.pack_start(_button("Create\ntool", "A basic tool's image from its sizes, as KMotionCNC's Create Tool", on_create_tool, app, part),
                          False, False, 0)
-    log.info("gmoccapy: the Stock toggle under the preview, Tool image and Create tool on the tool table page")
+    log.info("gmoccapy: the Stock and Paths toggles under the preview, Tool image and Create tool on the tool table page")

@@ -52,6 +52,7 @@ class Prefs:
     def putpref(self, k, v, kind=None): self.d[k] = v
 class Gremlin(Gtk.DrawingArea):
     draws = 0
+    show_program = True
     def queue_draw(self): self.draws += 1
 class App:
     def __init__(self):
@@ -73,11 +74,15 @@ gmoccapy_stock.install(app, part)
 check(len(app.widgets.tooledit1.wTree.box.get_children()) == 2, "two buttons on the tool table page")
 kids = app.widgets.box_gremlin_buttons.get_children()
 tog = [k for k in kids if isinstance(k, Gtk.ToggleButton) and k is not app.widgets.tbtn_view_dimension]
-check(len(tog) == 1 and kids.index(tog[0]) == kids.index(app.widgets.tbtn_view_dimension) + 1 and tog[0].get_size_request() == (48, 48),
-      "the Stock toggle sits right after the dimensions toggle, the same size")
-check(not part.visible and not tog[0].get_active(), "it starts as the preference says (hidden here)")
+d = kids.index(app.widgets.tbtn_view_dimension)
+check(len(tog) == 2 and kids.index(tog[0]) == d + 1 and kids.index(tog[1]) == d + 2 and all(t.get_size_request() == (48, 48) for t in tog),
+      "the Stock and Paths toggles sit right after the dimensions toggle, the same size")
+check(not part.visible and not tog[0].get_active(), "the Stock toggle starts as the preference says (hidden here)")
 tog[0].set_active(True)
 check(part.visible and app.prefs.d["view_stock"] is True and app.widgets.gremlin.draws == 1, "toggling shows the Stock, saves the preference and redraws")
+check(tog[1].get_active() and app.widgets.gremlin.show_program is True, "the Paths toggle starts on (no preference yet)")
+tog[1].set_active(False)
+check(app.widgets.gremlin.show_program is False and app.prefs.d["view_paths"] is False, "toggling it off hides the program's lines and saves the preference")
 ok = gmoccapy_stock.set_tool_image(app, part, 2, os.path.join(images, "V D0.5 A60 T0 L2.wrl"))
 row = [r for r in app.widgets.tooledit1.model if r[1] == 2][0]
 check(ok and row[16] == "1/16 end mill [V D0.5 A60 T0 L2.wrl]" and app.saved == 1 and part.refed, "the image goes into tool 2's comment by its name, the table is saved, the Stock refed: %r" % row[16])
