@@ -52,6 +52,7 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
    ;STOCK_DEFAULT_DIAMETER = 0     ; a tool number that is not in the tool table cuts as a flat end mill of this diameter (0: nothing)
    ;STOCK_PIECE = 0.05             ; a move longer than this (machine units) is cut in pieces of it, so the cut follows the tool along it
    ;STOCK_TOOL_SHAPE = 1           ; the tool marker drawn from the tool's image (0: LinuxCNC's cone or cylinder)
+   ;STOCK_DONE_PATH = 1            ; the path the run has executed, drawn over the program's lines (0: not)
    ```
 
    `configs/kmotion-sim` (AXIS) and `configs/kmotion-minirouter` (gmoccapy) have these.
@@ -126,6 +127,22 @@ written yet; its images can be made there and copied.
   KMotionCNC plots long moves in pieces of 0.05 s. At the end of the run, or an abort, the whole program is cut again.
 - Jogging and MDI moves do not cut (as in KMotionCNC).
 
+### The executed path
+
+With `STOCK_DONE_PATH = 1` (the default) the part of the program's path a run has executed is
+drawn over the program's lines as the run proceeds: from the first move to the piece being
+executed, and along that piece as far as the tool. Feeds are in the live plot's feed colour
+(glcanon's `backplotfeed`, 0.75 0.25 0.25), rapids in its traverse colour (0.30 0.50 0.50), a
+little wider than the program's lines. It is cleared when a run starts, and stays after the run
+ends until the next start or a program load.
+
+It is taken from the program's own path - the poses the Stock cuts with, and the progress that
+feeds the engine - never from samples of the position. The board executes exactly the trajectory
+the PC planned, so one status read gives the right picture, and a stall of the status (the board's
+status over USB stalls for up to a second now and then) only pauses the frontier. gmoccapy's live
+plot (the pencil toggle) is drawn from the samples, so a stall makes it jump in a straight line
+across the segments it missed; with the executed path on, the pencil toggle can be left off.
+
 ### 4 and 5 axis
 
 The tool tip is where the preview draws the vertex (the tool length offset taken out), and the
@@ -140,7 +157,12 @@ coordinates as machine coordinates.
 
 Nothing in LinuxCNC is patched. `install()` adds a `StockPart` to the widget's scene
 (`rs274.glcanon_scene`), before the program lines, and a timer that redraws while the engine
-cuts. The part reads the loaded program from `ctx.canon.program_geometry` (positions, line
+cuts. With `STOCK_DONE_PATH` on it adds a `DonePathPart` after the program's highlight, so that
+the executed path lies over the program's lines (at their depth, with the live plot's bias)
+whatever the Stock's own toggle says: it keeps the program's path as one `GL_LINES` buffer in the
+renderer's per-vertex-colour layout and draws as many of its first segments as the Stock's frontier
+says, plus the piece the tool is on up to the tool, through the renderer's line shader (or its
+quad-expanding one where the driver refuses the width). The part reads the loaded program from `ctx.canon.program_geometry` (positions, line
 numbers, kinds, tools, axis positions), the stock from `ctx.canon.workpieces`, the run from
 `ctx.stat`. When the machine has a rotary axis, `install()` wraps
 `rs274.glcanon.GLCanon.configure_program_geometry` so that every parse records the axis
@@ -160,7 +182,8 @@ uploads (each block's vertices, their extent and kinds) and the matrices of a fr
 
 - Buttons to save, load and unload Stock files (the part has `save`, `load`, `unload` for a GUI
   to call); the Stock and Paths toggles are gmoccapy's only (`set_visible` and the widget's
-  `show_program` for another GUI). gmoccapy's own pencil toggle is the live plot of the actual position.
+  `show_program` for another GUI). gmoccapy's own pencil toggle is the live plot of the actual
+  position, which the executed path stands in for.
 - The tool image lives in the tool's comment, not in a column of the table (LinuxCNC's table
   has none); the buttons are gmoccapy's only, other GUIs edit the comment or `TOOL_IMAGES`.
 - Several `(WORKPIECE,...)` pieces, cylinders and tubes as such (one box for now).

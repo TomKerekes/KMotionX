@@ -13,7 +13,8 @@ what it hands over.
 install() adds a StockPart to the widget's scene, before the program lines, and times redraws
 while the engine cuts.  stock_rc.py does that from [DISPLAY] USER_COMMAND_FILE; README.md has the
 ini keys ([KMOTION] STOCK, STOCK_RESOLUTION, STOCK_BOX, STOCK_FILE, STOCK_FOLLOW, TOOL_IMAGES,
-TOOL_IMAGE_DIR, STOCK_LINE_WIDTH, STOCK_DEFAULT_DIAMETER, STOCK_PIECE, STOCK_TOOL_SHAPE).
+TOOL_IMAGE_DIR, STOCK_LINE_WIDTH, STOCK_DEFAULT_DIAMETER, STOCK_PIECE, STOCK_TOOL_SHAPE,
+STOCK_DONE_PATH).
 
 What the Stock is cut with
   - The block: the program's (WORKPIECE,BOX,...) comment (the first one; a cylinder or tube is
@@ -40,6 +41,17 @@ When the Stock is cut
     (stat.motion_line), and on that line the piece the tool is on.  At the end, or an abort, the
     whole program is cut again.
   - Jogging and MDI do not cut.
+
+The executed path (STOCK_DONE_PATH = 1, the default)
+  The part of the program's path a run has executed is drawn over the program's lines: from the
+  first move to the piece being executed, and along that piece as far as the tool, feeds in the
+  live plot's feed colour (glcanon's backplotfeed) and rapids in its traverse colour, a little wider
+  than the program's lines.  It is taken from the program's own path - the poses above, and the
+  progress that feeds the engine - and never from samples of the position: the board executes the
+  trajectory the PC planned, so one status read gives the right picture, and a stall of the status
+  pauses the frontier where gmoccapy's live plot (the pencil toggle), drawn from the samples, draws
+  a straight line across the segments it missed.  Cleared when a run starts; it stays after the run
+  ends, until the next start or a program load.  DonePathPart draws it, after the program's lines.
 
 Drawing
   The engine hands the surface over in blocks (meshes) of 20 byte vertices (position, kind,
@@ -96,6 +108,12 @@ BLUE = (0.25, 0.56, 0.92)
 RED = (0.92, 0.26, 0.22)
 #: The light, fixed in view space (Stock3d.cpp)
 LIGHT = (0.408, 0.408, 0.816)
+#: The executed path: the live plot's colours (glcanon's backplotfeed and backplottraverse, these
+#: when the GUI's colour table has no others) and its width in pixels, a little more than the
+#: program's lines (1) so that it reads on top of them
+DONE_FEED = (0.75, 0.25, 0.25)
+DONE_RAPID = (0.30, 0.50, 0.50)
+DONE_PATH_WIDTH = 2.0
 #: How near the tool has to come to a piece of the path for that piece to count as cut, in
 #: inches (KMotionCNC's TOOL_ON_PATH_TOL)
 TOOL_ON_PATH_TOL_INCH = 0.01
@@ -197,6 +215,7 @@ class Settings:
         self.line_width = float(get("STOCK_LINE_WIDTH", "1.5"))
         self.default_diameter = float(get("STOCK_DEFAULT_DIAMETER", "0"))
         self.tool_shape = get("STOCK_TOOL_SHAPE", "1").strip() not in ("0", "no", "off")
+        self.done_path = get("STOCK_DONE_PATH", "1").strip() not in ("0", "no", "off")
         self.piece = get("STOCK_PIECE")                      # None: 0.05 inch in the machine's units
         coords = (ini.find("TRAJ", "COORDINATES") or "XYZ").upper()
         self.rotary = any(a in coords for a in "ABC")
@@ -434,7 +453,7 @@ def vertex_tools(geom, spindle_tool=0):
 
 def program_poses(geom, stock, images, diameters, default_diameter=0.0, piece=0.0, spindle_tool=0):
     """Feed the program's vertices to the engine as poses.  Returns the per-pose line numbers
-    (int64) and tip positions, or None when the program has no vertices.
+    (int64), tip positions and SIMPOSE flags, or None when the program has no vertices.
 
     geom: rs274.glcanon_bake.ProgramGeometry; stock: kmotion_simcut.Stock; images: ToolImages;
     diameters: {tool number: diameter} from the tool table (machine units); default_diameter for a tool
@@ -455,7 +474,27 @@ def program_poses(geom, stock, images, diameters, default_diameter=0.0, piece=0.
     tips, lines, tool_index, flags, axis = split_moves(tips, np.asarray(geom.lines, dtype=np.int64), tool_index,
                                                         pose_flags(kinds), tool_axes(geom), piece)
     stock.add_poses(np.ascontiguousarray(tips), tool_index, flags, axis)
-    return lines, tips
+    return lines, tips, flags
+
+
+def done_path_vertices(tips, flags, feed, rapid):
+    """The path as the executed path is drawn from: GL_LINES in the renderer's per-vertex-colour
+    layout, (2 (n - 1), 8) float32 - position, rgba, a spare - segment i joining pose i to pose
+    i + 1, in rapid (rgba) for a traverse and feed for any other move.  A pose the tool only appears
+    at (a dwell, a tool change, a jump) gets a segment of no length, so that segment i stays the
+    move into pose i + 1 whatever comes before."""
+    n = len(tips)
+    out = np.zeros((2 * max(n - 1, 0), 8), dtype=np.float32)
+    if n < 2:
+        return out
+    moving = (flags[1:] & sim.SIMPOSE_MOVE) != 0
+    traverse = (flags[1:] & sim.SIMPOSE_RAPID) != 0
+    out[0::2, :3] = np.where(moving[:, None], tips[:-1], tips[1:])
+    out[1::2, :3] = tips[1:]
+    colour = np.where(traverse[:, None], np.asarray(rapid, np.float32), np.asarray(feed, np.float32))
+    out[0::2, 3:7] = colour
+    out[1::2, 3:7] = colour
+    return out
 
 
 def stock_box(canon, settings):
@@ -483,6 +522,9 @@ class StockPart(glcanon_scene.Part):
         self._canon = None
         self._lines = None
         self._tips = None
+        self._flags = None
+        self._frontier = (0, 0.0)                              # the executed path: whole segments, how far along the next
+        self._path_version = 0                                 # counts the programs given (DonePathPart's buffer follows)
         self._box = None
         self._running = False
         self._done = 0
@@ -517,11 +559,14 @@ class StockPart(glcanon_scene.Part):
 
     def load_program(self, canon, stat):
         """A program was loaded in the widget: its path is the path to cut with."""
+        if canon is not self._canon:
+            self._frontier = (0, 0.0)                          # a new program: none of it is executed
         self._canon = canon
         self._running = False
         self._done = 0
         self.stock.clear_poses()
-        self._lines = self._tips = None
+        self._lines = self._tips = self._flags = None
+        self._path_version += 1
         geom = getattr(canon, "program_geometry", None)
         if geom is None or getattr(geom, "is_empty", True):
             log.info("program: none or empty (canon %s); the Stock is %s", type(canon).__name__,
@@ -549,7 +594,7 @@ class StockPart(glcanon_scene.Part):
         if fed is None:
             log.info("program: nothing given to the Stock")
             return
-        self._lines, self._tips = fed
+        self._lines, self._tips, self._flags = fed
         log.info("program: %d poses given (pieces of %.3g) with tools %s, tool table diameters %s, defined %s", self.stock.nb_poses(),
                  self._piece(stat), sorted(set(vertex_tools(geom, spindle).tolist())), diameters, self.stock.defined())
         if self.settings.follow and self._is_running(stat):
@@ -580,6 +625,7 @@ class StockPart(glcanon_scene.Part):
     def _start_run(self):
         self._running = True
         self._done = 0
+        self._frontier = (0, 0.0)
         self.stock.uncut_from(0)
 
     def _tolerance(self, stat):
@@ -588,28 +634,36 @@ class StockPart(glcanon_scene.Part):
         return TOOL_ON_PATH_TOL_INCH * (25.4 * lu if lu else 1.0)
 
     def _progress(self, stat):
-        """How many poses the run has cut: all of the lines before the executing one, and on it the
-        piece that the tool is on."""
+        """How far the run has come, from the status: (poses, frontier).  poses: how many poses the
+        run has cut - all of the lines before the executing one, and on it the piece that the tool
+        is on.  frontier: how far along the path the tool is, for the executed path - (segments,
+        fraction), the whole segments behind it (segment i joins pose i to pose i + 1) and how far
+        along the next one it is.  Neither goes back: a line number seen again (a loop, a late
+        status) takes nothing away."""
         lines = self._lines
         n = len(lines)
+        done, front = self._done, self._frontier
         ml = int(getattr(stat, "motion_line", 0) or 0)
         if ml <= 0:
-            return self._done
-        d = self._done
+            return done, front
+        # the executing line's poses, from the piece the tool was last on (done - 1 is its end):
+        # the tool may still be on it
+        d = max(done - 1, 0)
         hits = np.nonzero(lines[d:] == ml)[0]
         if not len(hits):
-            return d                                           # not reached, or already past
+            return done, front                                 # not reached, or already past
         first = d + int(hits[0])
         last = first
         while last + 1 < n and lines[last + 1] == ml:
             last += 1
-        count = first                                          # the lines before are done
+        count = first                                          # the lines before are done ...
+        front = max(front, (max(first - 1, 0), 0.0))           # ... and the path up to this line's start
         try:
             pos = stat.actual_position
             off = stat.tool_offset
             tip = np.array([pos[0] - off[0], pos[1] - off[1], pos[2] - off[2]], dtype=np.float32)
         except (AttributeError, TypeError, IndexError):
-            return max(d, count)
+            return max(done, count), front
         # the pieces of the line: from the vertex before its first one to its last
         lo = max(first - 1, 0)
         if last > lo:
@@ -623,9 +677,28 @@ class StockPart(glcanon_scene.Part):
             k = int(np.argmin(dist))
             if dist[k] <= self._tolerance(stat):
                 count = lo + k + 2                             # the piece the tool is on is done
+                front = max(front, (lo + k, float(t[k])))      # the path is executed as far as the tool
         elif np.linalg.norm(self._tips[first] - tip) <= self._tolerance(stat):
             count = first + 1
-        return max(d, min(count, n))
+        return max(done, min(count, n)), front
+
+    @property
+    def frontier(self):
+        """How far along the path the run has come: (segments, fraction) - the whole segments
+        executed (segment i joins pose i to pose i + 1) and how far along the next one the tool is."""
+        return self._frontier
+
+    def frontier_point(self):
+        """Where on the path the run has come to - the end of the executed path - or None before it
+        has moved."""
+        segments, f = self._frontier
+        tips = self._tips
+        if tips is None or len(tips) == 0 or (segments == 0 and f <= 0):
+            return None
+        if segments + 1 >= len(tips):
+            return tips[-1]
+        a, b = tips[segments], tips[segments + 1]
+        return a + f * (b - a)
 
     def _follow(self, stat):
         """The run as the status tells it: True when the engine was told something."""
@@ -638,7 +711,10 @@ class StockPart(glcanon_scene.Part):
             log.info("run started (line %s): the Stock is uncut again", getattr(stat, "motion_line", "?"))
             told = True
         if running:
-            done = self._progress(stat)
+            done, front = self._progress(stat)
+            if front != self._frontier:
+                self._frontier = front                         # the executed path grew: draw again
+                told = True
             if done > self._done:
                 self._done = done
                 self.stock.cut_to(done)
@@ -770,11 +846,16 @@ class StockPart(glcanon_scene.Part):
             per_pixel = 2.0 / (abs(p[1, 1]) * height)
         return 1.5 * line_width * per_pixel
 
-    def draw(self, ctx):
+    def sync(self, ctx):
+        """The program and the run as the frame has them.  draw() does this, and so does
+        DonePathPart's: with the Stock hidden by its toggle the run is still followed."""
         self._stat = ctx.stat
         if ctx.canon is not self._canon:
             self.load_program(ctx.canon, ctx.stat)
         self._follow(ctx.stat)
+
+    def draw(self, ctx):
+        self.sync(ctx)
         before = len(self._slots)
         self._upload()
         self._frames = getattr(self, "_frames", 0) + 1
@@ -849,6 +930,134 @@ class StockPart(glcanon_scene.Part):
         self._box = None
         if self._canon is not None:
             self._define(stock_box(self._canon, self.settings))
+
+
+# ---------------------------------------------------------------------------- the executed path
+
+class DonePathPart(glcanon_scene.Part):
+    """The executed path: the part of the program's path the run has come to, drawn over the
+    program's lines (after the program and its highlight in the scene) from the Stock's poses and
+    its frontier - the path's own geometry, not samples of the position, so a stall of the status
+    pauses it instead of cutting across what was missed.  Feeds in the live plot's feed colour,
+    rapids in its traverse colour (the GUI's backplotfeed and backplottraverse), a little wider than
+    the program's lines, at their depth with the live plot's bias so that it wins the tie.
+
+    The whole path sits in one buffer in path order, as GL_LINES in the renderer's per-vertex-colour
+    layout (done_path_vertices), made when the program or the colours change.  A frame draws its
+    first segments, as many as the frontier says, through the renderer's line shader - or, where the
+    driver refused the width, its quad-expanding one, the buffer bound as endpoint pairs, as the
+    renderer draws its own wide lines - and the piece the tool is on up to the tool as a two point
+    line of its own."""
+
+    def __init__(self, stock):
+        self.stock = stock
+        self._buffer = None                                    # glcanon_gl.GLBuffer: the segments
+        self._vao = None                                       # ... as GL_LINES
+        self._wide_vao = None                                  # ... as endpoint pairs, one instance a segment
+        self._segments = 0
+        self._version = None                                   # (the Stock's program, the colours) the buffer holds
+
+    @contextmanager
+    def scope(self, ctx):
+        glDepthFunc(GL_LEQUAL)
+        glcanon_gl.set_line_width(DONE_PATH_WIDTH)
+        try:
+            yield
+        finally:
+            glUseProgram(0)
+            glBindVertexArray(0)
+            glcanon_gl.set_line_width(1.0)
+            glDepthFunc(GL_LESS)
+
+    def invalidate(self):
+        """The GL context is new: forget the buffer."""
+        self._delete()
+
+    def _delete(self):
+        for obj in (self._vao, self._wide_vao, self._buffer):
+            if obj is not None:
+                try:
+                    obj.delete()
+                except Exception:
+                    pass
+        self._vao = self._wide_vao = self._buffer = None
+        self._segments = 0
+        self._version = None
+
+    @staticmethod
+    def colours(colors):
+        """(feed, rapid) as rgba from the GUI's colour table: the live plot's colours, opaque."""
+        return (tuple(colors.get("backplotfeed", DONE_FEED))[:3] + (1.0,),
+                tuple(colors.get("backplottraverse", DONE_RAPID))[:3] + (1.0,))
+
+    def _ensure(self, ctx):
+        """The buffer holding the program's path, made again when the program or the colours changed."""
+        stock = self.stock
+        colours = self.colours(ctx.colors)
+        version = (stock._path_version, colours)
+        if version == self._version:
+            return
+        self._delete()
+        self._version = version
+        if stock._tips is None or len(stock._tips) < 2:
+            return
+        verts = done_path_vertices(stock._tips, stock._flags, *colours)
+        self._buffer = glcanon_gl.GLBuffer()
+        self._buffer.set_data(verts)
+        self._vao = glcanon_gl.VertexArray()
+        self._vao.configure(self._buffer)
+        self._segments = len(verts) // 2
+        log.info("executed path: %d segments in the buffer", self._segments)
+
+    def _wide(self):
+        """The buffer as segment endpoint pairs for the quad-expanding shader: bound twice, a vertex
+        apart, one instance a segment (as glcanon_gl.CategoryBuffers presents its own)."""
+        if self._wide_vao is None:
+            self._wide_vao = glcanon_gl.VertexArray()
+            step = 2 * glcanon_gl.VERTEX_STRIDE
+            self._wide_vao.configure(self._buffer, glcanon_gl.WIDE_LINE_A_ATTRIBUTES, step, divisor=1, base=0)
+            self._wide_vao.configure(self._buffer, glcanon_gl.WIDE_LINE_B_ATTRIBUTES, step, divisor=1,
+                                     base=glcanon_gl.VERTEX_STRIDE)
+        return self._wide_vao
+
+    @staticmethod
+    def mvp(ctx):
+        """The frame's MVP with the live plot's small eye space bias toward the viewer
+        (glcanon_scene.BackplotPart.mvp), so that the path wins the depth tie with the program's lines."""
+        bias = np.identity(4)
+        bias[2, 3] = 0.003
+        return ctx.mv.projection @ bias @ ctx.mv.top()
+
+    def draw(self, ctx):
+        stock = self.stock
+        stock.sync(ctx)
+        self._ensure(ctx)
+        segments, fraction = stock.frontier
+        n = min(segments, self._segments)
+        mvp = self.mvp(ctx)
+        renderer = ctx.renderer
+        if n > 0:
+            width = renderer.expansion_width()
+            if width:
+                wide = renderer.wide_line_program()
+                wide.begin(mvp)
+                wide.set_expansion(renderer.viewport, width)
+                vao = self._wide()
+                vao.bind()
+                glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n)
+                vao.unbind()
+            else:
+                renderer.line_program().begin(mvp)
+                self._vao.bind()
+                glDrawArrays(GL_LINES, 0, 2 * n)
+                self._vao.unbind()
+        end = stock.frontier_point()
+        if end is not None and fraction > 0 and segments < self._segments:
+            flags = int(stock._flags[segments + 1])
+            if flags & sim.SIMPOSE_MOVE:
+                feed, rapid = self.colours(ctx.colors)
+                colour = rapid if flags & sim.SIMPOSE_RAPID else feed
+                ctx.prim.draw_lines(ctx, [stock._tips[segments], end], colour[:3], mvp=mvp)
 
 
 # ---------------------------------------------------------------------------- the tool, drawn from its image
@@ -1005,6 +1214,9 @@ def install(widget, inifile, ini_dir=None):
     if settings.tool_shape and getattr(scene, "tool", None) is not None:
         part.tool_part = ImageToolPart(part.images)
         scene.replace(scene.tool, part.tool_part)      # the gate (show_tool) stays
+    if settings.enabled and settings.done_path:
+        part.done_path = DonePathPart(part)            # over the program's lines, whatever the Stock's toggle says
+        scene.insert_after(getattr(scene, "highlight", None) or scene.program, part.done_path)
 
     # redraws while the engine cuts: GTK (gremlin) or Tk (AXIS); another toolkit calls part.tick()
     # on a timer of its own and redraws when it says so
@@ -1022,7 +1234,7 @@ def install(widget, inifile, ini_dir=None):
                 widget.tkRedraw()
             widget.after(100, tk_tick)
         widget.after(100, tk_tick)
-    log.info("Stock installed in %s (%s): resolution %g, follow %s, tool images %s, tool drawn from its image %s, redraws by %s",
+    log.info("Stock installed in %s (%s): resolution %g, follow %s, tool images %s, tool drawn from its image %s, executed path %s, redraws by %s",
              type(widget).__name__, type(widget).__module__, settings.resolution, settings.follow, settings.tool_images or "none",
-             settings.tool_shape, "GLib" if hasattr(widget, "queue_draw") else "Tk" if hasattr(widget, "after") else "nobody")
+             settings.tool_shape, settings.done_path, "GLib" if hasattr(widget, "queue_draw") else "Tk" if hasattr(widget, "after") else "nobody")
     return part

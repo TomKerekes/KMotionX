@@ -1,8 +1,13 @@
 # Copyright (c) 2026 DynoMotion Incorporated.  SPDX-License-Identifier: MIT
 """make check-ui: gmoccapy_stock (the Tool image and Create tool buttons, the dialog) and the tool table
-comments, with stand-ins for gmoccapy's widgets.  Needs a display (DISPLAY; Xvfb will do) and the
-run-in-place tree's lib/python (LINUXCNC_DIR, default ~/linuxcnc-dev); LinuxCNC need not run."""
+comments, with stand-ins for gmoccapy's widgets, and the executed path drawn by kmotion_stock's
+DonePathPart into an offscreen GL context (Mesa's EGL on a pbuffer, software rendering; skipped where
+there is none).  Needs a display (DISPLAY; Xvfb will do) and the run-in-place tree's lib/python
+(LINUXCNC_DIR, default ~/linuxcnc-dev); LinuxCNC need not run."""
 import os, sys, tempfile, time
+# PyOpenGL keeps some state per GL context, asking the window system binding which context is current;
+# the drawing test below makes its context through EGL, so that is the binding to ask (before OpenGL is imported)
+os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.environ.get("LINUXCNC_DIR", os.path.expanduser("~/linuxcnc-dev")), "lib", "python"))
 sys.path.insert(0, HERE)
@@ -133,5 +138,104 @@ m3 = kmotion_stock.revolve_profile([0, 1], [0.125, 0.125], True, slices=8)
 check(len(m2) == 8 * 6 + 8 * 3 * 2 and len(m3) == 8 * 6 + 8 * 3, "a closed end mill has two caps, an open one the bottom only")
 tp = kmotion_stock.ImageToolPart(ti)
 check(tp.mesh_for(3) is None, "a tool without an image draws LinuxCNC's own marker")
+
+# the executed path, drawn: a GL 3.3 core context offscreen, LinuxCNC's renderer and a stand-in frame; a
+# path of ten unit segments along X with a rapid among them, the frontier half way along the fifth;
+# the pixels say what was drawn
+import rs274.glcanon
+from rs274 import glcanon_gl, glcanon_scene
+from OpenGL.GL import glViewport, glClearColor, glClear, glReadPixels, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_RGBA, GL_UNSIGNED_BYTE
+
+
+def egl_context(width, height):
+    """A GL 3.3 core context on a pbuffer of width x height, through EGL's surfaceless platform."""
+    os.environ.setdefault("EGL_PLATFORM", "surfaceless")
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+    from OpenGL import EGL, arrays
+    dpy = EGL.eglGetDisplay(EGL.EGL_DEFAULT_DISPLAY)
+    major, minor = EGL.EGLint(), EGL.EGLint()
+    if not EGL.eglInitialize(dpy, major, minor):
+        raise RuntimeError("eglInitialize failed")
+    attribs = arrays.GLintArray.asArray([EGL.EGL_SURFACE_TYPE, EGL.EGL_PBUFFER_BIT, EGL.EGL_RENDERABLE_TYPE, EGL.EGL_OPENGL_BIT,
+                                         EGL.EGL_RED_SIZE, 8, EGL.EGL_GREEN_SIZE, 8, EGL.EGL_BLUE_SIZE, 8, EGL.EGL_ALPHA_SIZE, 8,
+                                         EGL.EGL_DEPTH_SIZE, 24, EGL.EGL_NONE])
+    configs = (EGL.EGLConfig * 1)()
+    count = EGL.EGLint()
+    if not EGL.eglChooseConfig(dpy, attribs, configs, 1, count) or count.value < 1:
+        raise RuntimeError("no EGL config with a depth buffer")
+    EGL.eglBindAPI(EGL.EGL_OPENGL_API)
+    context = EGL.eglCreateContext(dpy, configs[0], EGL.EGL_NO_CONTEXT, arrays.GLintArray.asArray(
+        [EGL.EGL_CONTEXT_MAJOR_VERSION, 3, EGL.EGL_CONTEXT_MINOR_VERSION, 3,
+         EGL.EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL.EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL.EGL_NONE]))
+    surface = EGL.eglCreatePbufferSurface(dpy, configs[0], arrays.GLintArray.asArray([EGL.EGL_WIDTH, width, EGL.EGL_HEIGHT, height, EGL.EGL_NONE]))
+    if not context or not surface or not EGL.eglMakeCurrent(dpy, surface, surface, context):
+        raise RuntimeError("no GL 3.3 core context")
+
+
+W, H = 120, 24
+try:
+    egl_context(W, H)
+except Exception as e:
+    print("  skip  the executed path drawn: no offscreen GL context here (%s)" % e)
+else:
+    glViewport(0, 0, W, H)
+    renderer = glcanon_gl.GlCanonRenderer()
+    renderer.set_viewport(W, H)
+    # X -1..11 across the pixels (a unit is 10 columns, X 0 at column 10), Y -1..1 down them: the path lies at Y 0
+    proj = np.array([[2 / 12, 0, 0, -10 / 12], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]], dtype=np.float64)
+
+    class Ini:
+        def find(self, section, key): return None
+    class Stat:
+        task_mode, interp_state, motion_line = 1, 1, 0
+    class Canon: pass
+    stock = kmotion_stock.StockPart(kmotion_stock.Settings(Ini(), td))
+    tips = np.array([[x, 0.0, 0.0] for x in range(11)], np.float32)          # ten unit segments along X
+    flags = np.full(11, sim.SIMPOSE_MOVE, np.int32); flags[0] = 0; flags[3] |= sim.SIMPOSE_RAPID   # X 2..3 a rapid
+    stock._tips, stock._flags, stock._lines = tips, flags, np.arange(11)
+    stock._canon, stock._path_version, stock._frontier = Canon(), 1, (4, 0.5)   # X 0..4 whole, then half of X 4..5
+    fields = {name: None for name in glcanon_scene.FrameContext.__slots__}
+    fields.update(mv=glcanon_scene.MatrixStack(projection=proj), prim=glcanon_scene.Primitives(), renderer=renderer, caps=renderer.caps,
+                  colors=rs274.glcanon.GlCanonDraw.colors, stat=Stat(), canon=stock._canon, width=W, height=H)
+    ctx = glcanon_scene.FrameContext(**fields)
+    part = kmotion_stock.DonePathPart(stock)
+
+    def frame():
+        """One frame of the part alone: the brightest colour in each column, and how many rows are lit in it."""
+        glcanon_scene.Scene().apply_baseline()
+        glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        with part.scope(ctx):
+            part.draw(ctx)
+        px = np.frombuffer(glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, outputType=bytes), np.uint8).reshape(H, W, 4)[:, :, :3]
+        return px.max(axis=0).astype(int), (px.max(axis=2) > 0).sum(axis=0)
+    feed = lambda col, x: col[int(10 * (x + 1))][0] > 150 and col[int(10 * (x + 1))][1] < 100     # backplotfeed 0.75 0.25 0.25
+    rapid = lambda col, x: col[int(10 * (x + 1))][1] > 100 and col[int(10 * (x + 1))][0] < 100    # backplottraverse 0.30 0.50 0.50
+    dark = lambda col, x: col[int(10 * (x + 1))].max() == 0
+
+    def looks_right(col, rows, how):
+        check(feed(col, 0.5) and feed(col, 1.5) and rapid(col, 2.5) and feed(col, 3.5),
+              "%s: the whole segments in the feed colour, the rapid among them in the traverse colour" % how)
+        check(feed(col, 4.2) and dark(col, 4.8) and dark(col, 7) and dark(col, 9.5), "%s: the piece the tool is on as far as the tool (X 4.5), nothing beyond" % how)
+        check(dark(col, -0.5) and rows[15] >= 2 and rows[52] >= 2, "%s: nothing before the first move; two pixels wide (%d rows lit at X 0.5)" % (how, rows[15]))
+    col, rows = frame()
+    looks_right(col, rows, "drawn with GL's line width")
+    check(part._segments == 10 and part._vao is not None and part._wide_vao is None, "the path sits in one buffer of %d segments" % part._segments)
+    granted = glcanon_gl._MAX_LINE_WIDTH
+    glcanon_gl._MAX_LINE_WIDTH = 1.0                                        # a driver that refuses wide lines
+    col, rows = frame()
+    looks_right(col, rows, "drawn as quads where the driver refuses the width")
+    check(part._wide_vao is not None, "... through the buffer bound as endpoint pairs")
+    glcanon_gl._MAX_LINE_WIDTH = granted
+    stock._frontier = (0, 0.0)
+    col, rows = frame()
+    check(col.max() == 0, "nothing executed: nothing drawn")
+    stock._frontier = (10, 0.0)
+    col, rows = frame()
+    check(feed(col, 0.5) and rapid(col, 2.5) and feed(col, 9.5) and dark(col, 10.5), "the whole path executed: all of it drawn, to X 10")
+    stock._path_version = 2
+    stock._tips, stock._flags, stock._lines = tips[:6], flags[:6], np.arange(6)   # another program, half as long
+    stock._frontier = (5, 0.0)
+    col, rows = frame()
+    check(part._segments == 5 and feed(col, 4.5) and dark(col, 5.5), "a new program: the buffer is made again (%d segments)" % part._segments)
 print("ui test", "passed" if not fails else "FAILED (%d)" % fails)
 sys.exit(1 if fails else 0)

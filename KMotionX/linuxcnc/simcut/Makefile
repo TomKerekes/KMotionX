@@ -6,7 +6,8 @@
 #                  "stdafx.h", which must find this folder's stand-in and not KMotionCNC's)
 #   make check     imports the module and cuts a slot
 #   make check-feed stock-demo.ngc through LinuxCNC's interpreter and kmotion_stock into the engine
-#   make check-ui   the gmoccapy buttons and the Create tool dialog with stand-ins (needs a display)
+#   make check-ui   the gmoccapy buttons and the Create tool dialog with stand-ins (needs a display), and the
+#                  executed path drawn in an offscreen GL context (Mesa's EGL, software rendering)
 #   make clean
 KMOTIONX_DIR ?= $(abspath $(CURDIR)/../../..)
 ENGINE_DIR := $(KMOTIONX_DIR)/PC VC Examples/KMotionCNC

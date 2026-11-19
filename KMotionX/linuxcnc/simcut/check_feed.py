@@ -2,7 +2,8 @@
 """make check-feed: stock-demo.ngc parsed by LinuxCNC's interpreter (the gcode module, as the
 preview parses it) and given to the engine through kmotion_stock, without a GUI or a running
 LinuxCNC.  Checks that the preview positions are the tool tip (a tool length offset in force), the Stock box from
-the WORKPIECE comment, and the material removed.  LINUXCNC_DIR (or ~/linuxcnc-dev) gives the
+the WORKPIECE comment, the material removed, and a followed run: the cut and the executed path's
+frontier as the run proceeds, after it ends, and at a new start.  LINUXCNC_DIR (or ~/linuxcnc-dev) gives the
 run-in-place tree whose lib/python has gcode and linuxcnc.  Run it while LinuxCNC is not running: the
 interpreter attaches to a running LinuxCNC's tool table memory and crashes in it."""
 import os
@@ -120,6 +121,19 @@ def main():
     flags = kmotion_stock.pose_flags(geom.kinds)
     check(flags[0] == 0 and (flags[1:] & sim.SIMPOSE_MOVE).all(), "every vertex but the first is a move")
 
+    # the executed path's lines, from the poses given
+    _lines, tips, flags = fed
+    rapid = (flags[1:] & sim.SIMPOSE_RAPID) != 0
+    verts = kmotion_stock.done_path_vertices(tips, flags, (1, 0, 0, 1), (0, 1, 0, 1))
+    check(verts.shape == (2 * (n - 1), 8) and np.array_equal(verts[0::2, :3], tips[:-1]) and np.array_equal(verts[1::2, :3], tips[1:])
+          and np.array_equal(verts[0::2, 4] == 1, rapid) and np.array_equal(verts[1::2, 3] == 1, ~rapid) and 0 < rapid.sum() < n - 1,
+          "the executed path's lines: a segment a move in path order, %d rapids in the traverse colour and %d feeds in the feed colour"
+          % (rapid.sum(), (~rapid).sum()))
+    v = kmotion_stock.done_path_vertices(np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0]], np.float32),
+                                         np.array([0, sim.SIMPOSE_MOVE, 0], np.int32), (1, 0, 0, 1), (0, 1, 0, 1))
+    check(np.array_equal(v[2, :3], v[3, :3]) and np.array_equal(v[0, :3], [0, 0, 0]) and np.array_equal(v[1, :3], [1, 0, 0]),
+          "a pose without a move (a dwell, a tool change) gets a segment of no length")
+
     # a run, followed: the StockPart with a stand-in ini and status
     class Ini:
         def find(self, section, key):
@@ -148,6 +162,18 @@ def main():
     check(part._running and 0 < part._done < part.stock.nb_poses() and abs(part._tips[part._done - 1][0] - 4.5) <= 0.06,
           "a run started: the Stock is cut again up to the piece the tool is on (%d poses of %d, the last at X %.3f for the tool at X 4.5)"
           % (part._done, part.stock.nb_poses(), part._tips[part._done - 1][0]))
+    tip = np.array(stat.actual_position[:3]) - np.array(stat.tool_offset[:3])
+    segs, frac = part.frontier
+    end = part.frontier_point()
+    check(0 < segs <= part._done - 1 and end is not None and np.allclose(end, tip, atol=1e-3) and abs(part._tips[segs][0] - 4.5) <= 0.06,
+          "the executed path: %d whole segments, then the piece the tool is on as far as the tool (its end %s for the tool at %s)"
+          % (segs, end.round(3), tip))
+    stat.actual_position = (4.52, 3.0, -1.25 + 0.5, 0, 0, 0, 0, 0, 0)      # a little further along the same piece
+    part._follow(stat)
+    segs2, frac2 = part.frontier
+    end2 = part.frontier_point()
+    check((segs2, frac2) > (segs, frac) and 0 < frac2 < 1 and abs(end2[0] - 4.52) < 1e-3 and part._done == part._progress(stat)[0],
+          "... and follows the tool within the piece (%.2f of segment %d, the end at X %.3f for the tool at X 4.52)" % (frac2, segs2, end2[0]))
     part.stock.wait_idle(180000)
     st = part.stock.stats()
     check(st["applied"] == part._done and 0.22 < block - st["volume"][2] < 0.34,
@@ -156,16 +182,35 @@ def main():
     stat.actual_position = (4.5, 2.5, -1.125 + 0.5, 0, 0, 0, 0, 0, 0)
     part._follow(stat)
     check(abs(part._tips[part._done - 1][1] - 2.5) <= 0.06, "later in the run: up to the piece of line 12 the tool is on (%d poses, the last at Y %.3f for the tool at Y 2.5)" % (part._done, part._tips[part._done - 1][1]))
+    end = part.frontier_point()
+    check(part.frontier > (segs2, frac2) and np.allclose(end, (4.5, 2.5, -1.125), atol=1e-3),
+          "the executed path has come to line 12, its end at %s for the tool there" % (end.round(3),))
     stat.motion_line = 8
     stat.actual_position = (6.0, 3.0, -0.5 + 0.5, 0, 0, 0, 0, 0, 0)
     before = part._done
+    front = part.frontier
     part._follow(stat)
-    check(part._done == before, "a line number seen again (a loop, a late status) never takes cuts back")
+    check(part._done == before and part.frontier == front, "a line number seen again (a loop, a late status) never takes cuts, or the executed path, back")
     stat.task_mode, stat.interp_state = 1, 1
     part._stat = stat                                   # as draw() leaves it
     again = part.tick()                                 # the timer, not a redraw, notices the end of the run
     check(again and not part._running and part.stock.wait_idle(180000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
           "the run over, seen by the timer with no redraw: the whole program is cut again")
+    check(part.frontier == front and np.allclose(part.frontier_point(), end, atol=1e-6), "... and the executed path stays as it was")
+    stat.task_mode, stat.interp_state = 2, 2            # a new start, the tool at X 1 on the first slot
+    stat.motion_line = 8
+    stat.actual_position = (1.0, 3.0, -1.25 + 0.5, 0, 0, 0, 0, 0, 0)
+    part._follow(stat)
+    end3 = part.frontier_point()
+    check(part._running and part.frontier < front and part._done < before and end3 is not None and abs(end3[0] - 1.0) < 1e-3,
+          "a new start clears it: the executed path begins again, up to the tool (X %.3f)" % end3[0])
+    stat.task_mode, stat.interp_state = 1, 1
+    part.tick()
+
+    class Loaded:                                       # the same program loaded again: a new canon object
+        program_geometry, workpieces, tools = canon.program_geometry, canon.workpieces, canon.tools
+    part.load_program(Loaded(), stat)
+    check(part.frontier == (0, 0.0) and part.frontier_point() is None and part.stock.nb_poses() == n, "a program load clears it")
     print("check-feed", "passed" if not fails else "FAILED (%d)" % fails)
     return 1 if fails else 0
 
