@@ -54,6 +54,20 @@ public:
 	}
 	void forget_tool_images() { S.ForgetToolImages(); }
 
+	// A basic tool written as a tool image (VRML) that the viewer displays and the engine reads
+	// (KMotionCNC's Create Tool).  type: SIMTOOL_ENDMILL .. SIMTOOL_DOVETAIL; sizes as SimCut.h
+	// says for the type.  Returns None, or what is wrong with the sizes.
+	static py::object write_tool_image(const std::string &file, int type, const std::vector<double> &sizes, int sides, const std::string &comment)
+	{
+		if (type < 0 || type >= SIMTOOL_TYPES) throw std::invalid_argument("no such tool type");
+		if ((int)sizes.size() < CSimCutTool::BasicParams(type)) throw std::invalid_argument("too few sizes for the tool type");
+		CSimCutTool t;
+		const char *err = t.SetBasic(type, sizes.data());
+		if (err) return py::cast(std::string(err));
+		if (!t.WriteVrml(file.c_str(), sides, comment.c_str())) throw std::runtime_error("the tool image could not be written: " + file);
+		return py::none();
+	}
+
 	// What the engine makes of a tool image (for checking a tool table): (heights, radii, open)
 	static py::tuple read_tool_image(const std::string &file, double scale, Vec3 offset)
 	{
@@ -233,6 +247,13 @@ PYBIND11_MODULE(kmotion_simcut, m)
 	m.def("threads", &CSimCutStock::ThreadsToUse, "how many threads the engine cuts on");
 	m.def("read_tool_image", &Stock::read_tool_image, py::arg("file"), py::arg("scale") = 1.0, py::arg("offset") = Vec3{ 0, 0, 0 },
 		  "the profile (heights, radii, open) that the engine makes of a tool image");
+	m.def("write_tool_image", &Stock::write_tool_image, py::arg("file"), py::arg("type"), py::arg("sizes"), py::arg("sides") = 36, py::arg("comment") = "",
+		  "a basic tool (SIMTOOL_xxx, its sizes as SimCut.h lists them) written as a tool image; None, or what is wrong with the sizes");
+	m.attr("SIMTOOL_ENDMILL") = (int)SIMTOOL_ENDMILL;
+	m.attr("SIMTOOL_BALL") = (int)SIMTOOL_BALL;
+	m.attr("SIMTOOL_V") = (int)SIMTOOL_V;
+	m.attr("SIMTOOL_TSLOT") = (int)SIMTOOL_TSLOT;
+	m.attr("SIMTOOL_DOVETAIL") = (int)SIMTOOL_DOVETAIL;
 
 	py::class_<Stock>(m, "Stock")
 		.def(py::init<>())

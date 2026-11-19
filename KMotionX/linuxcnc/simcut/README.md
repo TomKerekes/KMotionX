@@ -66,9 +66,24 @@ A tool cuts with the tool image named for its tool number in `TOOL_IMAGES`, one 
 
 ```
 # tool number, then the file (KMotion/Data/ToolImages unless a folder is given)
-T1 EndMill D0.25 L1.5 in.wrl
+T1 EndMill-z 1in .125.wrl
 T5 Dovetail-z .750 60deg.wrl
 ```
+
+New shapes: `tool_image.py` writes the five basic tools as tool images, as KMotionCNC's Create
+Tool dialog does (sizes in the machine's units, the tip at height 0):
+
+```
+./tool_image.py endmill  0.125 1.0                      "EndMill D0.125 L1 in.wrl"
+./tool_image.py ball     0.25  1.5                      ball.wrl
+./tool_image.py v        0.5   60 0 2                   v60.wrl        # diameter, point angle, tip diameter, length
+./tool_image.py tslot    0.75  0.25 0.3125 2            tslot.wrl      # diameter, cutter height, neck diameter, length
+./tool_image.py dovetail 0.75  60 0.3125 0.375 2        dovetail.wrl   # diameter, side angle, cutter height, neck, length
+./tool_image.py --read   dovetail.wrl                                  # the profile the engine makes of any image
+```
+
+Put the file in `KMotion/Data/ToolImages` (or name its folder) and the tool's line in `TOOL_IMAGES`.
+Any VRML tool image KMotionCNC displays works the same way: the engine spins it about Z.
 
 These are KMotionCNC's VRML tool images, spun about Z by the engine, at scale 1 (as a Tool
 Table Image in KMotionCNC). The tool of a move is the one the preview's tool changes give it,

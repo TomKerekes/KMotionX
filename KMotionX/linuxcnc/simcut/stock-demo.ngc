@@ -1,4 +1,4 @@
-(Stock demo: a 9 x 6 x 1 inch block cut by two slots and a rapid that crashes into it; T1 a 1/4 inch flat end mill with its length offset)
+(Stock demo: a 9 x 6 x 1 inch block cut by two slots and a rapid that crashes into it, with T1 as the tool table and toolimages.txt have it)
 (Between X-0.5 and 9.5, Y-0.5 and 6.5, Z-1.25 and -0.5: inside soft limits of 10; the block's top at Z-1 leaves room for a tool length offset under a Z limit near 0)
 (WORKPIECE,BOX,XMIN=0,YMIN=0,ZMIN=-2,XMAX=9,YMAX=6,ZMAX=-1)
 G20 G90 G17 G54 G94

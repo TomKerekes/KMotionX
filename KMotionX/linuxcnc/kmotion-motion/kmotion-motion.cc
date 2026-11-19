@@ -755,6 +755,7 @@ struct Pins {
     hal_bool_t all_enabled;         // kmotion.all-enabled: every coordinate-system axis enabled on the board
     hal_uint_t homed_mask;          // kmotion.homed-mask: the joints homed (bit = joint), HOMED_PERSIST's at the start
     hal_real_t current_vel, requested_vel, distance_to_go;
+    hal_real_t tooloffset[9];       // motion.tooloffset.x .. w: the tool offset in force (gmoccapy's tool info shows x and z)
     hal_sint_t program_line, motion_type;
     struct {
         hal_real_t pos_cmd, pos_fb, motor_pos_cmd;
@@ -864,6 +865,7 @@ static int create_pins()
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->current_vel, 0, "motion.current-vel"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->requested_vel, 0, "motion.requested-vel"));
     PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->distance_to_go, 0, "motion.distance-to-go"));
+    for (int i = 0; i < 9; i++) PIN(hal_pin_new_real(comp_id, HAL_OUT, &pins->tooloffset[i], 0, "motion.tooloffset.%c", "xyzabcuvw"[i]));
     PIN(hal_pin_new_si32(comp_id, HAL_OUT, &pins->program_line, 0, "motion.program-line"));
     PIN(hal_pin_new_si32(comp_id, HAL_OUT, &pins->motion_type, 0, "motion.motion-type"));
     for (int j = 0; j < EMCMOT_MAX_JOINTS; j++) {
@@ -1158,6 +1160,11 @@ static void update_pins()
         hal_set_ui32(pins->homed_mask, homed_mask | still_homed);   // still_homed is consumed as joints home from it
     }
     hal_set_real(pins->current_vel, emcmotStatus->current_vel);
+    {
+        const EmcPose &t = emcmotStatus->tool_offset;
+        const double to[9] = { t.tran.x, t.tran.y, t.tran.z, t.a, t.b, t.c, t.u, t.v, t.w };
+        for (int i = 0; i < 9; i++) hal_set_real(pins->tooloffset[i], to[i]);
+    }
     hal_set_real(pins->requested_vel, emcmotStatus->requested_vel);
     hal_set_real(pins->distance_to_go, emcmotStatus->distance_to_go);
     hal_set_si32(pins->program_line, emcmotStatus->id);
