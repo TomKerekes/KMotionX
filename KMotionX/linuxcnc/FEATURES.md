@@ -59,6 +59,7 @@ What LinuxCNC can do with `kmotion-motion` in place of its real-time motion modu
 - **A USB game pad for jogging** (`configs/kmotion-3link/gamepad.hal`, the ini's `[GAMEPAD]` section): LinuxCNC's hal_input and halui, as KMotionCNC's joystick jog - two sticks for X, Y and Z, proportional, a dead-man button, slow and fast speeds; with the udev rule `usb/etc/udev/rules.d/11.joystick.rules`.
 - **HAL pins** of LinuxCNC's motion that GUIs use (`motion.*`, `joint.N.*`, `axis.L.*`, `spindle.N.*`), plus `kmotion.*` (the panel's, the spindle's measured speed and at-speed, the board bits, `all-enabled`, `homed-mask`).
 - **Simulate mode** (`[KMOTION] MODE = simulate`): the same planner without a board, the plan replayed in time - LinuxCNC shows the controller's motion.
+- **The Stock (material removal) in the preview** (`simcut/`, `[KMOTION] STOCK = 1`, the GUI's `[DISPLAY] USER_COMMAND_FILE`): KMotionCNC's Cut Simulator engine cuts a block declared by the program's `(WORKPIECE,BOX,...)` comment with the preview's path - grey uncut, blue cut by a feed, red by a rapid; the finished part when a program is loaded, the cut following the tool during a run; tool shapes from KMotionCNC's VRML tool images (`TOOL_IMAGES`), else flat end mills of the tool table diameter; 4 and 5 axis with the tool pivoting about its tip (RTCP). gmoccapy and AXIS, no patch to LinuxCNC.
 
 ## Motors and feedback
 

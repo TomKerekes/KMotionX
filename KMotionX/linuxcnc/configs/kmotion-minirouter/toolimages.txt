@@ -1,0 +1,2 @@
+# the tool images of the Stock (KMotionX/linuxcnc/simcut/README.md): tool number, then the file in KMotion/Data/ToolImages
+T1 EndMill D0.25 L1.5 in.wrl

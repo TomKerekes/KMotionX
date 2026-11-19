@@ -407,6 +407,10 @@ installation from scratch, with its scripts.
 - `configs/kmotion-minirouter/` – the same for Tom's Kogna: board mode, 2540 counts/inch,
   250 mm/s, 2500 mm/s², jerk 25000 mm/s³ in inches, `MinirouterInit.c` as the init program,
   homing through `Home.c`, the bench spindle on channel 3 (`spindle/`), gmoccapy as the GUI.
+- `simcut/` – the Stock: material removal in the preview of gmoccapy or AXIS, cut by
+  KMotionCNC's Cut Simulator engine (`PC VC Examples/KMotionCNC/SimCut.cpp`, the same file as
+  on Windows, MIT licence) through a pybind11 module and a part added to the preview's scene
+  from the GUI's `[DISPLAY] USER_COMMAND_FILE`; no patch to LinuxCNC. `simcut/README.md`.
 
 ## Migrating a KMotionCNC setup
 
