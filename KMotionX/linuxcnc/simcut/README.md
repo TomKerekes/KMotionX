@@ -19,6 +19,9 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
   preview's geometry and the machine's status, draws what the engine hands over.
   `kmotion_stock.install(widget, inifile)` is all a GUI has to call.
 - `stock_rc.py` - does that call as the GUI's `[DISPLAY] USER_COMMAND_FILE`.
+- `gmoccapy_stock.py` - under gmoccapy, two buttons on the tool table page: **Tool image...**
+  gives the selected tool a tool image, **Create tool...** makes one from a basic tool's sizes
+  (KMotionCNC's Create Tool). `tool_image.py` does the latter from the command line.
 - `stock-demo.ngc` - a 9 x 6 x 1 inch block, two slots and a rapid that crashes into it, cut
   with T1 and its length offset. Every move lies between X-0.5 and 9.5 and Y-0.5 and 6.5, inside
   soft limits of 10. The block's top is at Z-1 and the retracts at Z-0.5, so that a length offset
@@ -62,7 +65,16 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
 
 ### Tool shapes
 
-A tool cuts with the tool image named for its tool number in `TOOL_IMAGES`, one tool a line:
+A tool cuts with its tool image, named in either of two places. In the tool table, as
+`[name.wrl]` at the end of the tool's comment - which is what the **Tool image...** button on
+gmoccapy's tool table page writes for the selected tool (it saves the table, LinuxCNC reloads
+it, and the Stock cuts the loaded program again with the new shape):
+
+```
+T1 P1 Z0.511 D0.125 ;1/8 end mill [EndMill-z 1in .125.wrl]
+```
+
+Or in `TOOL_IMAGES`, one tool a line (the table's comment wins when both name one):
 
 ```
 # tool number, then the file (KMotion/Data/ToolImages unless a folder is given)
@@ -70,8 +82,10 @@ T1 EndMill-z 1in .125.wrl
 T5 Dovetail-z .750 60deg.wrl
 ```
 
-New shapes: `tool_image.py` writes the five basic tools as tool images, as KMotionCNC's Create
-Tool dialog does (sizes in the machine's units, the tip at height 0):
+New shapes: the **Create tool...** button on gmoccapy's tool table page writes an end mill, ball
+nose, V bit, T slot or dovetail from its sizes into the tool image folder, as KMotionCNC's Create
+Tool dialog does, and gives it to the selected tool if asked. `tool_image.py` does the same from
+the command line (sizes in the machine's units, the tip at height 0):
 
 ```
 ./tool_image.py endmill  0.125 1.0                      "EndMill D0.125 L1 in.wrl"
@@ -137,7 +151,8 @@ uploads (each block's vertices, their extent and kinds) and the matrices of a fr
 
 - Buttons to show or hide the Stock and the path lines, and to save, load and unload Stock
   files (the part has `set_visible`, `save`, `load`, `unload` for a GUI to call).
-- A Create Tool dialog; a tool image per tool in the tool table itself.
+- The tool image lives in the tool's comment, not in a column of the table (LinuxCNC's table
+  has none); the buttons are gmoccapy's only, other GUIs edit the comment or `TOOL_IMAGES`.
 - Several `(WORKPIECE,...)` pieces, cylinders and tubes as such (one box for now).
 - Jogging does not cut; after an abort the whole program is cut, not the part up to the tool.
 - The engine's automatic resolution starts at 0.001 inch; on a millimetre machine that is

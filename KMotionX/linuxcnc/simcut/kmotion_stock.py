@@ -52,6 +52,7 @@ Drawing
 """
 import ctypes
 import logging
+import re
 from contextlib import contextmanager
 import math
 import os
@@ -188,6 +189,8 @@ class Settings:
         self.stock_file = path("STOCK_FILE")
         self.follow = get("STOCK_FOLLOW", "1").strip() not in ("0", "no", "off")
         self.tool_images = path("TOOL_IMAGES")
+        tt = ini.find("EMCIO", "TOOL_TABLE")
+        self.tool_table = os.path.normpath(os.path.join(ini_dir, os.path.expanduser(tt))) if tt else None
         here = os.path.dirname(os.path.abspath(__file__))
         self.tool_image_dir = path("TOOL_IMAGE_DIR") or os.path.normpath(
             os.path.join(here, "..", "..", "..", "KMotion", "Data", "ToolImages"))
@@ -202,21 +205,84 @@ class Settings:
                         "coordinates, which they are only for XYZ", geometry)
 
 
+IMAGE_TAG = re.compile(r"\[([^\[\]]*\.wrl)\]", re.IGNORECASE)
+
+
+def image_in_comment(comment):
+    """The tool image named in a tool table comment, as "... [EndMill-z 1in .125.wrl]" names one; "" if none."""
+    found = IMAGE_TAG.findall(comment or "")
+    return found[-1].strip() if found else ""
+
+
+def comment_with_image(comment, name):
+    """The comment with [name] as its tool image (in place of one it had); name "" takes it out."""
+    base = IMAGE_TAG.sub("", comment or "").rstrip()
+    if not name:
+        return base
+    return (base + " " if base else "") + "[%s]" % name
+
+
+def read_tool_table_images(file):
+    """{tool number: image name} from the comments of a LinuxCNC tool table file."""
+    out = {}
+    if not file:
+        return out
+    try:
+        with open(file, encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line, _, comment = raw.partition(";")
+                name = image_in_comment(comment)
+                if not name:
+                    continue
+                for word in line.split():
+                    if word[:1] in "Tt":
+                        try:
+                            out[int(word[1:])] = name
+                        except ValueError:
+                            pass
+                        break
+    except OSError as e:
+        log.error("tool table: %s", e)
+    return out
+
+
 class ToolImages:
-    """[KMOTION] TOOL_IMAGES: which tool image (KMotionCNC VRML) each tool number has.
+    """Which tool image (KMotionCNC VRML) each tool number has, from two places: the tool table's
+    comments ("[name.wrl]" in a tool's comment, which gmoccapy's tool table page edits: the Tool
+    image and Create tool buttons of gmoccapy_stock.py put it there), and [KMOTION] TOOL_IMAGES, one
+    tool a line: the tool number (T1 or 1) and then the file name, which may have blanks.  A name
+    without a folder is looked for in TOOL_IMAGE_DIR.  # starts a comment.  The table's comment wins.
+    changed() says whether either file has changed since reload()."""
 
-    One tool a line: the tool number (T1 or 1) and then the file name, which may have blanks;
-    a name without a folder is looked for in TOOL_IMAGE_DIR.  # starts a comment.
-    """
-
-    def __init__(self, file, image_dir):
-        self.by_number = {}
+    def __init__(self, file, image_dir, tool_table=None):
+        self.file = file
+        self.tool_table = tool_table
         self.image_dir = image_dir
+        self.by_number = {}
+        self.from_table = {}
         self._missing = set()
-        if not file:
+        self._mtimes = None
+        self.reload()
+
+    @staticmethod
+    def _mtime(path):
+        try:
+            return os.path.getmtime(path) if path else None
+        except OSError:
+            return None
+
+    def changed(self):
+        return (self._mtime(self.file), self._mtime(self.tool_table)) != self._mtimes
+
+    def reload(self):
+        self._mtimes = (self._mtime(self.file), self._mtime(self.tool_table))
+        self._missing = set()
+        self.from_table = read_tool_table_images(self.tool_table)
+        self.by_number = {}
+        if not self.file:
             return
         try:
-            with open(file, encoding="utf-8") as f:
+            with open(self.file, encoding="utf-8") as f:
                 for n, raw in enumerate(f, 1):
                     line = raw.split("#", 1)[0].strip()
                     if not line:
@@ -226,18 +292,26 @@ class ToolImages:
                         number = int(parts[0].lstrip("Tt"))
                         name = parts[1].strip()
                     except (ValueError, IndexError):
-                        log.error("%s line %d: expected a tool number and a file name, not %r", file, n, raw.rstrip())
+                        log.error("%s line %d: expected a tool number and a file name, not %r", self.file, n, raw.rstrip())
                         continue
                     self.by_number[number] = name
         except OSError as e:
             log.error("tool images: %s", e)
 
+    def name(self, number):
+        """The image's name as the tables give it, "" for none."""
+        number = int(number)
+        return self.from_table.get(number) or self.by_number.get(number) or ""
+
+    def path(self, name):
+        return name if os.path.isabs(name) else os.path.join(self.image_dir, name)
+
     def image(self, number):
         """The file of the tool's image, or "" when it has none (or the file is missing)."""
-        name = self.by_number.get(int(number))
+        name = self.name(number)
         if not name:
             return ""
-        path = name if os.path.isabs(name) else os.path.join(self.image_dir, name)
+        path = self.path(name)
         if not os.path.exists(path):
             if path not in self._missing:
                 self._missing.add(path)
@@ -402,7 +476,8 @@ class StockPart(glcanon_scene.Part):
     def __init__(self, settings):
         self.settings = settings
         self.visible = settings.enabled
-        self.images = ToolImages(settings.tool_images, settings.tool_image_dir)
+        self.images = ToolImages(settings.tool_images, settings.tool_image_dir, settings.tool_table)
+        self._ticks = 0
         self.stock = sim.Stock()
         self._canon = None
         self._lines = None
@@ -580,8 +655,11 @@ class StockPart(glcanon_scene.Part):
         too, not only when the GUI redraws: a run that ends, or is refused before it moves,
         changes nothing a GUI redraws on, and the Stock would stay as it was."""
         told = False
+        self._ticks += 1
+        if self._ticks % 10 == 0 and self.images.changed():
+            told = self.refeed("the tool table or the tool images table changed") or told
         if self._stat is not None:
-            told = self._follow(self._stat)
+            told = self._follow(self._stat) or told
         busy = self.stock.busy()
         pending = self.stock.pending() > 0                     # meshes handed over since the last frame
         if self._was_busy and not busy:
@@ -735,6 +813,17 @@ class StockPart(glcanon_scene.Part):
             glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_SHORT, None)
         glBindVertexArray(0)
         glUseProgram(0)
+
+    def refeed(self, why=""):
+        """The tool images may have changed: read the tables again, forget the image files the engine
+        has read, and give the program to the engine once more.  True when a program was given."""
+        self.images.reload()
+        self.stock.forget_tool_images()
+        log.info("tools read again (%s): table %s, TOOL_IMAGES %s", why, self.images.from_table, self.images.by_number)
+        if self._canon is None or self._stat is None:
+            return False
+        self.load_program(self._canon, self._stat)
+        return True
 
     # -- for a GUI's buttons -----------------------------------------------------
 

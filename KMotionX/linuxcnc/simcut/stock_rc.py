@@ -25,6 +25,9 @@ try:
         _ini = inifile                                                                        # noqa: F821
     else:
         raise RuntimeError("stock_rc.py: neither gmoccapy (self.widgets.gremlin) nor AXIS (o) is here")
-    kmotion_stock.install(_widget, _ini, os.getcwd())
+    _part = kmotion_stock.install(_widget, _ini, os.getcwd())
+    if "self" in dir() and hasattr(self, "widgets") and hasattr(self.widgets, "tooledit1"):      # noqa: F821 - gmoccapy
+        import gmoccapy_stock
+        gmoccapy_stock.install(self, _part)                                                       # noqa: F821
 except Exception:
     logging.getLogger("kmotion_stock").exception("the Stock could not be installed")
