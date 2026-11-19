@@ -1,18 +1,18 @@
-(Stock demo: a 10 x 6 x 1 inch block cut by two slots and a rapid that crashes into it; T1 a 1/4 inch flat end mill with its length offset)
-(Between X-0.5 and 10.5, Y-0.5 and 6.5, Z-1.25 and -0.5; the block's top at Z-1 leaves room for a tool length offset under a Z limit near 0)
-(WORKPIECE,BOX,XMIN=0,YMIN=0,ZMIN=-2,XMAX=10,YMAX=6,ZMAX=-1)
+(Stock demo: a 9 x 6 x 1 inch block cut by two slots and a rapid that crashes into it; T1 a 1/4 inch flat end mill with its length offset)
+(Between X-0.5 and 9.5, Y-0.5 and 6.5, Z-1.25 and -0.5: inside soft limits of 10; the block's top at Z-1 leaves room for a tool length offset under a Z limit near 0)
+(WORKPIECE,BOX,XMIN=0,YMIN=0,ZMIN=-2,XMAX=9,YMAX=6,ZMAX=-1)
 G20 G90 G17 G54 G94
 T1 M6 G43 H1
 G0 X-0.5 Y3 Z-0.5
 G1 Z-1.25 F20
-G1 X10.5
+G1 X9.5
 G0 Z-0.5
-G0 X5 Y-0.5
+G0 X4.5 Y-0.5
 G1 Z-1.125
 G1 Y6.5
 G0 Z-0.5
 G0 X2 Y1.5
 G0 Z-1.1
-G0 X8
+G0 X7
 G0 Z-0.5
 M2
