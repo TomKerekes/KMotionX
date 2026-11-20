@@ -144,6 +144,9 @@ def main():
         task_mode = 1                                   # MODE_MANUAL
         interp_state = 1                                # INTERP_IDLE
         motion_line = 0
+        queue = 0                                       # moves of a program queued in motion
+        paused = False
+        read_line = 1                                   # the line the interpreter reads (0 at the end of the file)
         actual_position = (0.0,) * 9
         tool_offset = (0.0,) * 9
         linear_units = 1 / 25.4                         # an inch machine
@@ -156,6 +159,7 @@ def main():
     check(part.stock.wait_idle(180000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
           "the part cuts the whole program when it is loaded while the machine is idle")
     stat.task_mode, stat.interp_state = 2, 2            # MODE_AUTO, running
+    stat.queue = 10
     stat.motion_line = 8                                # G1 X9.5: the first slot, the tool half way along it
     stat.actual_position = (4.5, 3.0, -1.25 + 0.5, 0, 0, 0, 0, 0, 0)
     stat.tool_offset = (0, 0, 0.5, 0, 0, 0, 0, 0, 0)
@@ -196,28 +200,37 @@ def main():
     part._stat = stat                                   # as draw() leaves it
     part.tick()
     check(part._running and part._done == before and part.frontier == front,
-          "... but keeps the executing line (%d): the run only stands, nothing is cut again" % stat.motion_line)
+          "... but the program's moves stay queued (%d): the run only stands, nothing is cut again" % stat.queue)
 
     class Reloaded:                                     # gmoccapy reloads the display meanwhile: the same program, a new canon
         program_geometry, workpieces, tools = canon.program_geometry, canon.workpieces, canon.tools
     part.load_program(Reloaded(), stat)
     check(part._running and part._done == before and part.frontier == front and part.stock.nb_poses() == given,
           "the same program loaded again while the run stands keeps the run, its cuts and the executed path")
-    stat.motion_line = 0                                # an abort, or the program's end: task clears the line
+    stat.queue = 0                                      # an abort: the queue emptied (the executing line keeps its last value)
     again = part.tick()                                 # the timer, not a redraw, notices the end of the run
-    check(again and not part._running and part.stock.wait_idle(180000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
-          "the run over, seen by the timer with no redraw: the whole program is cut again")
-    check(part.frontier == front and np.allclose(part.frontier_point(), end, atol=1e-6), "... and the executed path stays as it was")
+    removed = block - part.stock.stats()["volume"][2] if part.stock.wait_idle(180000) else 0
+    check(again and not part._running and part._done == before and 0.3 * expect < removed < 0.8 * expect,
+          "the run stopped, seen by the timer with no redraw: the cut stays as it was (%.3f of %.3f cubic inch)" % (removed, expect))
+    check(part.frontier == front and np.allclose(part.frontier_point(), end, atol=1e-6), "... and the executed path stays as it was, to where it stopped")
+    check(part.clear_executed() and part.frontier == (0, 0.0) and part.frontier_point() is None and part._done == before,
+          "the GUI's clear-plot button clears the executed path and leaves the cut")
     stat.task_mode, stat.interp_state = 2, 2            # a new start, the tool at X 1 on the first slot
+    stat.queue = 10
     stat.motion_line = 8
     stat.actual_position = (1.0, 3.0, -1.25 + 0.5, 0, 0, 0, 0, 0, 0)
     part._follow(stat)
     end3 = part.frontier_point()
     check(part._running and part.frontier < front and part._done < before and end3 is not None and abs(end3[0] - 1.0) < 1e-3,
           "a new start clears it: the executed path begins again, up to the tool (X %.3f)" % end3[0])
-    stat.task_mode, stat.interp_state = 1, 1
-    stat.motion_line = 0                                # the run over
-    part.tick()
+    stat.motion_line, stat.read_line = 0, 0             # the program read to its end: task clears the lines while the last moves run
+    part._follow(stat)
+    check(part._running and part._eof, "the end of the program read, its last moves in flight: noted")
+    stat.task_mode, stat.interp_state, stat.queue = 2, 1, 0   # ... and done
+    again = part.tick()
+    check(again and not part._running and part.stock.wait_idle(180000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
+          "the run complete: the whole program is cut (the moves after the last line seen too)")
+    stat.task_mode = 1
 
     class Loaded:                                       # the same program loaded again, the machine idle: a new canon object
         program_geometry, workpieces, tools = canon.program_geometry, canon.workpieces, canon.tools

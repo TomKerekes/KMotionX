@@ -615,6 +615,7 @@ class StockPart(glcanon_scene.Part):
         self._path_version = 0                                 # counts the programs given (DonePathPart's buffer follows)
         self._box = None
         self._running = False
+        self._eof = False                                      # the run read its program to the end: its last moves in flight
         self._done = 0
         self._shader = None
         self._slots = {}
@@ -722,30 +723,49 @@ class StockPart(glcanon_scene.Part):
         return 0.05 * (25.4 * lu if lu else 1.0)
 
     @staticmethod
-    def _run_on(stat):
-        """A program is executing, or paused in auto: task in MODE_AUTO with the interpreter not idle."""
+    def _motion_pending(stat):
+        """Moves of a program still queued, or a feed hold: the run is not over (an abort empties
+        the queue; the executing line number is no sign, it keeps its last value after an abort)."""
         try:
-            return stat.task_mode == linuxcnc.MODE_AUTO and stat.interp_state != linuxcnc.INTERP_IDLE
+            return int(getattr(stat, "queue", 0) or 0) > 0 or bool(getattr(stat, "paused", False))
+        except (TypeError, ValueError):
+            return False
+
+    @classmethod
+    def _run_on(cls, stat):
+        """A program is executing, or paused in auto: task in MODE_AUTO with the interpreter not
+        idle, or with its moves still queued (task reports the interpreter idle for long stretches
+        of a run here)."""
+        try:
+            return stat.task_mode == linuxcnc.MODE_AUTO and (stat.interp_state != linuxcnc.INTERP_IDLE or cls._motion_pending(stat))
         except AttributeError:
             return False
 
-    @staticmethod
-    def _run_held(stat):
-        """A run standing outside auto - paused with the GUI in manual to jog (task then reports
-        MODE_MANUAL and the interpreter idle) - as long as task keeps the executing line: an abort
-        and a program's end set motion_line to 0."""
+    @classmethod
+    def _run_held(cls, stat):
+        """A run standing outside auto: paused with the GUI gone to manual for a jog (task then
+        reports MODE_MANUAL and the interpreter idle), its moves still queued."""
         try:
-            return stat.task_mode != linuxcnc.MODE_AUTO and int(getattr(stat, "motion_line", 0) or 0) > 0
-        except (AttributeError, TypeError, ValueError):
+            return stat.task_mode != linuxcnc.MODE_AUTO and cls._motion_pending(stat)
+        except AttributeError:
             return False
 
     _is_running = _run_on
 
     def _start_run(self):
         self._running = True
+        self._eof = False
         self._done = 0
         self._frontier = (0, 0.0)
         self.stock.uncut_from(0)
+
+    def clear_executed(self):
+        """Forget the executed path (the GUI's clear-plot button): the cut stays as it is."""
+        if self._frontier != (0, 0.0):
+            self._frontier = (0, 0.0)
+            log.info("the executed path cleared")
+            return True
+        return False
 
     def _tolerance(self, stat):
         # TOOL_ON_PATH_TOL in the machine's units (stat.linear_units: machine units per mm)
@@ -838,12 +858,21 @@ class StockPart(glcanon_scene.Part):
                 self._done = done
                 self.stock.cut_to(done)
                 told = True
+            # the program read to its end (task clears the line numbers there) while its last
+            # moves run: the run that ends now has completed, not been stopped
+            if (self._done > 0 and not self._eof and int(getattr(stat, "motion_line", 0) or 0) == 0
+                    and int(getattr(stat, "read_line", 1) or 0) == 0):
+                self._eof = True
         elif self._running and self._run_held(stat):
             pass                                               # paused, the GUI in manual (a jog): the run stands
         elif self._running:
             self._running = False
-            self.stock.cut_all()
-            log.info("run over: cut all (it had come to %d poses)", self._done)
+            n = len(self._tips) if self._tips is not None else 0
+            if self._eof or (n and self._frontier[0] >= n - 2):
+                self.stock.cut_all()                           # the moves after the last line seen are cut too
+                log.info("run complete: cut all (it had come to %d poses of %d)", self._done, n)
+            else:
+                log.info("run stopped at %d poses of %d: left as cut, the executed path to there", self._done, n)
             told = True
         return told
 
@@ -1332,6 +1361,15 @@ def install(widget, inifile, ini_dir=None):
     scene = widget.scene
     scene.insert_before(scene.program, part, lambda ctx: part.visible)
     widget.kmotion_stock = part
+    clear = getattr(widget, "clear_live_plotter", None)       # the GUI's clear-plot button clears the executed path too
+    if callable(clear):
+        def clear_plots(*a, **k):
+            if part.clear_executed():
+                redraw = getattr(widget, "queue_draw", None) or getattr(widget, "tkRedraw", None)
+                if redraw:
+                    redraw()
+            return clear(*a, **k)
+        widget.clear_live_plotter = clear_plots
     if settings.tool_shape and getattr(scene, "tool", None) is not None:
         part.tool_part = ImageToolPart(part.images)
         scene.replace(scene.tool, part.tool_part)      # the gate (show_tool) stays
