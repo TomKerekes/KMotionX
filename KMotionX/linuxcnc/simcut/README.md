@@ -62,6 +62,13 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
    (WORKPIECE,BOX,XMIN=0,YMIN=0,ZMIN=-2,XMAX=9,YMAX=6,ZMAX=-1)
    ```
 
+   The numbers are in the program's units. LinuxCNC reads them in the units in force at the
+   comment's line, and its preview begins every program in the machine's units; a metric program
+   on an inch machine, with the comment above its G21, would give a block 25.4 times too big. So
+   a comment with no G20/G21 above it takes the units the program moves in (its last G20/G21
+   before the first move), and the preview's outline is corrected with it. A comment can also say
+   so itself: `(WORKPIECE,BOX,UNITS=MM,XMIN=-50,...)` (UNITS=MM or UNITS=INCH, LinuxCNC's key).
+
    LinuxCNC reads the comment in the coordinate system active at that line (G5x, G92), so the
    block moves with the work offset - unlike KMotionCNC's Stock, which is fixed in machine
    coordinates. A cylinder or tube is taken by its bounding box. Without the comment the block

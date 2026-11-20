@@ -497,6 +497,85 @@ def done_path_vertices(tips, flags, feed, rapid):
     return out
 
 
+UNIT_WORD = re.compile(r"(?<![A-Z0-9._#<\[])G0*2([01])(?![0-9.])", re.IGNORECASE)   # a G20 or G21 word
+
+
+def _without_comments(line):
+    """A G-code line without its ( ) and ; comments."""
+    out, depth = [], 0
+    for ch in line:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if ch == ";":
+                break
+            out.append(ch)
+    return "".join(out)
+
+
+def workpiece_units(canon, stat, geom):
+    """The program's (WORKPIECE,...) comments in the program's units.
+
+    The preview parses a program in the machine's units (G20 on an inch machine) and reads a
+    WORKPIECE comment's numbers in the units in force at its line.  A metric program usually has
+    its G21 below the comment, so on an inch machine a 50 mm block came out as 50 inches.  Here a
+    comment with no G20/G21 above it in the file and no UNITS key of its own gets the units the
+    program moves in (its last G20/G21 at or before the first move): its points are scaled about
+    the frame's origin, in place, so the preview's own stock outline follows.  Nothing changes
+    for a comment below the program's unit word, one saying UNITS=MM or UNITS=INCH, or a
+    program that never says.  Returns the comments changed."""
+    path = getattr(stat, "file", None)
+    wps = list(getattr(canon, "workpieces", None) or ())
+    if not path or not wps or geom is None or getattr(geom, "is_empty", True):
+        return 0
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read().splitlines()
+    except OSError as e:
+        log.warning("%s: not read for its G20/G21 (%s)", path, e)
+        return 0
+    words = [(n, m.group(1) == "1") for n, line in enumerate(text, 1) for m in UNIT_WORD.finditer(_without_comments(line))]
+    first_move = int(geom.lines.min())
+    before_move = [w for w in words if w[0] <= first_move]
+    if not before_move:
+        return 0
+    at_line, program_mm = before_move[-1]
+    lu = float(getattr(stat, "linear_units", 1 / 25.4) or 1 / 25.4) * 25.4    # machine units per inch
+    machine_mm = abs(lu - 25.4) < 1e-6
+    if program_mm == machine_mm:
+        return 0
+    r = (1 / 25.4 if program_mm else 1.0) / (1 / 25.4 if machine_mm else 1.0)
+    # where the program's origin is on the machine: the g5x offset, then the g92 offset rotated with
+    # the program (what the preview's transform did to the comment's points, from the status)
+    g5x = np.asarray((getattr(stat, "g5x_offset", None) or (0.0,) * 9)[:3], dtype=float)
+    g92 = np.asarray((getattr(stat, "g92_offset", None) or (0.0,) * 9)[:3], dtype=float)
+    a = math.radians(float(getattr(stat, "rotation_xy", 0.0) or 0.0))
+    rot = np.array([[math.cos(a), -math.sin(a), 0.0], [math.sin(a), math.cos(a), 0.0], [0.0, 0.0, 1.0]])
+    origin = (g5x + rot @ g92) / lu
+    changed = 0
+    for wp in wps:
+        lineno = int(getattr(wp, "lineno", -1))
+        if any(n < lineno for n, _ in words):
+            continue                                            # the program set its units above the comment
+        if 0 < lineno <= len(text) and "UNITS" in text[lineno - 1].upper():
+            continue                                            # the comment says
+        m = np.asarray(wp.machine_points, dtype=np.float64)
+        p = np.asarray(wp.points, dtype=np.float64)
+        m2 = origin + r * (m - origin)
+        wp.points = m2 + (p - m) if p.shape == m.shape else p.mean(axis=0) + r * (p - p.mean(axis=0))
+        wp.machine_points = m2
+        for k, v in list(wp.params.items()):
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                wp.params[k] = v * r
+        changed += 1
+        log.info("WORKPIECE at line %d: read in %s (the parse begins in the machine's units) but the program moves in %s (G2%d at line %d): "
+                 "its numbers taken as %s", lineno, "mm" if machine_mm else "inches", "mm" if program_mm else "inches",
+                 1 if program_mm else 0, at_line, "mm" if program_mm else "inches")
+    return changed
+
+
 def stock_box(canon, settings):
     """(lo, hi) of the Stock: the program's first (WORKPIECE,...) comment, else STOCK_BOX."""
     for wp in getattr(canon, "workpieces", ()) or ():
@@ -559,7 +638,8 @@ class StockPart(glcanon_scene.Part):
 
     def load_program(self, canon, stat):
         """A program was loaded in the widget: its path is the path to cut with."""
-        if canon is not self._canon:
+        new = canon is not self._canon
+        if new:
             self._frontier = (0, 0.0)                          # a new program: none of it is executed
         self._canon = canon
         self._running = False
@@ -573,6 +653,11 @@ class StockPart(glcanon_scene.Part):
                      "the ini's box" if self.settings.box else "not defined")
             self._define(self.settings.box)
             return
+        if new:
+            try:
+                workpiece_units(canon, stat, geom)             # once per program: it scales the comments in place
+            except Exception:
+                log.exception("the WORKPIECE comments' units")
         box = stock_box(canon, self.settings)
         spindle = int(getattr(stat, "tool_in_spindle", 0) or 0)
         log.info("program: %d vertices, lines %s..%s, tool changes %s, tool in the spindle %d, box %s", len(geom),

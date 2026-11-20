@@ -213,6 +213,33 @@ def main():
     part.load_program(Loaded(), stat)
     check(part.frontier == (0, 0.0) and part.frontier_point() is None and part.stock.nb_poses() == given,
           "a program load clears it (the program given again: %d poses)" % part.stock.nb_poses())
+    # a metric program on the inch machine with its WORKPIECE comment above its G21: the preview begins
+    # the parse in the machine's units and reads the comment's 50 as inches; the part takes the
+    # program's units for it (and leaves a comment that says UNITS= alone)
+    mm = os.path.join(td, "mm.ngc")
+    with open(mm, "w") as f:
+        f.write("(WORKPIECE,BOX,XMIN=-50,YMIN=-50,ZMIN=-40,XMAX=50,YMAX=50,ZMAX=0)\nG20 G90 G17 G54 G94\nN30 G21\n"
+                "(WORKPIECE,BOX,UNITS=INCH,XMIN=0,YMIN=0,ZMIN=0,XMAX=1,YMAX=1,ZMAX=1)\nG0 X0 Y0 Z10\nG1 Z-5 F100\nM2\n")
+    canon2 = Canon()
+    canon2.parameter_file = canon.parameter_file
+    canon2.configure_program_geometry("XYZ", glcanon_bake.RotationOffsets(), False, want_axis_positions=False)
+    result, seq = gcode.parse(mm, canon2, "G20", "G53 G0 X0 Y0 Z0 G17 G90 G94 G54 G49 G40")
+    big = canon2.workpieces[0].machine_points.max(axis=0) if len(canon2.workpieces) == 2 else (0,)
+    check(result <= gcode.MIN_ERROR and len(canon2.workpieces) == 2 and abs(big[0] - 50.0) < 1e-6,
+          "a metric program parsed as the preview does on an inch machine: its WORKPIECE above the G21 read as inches (X to %.1f)" % big[0])
+    stat2 = Stat()
+    stat2.file = mm
+    part2 = kmotion_stock.StockPart(kmotion_stock.Settings(Ini(), td))
+    part2.load_program(canon2, stat2)
+    box = kmotion_stock.stock_box(canon2, part2.settings)
+    check(np.allclose(box[0], (-50 / 25.4, -50 / 25.4, -40 / 25.4)) and np.allclose(box[1], (50 / 25.4, 50 / 25.4, 0.0)),
+          "the Stock takes the comment in the program's units, mm: %s" % (tuple(round(v, 3) for v in box[1]),))
+    wp = canon2.workpieces
+    check(np.allclose(wp[0].points, wp[0].machine_points) and abs(wp[0].params["XMAX"] - 50 / 25.4) < 1e-9,
+          "the preview's outline and the comment's params follow")
+    check(abs(wp[1].machine_points.max() - 1.0) < 1e-9, "a comment that says UNITS=INCH is left alone")
+    part2.stock.wait_idle(60000)
+
     print("check-feed", "passed" if not fails else "FAILED (%d)" % fails)
     return 1 if fails else 0
 
