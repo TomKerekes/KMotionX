@@ -498,6 +498,8 @@ def done_path_vertices(tips, flags, feed, rapid):
 
 
 UNIT_WORD = re.compile(r"(?<![A-Z0-9._#<\[])G0*2([01])(?![0-9.])", re.IGNORECASE)   # a G20 or G21 word
+AXIS_WORD = re.compile(r"(?<![A-Z0-9_])[XYZABCUVW]\s*[-+\[#.0-9]", re.IGNORECASE)      # a move's (or a G10's) coordinate
+NAMED_PARAM = re.compile(r"#<[^>]*>")                                                # #<name>: its letters are not words
 
 
 def _without_comments(line):
@@ -536,11 +538,11 @@ def workpiece_units(canon, stat, geom):
     except OSError as e:
         log.warning("%s: not read for its G20/G21 (%s)", path, e)
         return 0
-    words = [(n, m.group(1) == "1") for n, line in enumerate(text, 1) for m in UNIT_WORD.finditer(_without_comments(line))]
-    # the first move's line: the ends of the moves (the first vertex is the path's start, and its
-    # line number is where the parse stood when the start was fixed, not a move's)
-    lines = np.asarray(geom.lines)
-    first_move = int(lines[1:].min()) if len(lines) > 1 else int(lines.min())
+    code = [NAMED_PARAM.sub("#", _without_comments(line)) for line in text]
+    words = [(n, m.group(1) == "1") for n, line in enumerate(code, 1) for m in UNIT_WORD.finditer(line)]
+    # the first move's line, from the text: the first line with a coordinate word (the geometry's
+    # line labels are not the file's lines for every file, so they are not used for this)
+    first_move = next((n for n, line in enumerate(code, 1) if AXIS_WORD.search(line)), len(code))
     before_move = [w for w in words if w[0] <= first_move]
     if not before_move:
         log.info("WORKPIECE: the program says no G20/G21 before its first move (line %d): its comments as the parse read them", first_move)
