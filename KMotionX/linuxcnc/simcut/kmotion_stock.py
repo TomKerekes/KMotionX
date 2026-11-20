@@ -537,14 +537,20 @@ def workpiece_units(canon, stat, geom):
         log.warning("%s: not read for its G20/G21 (%s)", path, e)
         return 0
     words = [(n, m.group(1) == "1") for n, line in enumerate(text, 1) for m in UNIT_WORD.finditer(_without_comments(line))]
-    first_move = int(geom.lines.min())
+    # the first move's line: the ends of the moves (the first vertex is the path's start, and its
+    # line number is where the parse stood when the start was fixed, not a move's)
+    lines = np.asarray(geom.lines)
+    first_move = int(lines[1:].min()) if len(lines) > 1 else int(lines.min())
     before_move = [w for w in words if w[0] <= first_move]
     if not before_move:
+        log.info("WORKPIECE: the program says no G20/G21 before its first move (line %d): its comments as the parse read them", first_move)
         return 0
     at_line, program_mm = before_move[-1]
     lu = float(getattr(stat, "linear_units", 1 / 25.4) or 1 / 25.4) * 25.4    # machine units per inch
     machine_mm = abs(lu - 25.4) < 1e-6
     if program_mm == machine_mm:
+        log.info("WORKPIECE: the program moves in %s (G2%d at line %d, the first move at line %d), as the parse began: its comments as read",
+                 "mm" if program_mm else "inches", 1 if program_mm else 0, at_line, first_move)
         return 0
     r = (1 / 25.4 if program_mm else 1.0) / (1 / 25.4 if machine_mm else 1.0)
     # where the program's origin is on the machine: the g5x offset, then the g92 offset rotated with
@@ -570,9 +576,9 @@ def workpiece_units(canon, stat, geom):
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 wp.params[k] = v * r
         changed += 1
-        log.info("WORKPIECE at line %d: read in %s (the parse begins in the machine's units) but the program moves in %s (G2%d at line %d): "
-                 "its numbers taken as %s", lineno, "mm" if machine_mm else "inches", "mm" if program_mm else "inches",
-                 1 if program_mm else 0, at_line, "mm" if program_mm else "inches")
+        log.info("WORKPIECE at line %d: read in %s (the parse begins in the machine's units) but the program moves in %s (G2%d at line %d, "
+                 "the first move at line %d): its numbers taken as %s", lineno, "mm" if machine_mm else "inches", "mm" if program_mm else "inches",
+                 1 if program_mm else 0, at_line, first_move, "mm" if program_mm else "inches")
     return changed
 
 

@@ -218,15 +218,20 @@ def main():
     # program's units for it (and leaves a comment that says UNITS= alone)
     mm = os.path.join(td, "mm.ngc")
     with open(mm, "w") as f:
-        f.write("(WORKPIECE,BOX,XMIN=-50,YMIN=-50,ZMIN=-40,XMAX=50,YMAX=50,ZMAX=0)\nG20 G90 G17 G54 G94\nN30 G21\n"
-                "(WORKPIECE,BOX,UNITS=INCH,XMIN=0,YMIN=0,ZMIN=0,XMAX=1,YMAX=1,ZMAX=1)\nG0 X0 Y0 Z10\nG1 Z-5 F100\nM2\n")
+        # shaped like the 3D_Chips sample: parameters between the inch preamble and the G21 (the path's
+        # start vertex was labelled with one of their lines, above the G21)
+        f.write("(WORKPIECE,BOX,XMIN=-50,YMIN=-50,ZMIN=-40,XMAX=50,YMAX=50,ZMAX=0)\nG20 G90 G17 G54 G94\n#<xs> = 1.0\n#<zs> = 1.0\n"
+                "#<fs> = 1.0\n#<rpm> = 1600\n\nN30 G21\nN40 G90\nG64\nS#<rpm> M3\n"
+                "(WORKPIECE,BOX,UNITS=INCH,XMIN=0,YMIN=0,ZMIN=0,XMAX=1,YMAX=1,ZMAX=1)\nG0 Z[#<zs>*10.]\nG0 X[#<xs>*53.] Y-56.128\n"
+                "G1 Z[#<zs>*-5] F[#<fs>*100]\nM2\n")
     canon2 = Canon()
     canon2.parameter_file = canon.parameter_file
     canon2.configure_program_geometry("XYZ", glcanon_bake.RotationOffsets(), False, want_axis_positions=False)
     result, seq = gcode.parse(mm, canon2, "G20", "G53 G0 X0 Y0 Z0 G17 G90 G94 G54 G49 G40")
     big = canon2.workpieces[0].machine_points.max(axis=0) if len(canon2.workpieces) == 2 else (0,)
     check(result <= gcode.MIN_ERROR and len(canon2.workpieces) == 2 and abs(big[0] - 50.0) < 1e-6,
-          "a metric program parsed as the preview does on an inch machine: its WORKPIECE above the G21 read as inches (X to %.1f)" % big[0])
+          "a metric program parsed as the preview does on an inch machine: its WORKPIECE above the G21 read as inches (X to %.1f; "
+          "the path's vertices labelled with lines %s, %s..)" % (big[0], canon2.program_geometry.lines[0], canon2.program_geometry.lines[1]))
     stat2 = Stat()
     stat2.file = mm
     part2 = kmotion_stock.StockPart(kmotion_stock.Settings(Ini(), td))
