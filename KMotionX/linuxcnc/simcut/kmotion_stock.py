@@ -585,13 +585,18 @@ def workpiece_units(canon, stat, geom):
 
 
 def program_key(path, geom):
-    """What tells one loaded program from another: its path, its vertex count and a checksum of its
-    vertices (the same file edited and loaded again differs; the display reloaded does not)."""
+    """What tells one loaded program from another: its path, its vertex count, its line numbers and
+    a checksum of its vertices from the fourth on (the same file edited and loaded again differs;
+    the display reloaded does not). The first vertices are left out: the path begins where the
+    machine stood when the program was loaded, and a first move that gives only some axes ends
+    there too, so they change from one load to the next."""
     if geom is None or getattr(geom, "is_empty", True):
         return (path, -1, 0.0)
     try:
-        p = np.asarray(geom.positions(0), dtype=np.float64)
-        digest = float(np.round(p.sum() + (p[:, 0] * np.arange(1, len(p) + 1)).sum() * 1e-3, 6)) if len(p) else 0.0
+        p = np.asarray(geom.positions(0), dtype=np.float64)[3:]
+        lines = np.asarray(geom.lines, dtype=np.float64)
+        digest = float(np.round(p.sum() + (p[:, 0] * np.arange(1, len(p) + 1)).sum() * 1e-3
+                                + (lines * np.arange(1, len(lines) + 1)).sum() * 1e-6, 6)) if len(p) else 0.0
     except Exception:
         digest = 0.0
     return (path, int(len(geom)), digest)
@@ -912,10 +917,12 @@ class StockPart(glcanon_scene.Part):
                 self._done = done
                 self.stock.cut_to(done)
                 told = True
-            # the program read to its end (task clears the line numbers there) while its last
-            # moves run: the run that ends now has completed, not been stopped
+            # the program read to its end (task clears the line numbers there and reports the
+            # interpreter waiting for the last moves): the run that ends now has completed, not been
+            # stopped. An abort clears the lines too, with the interpreter idle
             if (self._done > 0 and not self._eof and int(getattr(stat, "motion_line", 0) or 0) == 0
-                    and int(getattr(stat, "read_line", 1) or 0) == 0):
+                    and int(getattr(stat, "read_line", 1) or 0) == 0
+                    and getattr(stat, "interp_state", None) == linuxcnc.INTERP_WAITING):
                 self._eof = True
         elif self._running and self._run_held(stat):
             pass                                               # paused, the GUI in manual (a jog): the run stands

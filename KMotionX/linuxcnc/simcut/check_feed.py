@@ -224,7 +224,11 @@ def main():
     end3 = part.frontier_point()
     check(part._running and part.frontier < front and part._done < before and end3 is not None and abs(end3[0] - 1.0) < 1e-3,
           "a new start clears it: the executed path begins again, up to the tool (X %.3f)" % end3[0])
-    stat.motion_line, stat.read_line = 0, 0             # the program read to its end: task clears the lines while the last moves run
+    stat.motion_line, stat.read_line = 0, 0             # cleared lines with the interpreter idle: an abort in progress, not the end
+    stat.interp_state = 1
+    part._follow(stat)
+    check(part._running and not part._eof, "cleared line numbers with the interpreter idle (an abort draining) are not the program's end")
+    stat.interp_state = 4                               # the program read to its end: task clears the lines, the interpreter waits for the last moves
     part._follow(stat)
     check(part._running and part._eof, "the end of the program read, its last moves in flight: noted")
     stat.task_mode, stat.interp_state, stat.queue = 2, 1, 0   # ... and done
