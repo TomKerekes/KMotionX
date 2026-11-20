@@ -207,14 +207,15 @@ def main():
     part.load_program(Reloaded(), stat)
     check(part._running and part._done == before and part.frontier == front and part.stock.nb_poses() == given,
           "the same program loaded again while the run stands keeps the run, its cuts and the executed path")
-    stat.queue = 0                                      # an abort: the queue emptied (the executing line keeps its last value)
-    again = part.tick()                                 # the timer, not a redraw, notices the end of the run
+    stat.task_mode, stat.queue = 2, 0                   # an abort: the queue emptied (the executing line keeps its last value) ...
+    part.load_program(Reloaded(), stat)                 # ... and gmoccapy reloads the display at once, before any tick
+    again = part.tick()
     removed = block - part.stock.stats()["volume"][2] if part.stock.wait_idle(180000) else 0
-    check(again and not part._running and part._done == before and 0.3 * expect < removed < 0.8 * expect,
-          "the run stopped, seen by the timer with no redraw: the cut stays as it was (%.3f of %.3f cubic inch)" % (removed, expect))
+    check(not part._running and part._done == before and 0.3 * expect < removed < 0.8 * expect,
+          "the run stopped, the display reloaded in the same moment: the cut stays as it was (%.3f of %.3f cubic inch)" % (removed, expect))
     check(part.frontier == front and np.allclose(part.frontier_point(), end, atol=1e-6), "... and the executed path stays as it was, to where it stopped")
-    check(part.clear_executed() and part.frontier == (0, 0.0) and part.frontier_point() is None and part._done == before,
-          "the GUI's clear-plot button clears the executed path and leaves the cut")
+    check(part.clear_executed() and part.executed_range()[0] == front[0] and part.frontier == front and part._done == before,
+          "the GUI's clear-plot button hides the executed path drawn so far and leaves the cut")
     stat.task_mode, stat.interp_state = 2, 2            # a new start, the tool at X 1 on the first slot
     stat.queue = 10
     stat.motion_line = 8

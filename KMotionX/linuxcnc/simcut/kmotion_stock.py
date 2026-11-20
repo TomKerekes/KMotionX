@@ -612,6 +612,7 @@ class StockPart(glcanon_scene.Part):
         self._tips = None
         self._flags = None
         self._frontier = (0, 0.0)                              # the executed path: whole segments, how far along the next
+        self._clear_from = 0                                   # ... drawn from this segment on (the GUI's clear button)
         self._path_version = 0                                 # counts the programs given (DonePathPart's buffer follows)
         self._box = None
         self._running = False
@@ -653,19 +654,25 @@ class StockPart(glcanon_scene.Part):
         empty = geom is None or getattr(geom, "is_empty", True)
         key = (getattr(stat, "file", None), -1 if empty else int(len(geom)))
         # the same program loaded again while its run stands (paused, the GUI gone to manual for a
-        # jog; gmoccapy reloads the display then): the run goes on, nothing is cut again
-        held = key == self._program_key and self._running and self._run_held(stat)
+        # jog; gmoccapy reloads the display then): the run goes on, nothing is cut again. Loaded
+        # again as its run ends (an abort: the interpreter idle, gmoccapy reloads at once): the
+        # run ends as it would have in _follow, stopped or complete
+        same_run = key == self._program_key and self._running
+        held = same_run and self._run_held(stat)
+        ended = same_run and not held and not self._run_on(stat)
         self._program_key = key
-        if new and not held:
+        if new and not (held or ended):
             self._frontier = (0, 0.0)                          # a new program: none of it is executed
+            self._clear_from = 0
         self._canon = canon
-        if not held:
+        if not (held or ended):
             self._running = False
             self._done = 0
         self.stock.clear_poses()
         self._lines = self._tips = self._flags = None
         self._path_version += 1
         if empty:
+            self._running = False
             log.info("program: none or empty (canon %s); the Stock is %s", type(canon).__name__,
                      "the ini's box" if self.settings.box else "not defined")
             self._define(self.settings.box)
@@ -704,6 +711,11 @@ class StockPart(glcanon_scene.Part):
                      getattr(stat, "motion_line", "?"), self._done)
             if self._done > 0:
                 self.stock.cut_to(self._done)
+        elif ended:
+            log.info("the program loaded again as its run ended")
+            if self._done > 0:
+                self.stock.cut_to(self._done)
+            self._end_run()
         elif self.settings.follow and self._run_on(stat):
             log.info("a run is on: following it")
             self._start_run()
@@ -757,15 +769,34 @@ class StockPart(glcanon_scene.Part):
         self._eof = False
         self._done = 0
         self._frontier = (0, 0.0)
+        self._clear_from = 0
         self.stock.uncut_from(0)
 
+    def _end_run(self):
+        """The run is over: complete (the program read to its end, or the path at its last
+        segments) and the whole program is cut; stopped otherwise, and the cut and the executed
+        path stay where they are."""
+        self._running = False
+        n = len(self._tips) if self._tips is not None else 0
+        if self._eof or (n and self._frontier[0] >= n - 2):
+            self.stock.cut_all()                               # the moves after the last line seen are cut too
+            log.info("run complete: cut all (it had come to %d poses of %d)", self._done, n)
+        else:
+            log.info("run stopped at %d poses of %d: left as cut, the executed path to there", self._done, n)
+
     def clear_executed(self):
-        """Forget the executed path (the GUI's clear-plot button): the cut stays as it is."""
-        if self._frontier != (0, 0.0):
-            self._frontier = (0, 0.0)
-            log.info("the executed path cleared")
+        """The GUI's clear-plot button: the executed path drawn so far is hidden (a run that goes
+        on draws from here), the cut stays as it is."""
+        if self._clear_from != self._frontier[0]:
+            self._clear_from = self._frontier[0]
+            log.info("the executed path cleared (hidden up to segment %d)", self._clear_from)
             return True
         return False
+
+    def executed_range(self):
+        """What of the executed path is drawn: (from segment, segments, fraction of the next)."""
+        segments, fraction = self._frontier
+        return min(self._clear_from, segments), segments, fraction
 
     def _tolerance(self, stat):
         # TOOL_ON_PATH_TOL in the machine's units (stat.linear_units: machine units per mm)
@@ -866,13 +897,7 @@ class StockPart(glcanon_scene.Part):
         elif self._running and self._run_held(stat):
             pass                                               # paused, the GUI in manual (a jog): the run stands
         elif self._running:
-            self._running = False
-            n = len(self._tips) if self._tips is not None else 0
-            if self._eof or (n and self._frontier[0] >= n - 2):
-                self.stock.cut_all()                           # the moves after the last line seen are cut too
-                log.info("run complete: cut all (it had come to %d poses of %d)", self._done, n)
-            else:
-                log.info("run stopped at %d poses of %d: left as cut, the executed path to there", self._done, n)
+            self._end_run()
             told = True
         return told
 
@@ -1104,6 +1129,7 @@ class DonePathPart(glcanon_scene.Part):
         self._buffer = None                                    # glcanon_gl.GLBuffer: the segments
         self._vao = None                                       # ... as GL_LINES
         self._wide_vao = None                                  # ... as endpoint pairs, one instance a segment
+        self._wide_first = 0                                   # ... from this segment on
         self._segments = 0
         self._version = None                                   # (the Stock's program, the colours) the buffer holds
 
@@ -1159,15 +1185,19 @@ class DonePathPart(glcanon_scene.Part):
         self._segments = len(verts) // 2
         log.info("executed path: %d segments in the buffer", self._segments)
 
-    def _wide(self):
-        """The buffer as segment endpoint pairs for the quad-expanding shader: bound twice, a vertex
-        apart, one instance a segment (as glcanon_gl.CategoryBuffers presents its own)."""
-        if self._wide_vao is None:
+    def _wide(self, first=0):
+        """The buffer as segment endpoint pairs for the quad-expanding shader, from segment first
+        on: bound twice, a vertex apart, one instance a segment (as glcanon_gl.CategoryBuffers
+        presents its own)."""
+        if self._wide_vao is None or self._wide_first != first:
+            if self._wide_vao is not None:
+                self._wide_vao.delete()
             self._wide_vao = glcanon_gl.VertexArray()
+            self._wide_first = first
             step = 2 * glcanon_gl.VERTEX_STRIDE
-            self._wide_vao.configure(self._buffer, glcanon_gl.WIDE_LINE_A_ATTRIBUTES, step, divisor=1, base=0)
+            self._wide_vao.configure(self._buffer, glcanon_gl.WIDE_LINE_A_ATTRIBUTES, step, divisor=1, base=first * step)
             self._wide_vao.configure(self._buffer, glcanon_gl.WIDE_LINE_B_ATTRIBUTES, step, divisor=1,
-                                     base=glcanon_gl.VERTEX_STRIDE)
+                                     base=first * step + glcanon_gl.VERTEX_STRIDE)
         return self._wide_vao
 
     @staticmethod
@@ -1182,27 +1212,28 @@ class DonePathPart(glcanon_scene.Part):
         stock = self.stock
         stock.sync(ctx)
         self._ensure(ctx)
-        segments, fraction = stock.frontier
+        first, segments, fraction = stock.executed_range()
         n = min(segments, self._segments)
+        first = min(first, n)
         mvp = self.mvp(ctx)
         renderer = ctx.renderer
-        if n > 0:
+        if n > first:
             width = renderer.expansion_width()
             if width:
                 wide = renderer.wide_line_program()
                 wide.begin(mvp)
                 wide.set_expansion(renderer.viewport, width)
-                vao = self._wide()
+                vao = self._wide(first)
                 vao.bind()
-                glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n)
+                glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n - first)
                 vao.unbind()
             else:
                 renderer.line_program().begin(mvp)
                 self._vao.bind()
-                glDrawArrays(GL_LINES, 0, 2 * n)
+                glDrawArrays(GL_LINES, 2 * first, 2 * (n - first))
                 self._vao.unbind()
         end = stock.frontier_point()
-        if end is not None and fraction > 0 and segments < self._segments:
+        if end is not None and fraction > 0 and segments < self._segments and segments >= first:
             flags = int(stock._flags[segments + 1])
             if flags & sim.SIMPOSE_MOVE:
                 feed, rapid = self.colours(ctx.colors)
@@ -1383,14 +1414,20 @@ def install(widget, inifile, ini_dir=None):
         from gi.repository import GLib
 
         def gtk_tick():
-            if part.tick():
-                widget.queue_draw()
+            try:
+                if part.tick():
+                    widget.queue_draw()
+            except Exception:
+                log.exception("tick")                          # the timer stays (an exception would end it)
             return True
         GLib.timeout_add(100, gtk_tick)
     elif hasattr(widget, "after") and hasattr(widget, "tkRedraw"):
         def tk_tick():
-            if part.tick():
-                widget.tkRedraw()
+            try:
+                if part.tick():
+                    widget.tkRedraw()
+            except Exception:
+                log.exception("tick")
             widget.after(100, tk_tick)
         widget.after(100, tk_tick)
     log.info("Stock installed in %s (%s): resolution %g, follow %s, tool images %s, tool drawn from its image %s, executed path %s, redraws by %s",
