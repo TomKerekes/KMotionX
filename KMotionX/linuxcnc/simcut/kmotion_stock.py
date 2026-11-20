@@ -607,6 +607,7 @@ class StockPart(glcanon_scene.Part):
         self._ticks = 0
         self.stock = sim.Stock()
         self._canon = None
+        self._program_key = None                               # (file, vertices) of the program loaded: the same one again is known
         self._lines = None
         self._tips = None
         self._flags = None
@@ -647,16 +648,23 @@ class StockPart(glcanon_scene.Part):
     def load_program(self, canon, stat):
         """A program was loaded in the widget: its path is the path to cut with."""
         new = canon is not self._canon
-        if new:
+        geom = getattr(canon, "program_geometry", None)
+        empty = geom is None or getattr(geom, "is_empty", True)
+        key = (getattr(stat, "file", None), -1 if empty else int(len(geom)))
+        # the same program loaded again while its run stands (paused, the GUI gone to manual for a
+        # jog; gmoccapy reloads the display then): the run goes on, nothing is cut again
+        held = key == self._program_key and self._running and self._run_held(stat)
+        self._program_key = key
+        if new and not held:
             self._frontier = (0, 0.0)                          # a new program: none of it is executed
         self._canon = canon
-        self._running = False
-        self._done = 0
+        if not held:
+            self._running = False
+            self._done = 0
         self.stock.clear_poses()
         self._lines = self._tips = self._flags = None
         self._path_version += 1
-        geom = getattr(canon, "program_geometry", None)
-        if geom is None or getattr(geom, "is_empty", True):
+        if empty:
             log.info("program: none or empty (canon %s); the Stock is %s", type(canon).__name__,
                      "the ini's box" if self.settings.box else "not defined")
             self._define(self.settings.box)
@@ -690,7 +698,12 @@ class StockPart(glcanon_scene.Part):
         self._lines, self._tips, self._flags = fed
         log.info("program: %d poses given (pieces of %.3g) with tools %s, tool table diameters %s, defined %s", self.stock.nb_poses(),
                  self._piece(stat), sorted(set(vertex_tools(geom, spindle).tolist())), diameters, self.stock.defined())
-        if self.settings.follow and self._is_running(stat):
+        if held:
+            log.info("the program loaded again while its run stands (line %s): it goes on from %d poses",
+                     getattr(stat, "motion_line", "?"), self._done)
+            if self._done > 0:
+                self.stock.cut_to(self._done)
+        elif self.settings.follow and self._run_on(stat):
             log.info("a run is on: following it")
             self._start_run()
             self._follow(stat)
@@ -709,11 +722,24 @@ class StockPart(glcanon_scene.Part):
         return 0.05 * (25.4 * lu if lu else 1.0)
 
     @staticmethod
-    def _is_running(stat):
+    def _run_on(stat):
+        """A program is executing, or paused in auto: task in MODE_AUTO with the interpreter not idle."""
         try:
             return stat.task_mode == linuxcnc.MODE_AUTO and stat.interp_state != linuxcnc.INTERP_IDLE
         except AttributeError:
             return False
+
+    @staticmethod
+    def _run_held(stat):
+        """A run standing outside auto - paused with the GUI in manual to jog (task then reports
+        MODE_MANUAL and the interpreter idle) - as long as task keeps the executing line: an abort
+        and a program's end set motion_line to 0."""
+        try:
+            return stat.task_mode != linuxcnc.MODE_AUTO and int(getattr(stat, "motion_line", 0) or 0) > 0
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    _is_running = _run_on
 
     def _start_run(self):
         self._running = True
@@ -798,7 +824,7 @@ class StockPart(glcanon_scene.Part):
         if not self.settings.follow or self._lines is None:
             return False
         told = False
-        running = self._is_running(stat)
+        running = self._run_on(stat)
         if running and not self._running:
             self._start_run()
             log.info("run started (line %s): the Stock is uncut again", getattr(stat, "motion_line", "?"))
@@ -812,6 +838,8 @@ class StockPart(glcanon_scene.Part):
                 self._done = done
                 self.stock.cut_to(done)
                 told = True
+        elif self._running and self._run_held(stat):
+            pass                                               # paused, the GUI in manual (a jog): the run stands
         elif self._running:
             self._running = False
             self.stock.cut_all()

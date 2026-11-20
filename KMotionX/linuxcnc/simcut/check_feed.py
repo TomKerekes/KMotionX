@@ -192,8 +192,18 @@ def main():
     front = part.frontier
     part._follow(stat)
     check(part._done == before and part.frontier == front, "a line number seen again (a loop, a late status) never takes cuts, or the executed path, back")
-    stat.task_mode, stat.interp_state = 1, 1
+    stat.task_mode, stat.interp_state = 1, 1            # paused and the GUI in manual to jog: task reports MANUAL and the interpreter idle ...
     part._stat = stat                                   # as draw() leaves it
+    part.tick()
+    check(part._running and part._done == before and part.frontier == front,
+          "... but keeps the executing line (%d): the run only stands, nothing is cut again" % stat.motion_line)
+
+    class Reloaded:                                     # gmoccapy reloads the display meanwhile: the same program, a new canon
+        program_geometry, workpieces, tools = canon.program_geometry, canon.workpieces, canon.tools
+    part.load_program(Reloaded(), stat)
+    check(part._running and part._done == before and part.frontier == front and part.stock.nb_poses() == given,
+          "the same program loaded again while the run stands keeps the run, its cuts and the executed path")
+    stat.motion_line = 0                                # an abort, or the program's end: task clears the line
     again = part.tick()                                 # the timer, not a redraw, notices the end of the run
     check(again and not part._running and part.stock.wait_idle(180000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
           "the run over, seen by the timer with no redraw: the whole program is cut again")
@@ -206,9 +216,10 @@ def main():
     check(part._running and part.frontier < front and part._done < before and end3 is not None and abs(end3[0] - 1.0) < 1e-3,
           "a new start clears it: the executed path begins again, up to the tool (X %.3f)" % end3[0])
     stat.task_mode, stat.interp_state = 1, 1
+    stat.motion_line = 0                                # the run over
     part.tick()
 
-    class Loaded:                                       # the same program loaded again: a new canon object
+    class Loaded:                                       # the same program loaded again, the machine idle: a new canon object
         program_geometry, workpieces, tools = canon.program_geometry, canon.workpieces, canon.tools
     part.load_program(Loaded(), stat)
     check(part.frontier == (0, 0.0) and part.frontier_point() is None and part.stock.nb_poses() == given,
