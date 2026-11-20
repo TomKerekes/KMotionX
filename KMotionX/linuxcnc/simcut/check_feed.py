@@ -152,6 +152,7 @@ def main():
     part = kmotion_stock.StockPart(kmotion_stock.Settings(Ini(), td))
     stat = Stat()
     part.load_program(canon, stat)
+    given = part.stock.nb_poses()                       # the vertices, the long moves in pieces
     check(part.stock.wait_idle(180000) and abs((block - part.stock.stats()["volume"][2]) - expect) < 0.04 * expect,
           "the part cuts the whole program when it is loaded while the machine is idle")
     stat.task_mode, stat.interp_state = 2, 2            # MODE_AUTO, running
@@ -210,7 +211,8 @@ def main():
     class Loaded:                                       # the same program loaded again: a new canon object
         program_geometry, workpieces, tools = canon.program_geometry, canon.workpieces, canon.tools
     part.load_program(Loaded(), stat)
-    check(part.frontier == (0, 0.0) and part.frontier_point() is None and part.stock.nb_poses() == n, "a program load clears it")
+    check(part.frontier == (0, 0.0) and part.frontier_point() is None and part.stock.nb_poses() == given,
+          "a program load clears it (the program given again: %d poses)" % part.stock.nb_poses())
     print("check-feed", "passed" if not fails else "FAILED (%d)" % fails)
     return 1 if fails else 0
 
