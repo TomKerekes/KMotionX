@@ -584,6 +584,19 @@ def workpiece_units(canon, stat, geom):
     return changed
 
 
+def program_key(path, geom):
+    """What tells one loaded program from another: its path, its vertex count and a checksum of its
+    vertices (the same file edited and loaded again differs; the display reloaded does not)."""
+    if geom is None or getattr(geom, "is_empty", True):
+        return (path, -1, 0.0)
+    try:
+        p = np.asarray(geom.positions(0), dtype=np.float64)
+        digest = float(np.round(p.sum() + (p[:, 0] * np.arange(1, len(p) + 1)).sum() * 1e-3, 6)) if len(p) else 0.0
+    except Exception:
+        digest = 0.0
+    return (path, int(len(geom)), digest)
+
+
 def stock_box(canon, settings):
     """(lo, hi) of the Stock: the program's first (WORKPIECE,...) comment, else STOCK_BOX."""
     for wp in getattr(canon, "workpieces", ()) or ():
@@ -652,27 +665,47 @@ class StockPart(glcanon_scene.Part):
         new = canon is not self._canon
         geom = getattr(canon, "program_geometry", None)
         empty = geom is None or getattr(geom, "is_empty", True)
-        key = (getattr(stat, "file", None), -1 if empty else int(len(geom)))
+        key = program_key(getattr(stat, "file", None), geom)
         # the same program loaded again while its run stands (paused, the GUI gone to manual for a
         # jog; gmoccapy reloads the display then): the run goes on, nothing is cut again. Loaded
         # again as its run ends (an abort: the interpreter idle, gmoccapy reloads at once): the
         # run ends as it would have in _follow, stopped or complete
-        same_run = key == self._program_key and self._running
-        held = same_run and self._run_held(stat)
-        ended = same_run and not held and not self._run_on(stat)
+        same = key == self._program_key and self._lines is not None
         self._program_key = key
-        if new and not (held or ended):
+        if same:
+            # the same program again (gmoccapy reloads the display whenever the interpreter goes
+            # idle: at a pause, at an abort, at the end): the engine keeps its poses and its cut,
+            # as it would have shown the block whole and then cut it again; the new canon's
+            # comments get their units; a run goes on, or ends as it would have in _follow
+            if new:
+                try:
+                    workpiece_units(canon, stat, geom)
+                except Exception:
+                    log.exception("the WORKPIECE comments' units")
+            self._canon = canon
+            if not self._running:
+                log.info("the same program loaded again while idle: the Stock kept as it is")
+            elif self._run_held(stat):
+                log.info("the program loaded again while its run stands (line %s): it goes on from %d poses",
+                         getattr(stat, "motion_line", "?"), self._done)
+            elif self._run_on(stat):
+                log.info("the program loaded again during its run (line %s): it goes on from %d poses",
+                         getattr(stat, "motion_line", "?"), self._done)
+                self._follow(stat)
+            else:
+                log.info("the program loaded again as its run ended")
+                self._end_run()
+            return
+        if new:
             self._frontier = (0, 0.0)                          # a new program: none of it is executed
             self._clear_from = 0
         self._canon = canon
-        if not (held or ended):
-            self._running = False
-            self._done = 0
+        self._running = False
+        self._done = 0
         self.stock.clear_poses()
         self._lines = self._tips = self._flags = None
         self._path_version += 1
         if empty:
-            self._running = False
             log.info("program: none or empty (canon %s); the Stock is %s", type(canon).__name__,
                      "the ini's box" if self.settings.box else "not defined")
             self._define(self.settings.box)
@@ -706,17 +739,7 @@ class StockPart(glcanon_scene.Part):
         self._lines, self._tips, self._flags = fed
         log.info("program: %d poses given (pieces of %.3g) with tools %s, tool table diameters %s, defined %s", self.stock.nb_poses(),
                  self._piece(stat), sorted(set(vertex_tools(geom, spindle).tolist())), diameters, self.stock.defined())
-        if held:
-            log.info("the program loaded again while its run stands (line %s): it goes on from %d poses",
-                     getattr(stat, "motion_line", "?"), self._done)
-            if self._done > 0:
-                self.stock.cut_to(self._done)
-        elif ended:
-            log.info("the program loaded again as its run ended")
-            if self._done > 0:
-                self.stock.cut_to(self._done)
-            self._end_run()
-        elif self.settings.follow and self._run_on(stat):
+        if self.settings.follow and self._run_on(stat):
             log.info("a run is on: following it")
             self._start_run()
             self._follow(stat)

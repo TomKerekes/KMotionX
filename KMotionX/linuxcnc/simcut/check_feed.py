@@ -235,9 +235,10 @@ def main():
 
     class Loaded:                                       # the same program loaded again, the machine idle: a new canon object
         program_geometry, workpieces, tools = canon.program_geometry, canon.workpieces, canon.tools
+    kept = part.frontier
     part.load_program(Loaded(), stat)
-    check(part.frontier == (0, 0.0) and part.frontier_point() is None and part.stock.nb_poses() == given,
-          "a program load clears it (the program given again: %d poses)" % part.stock.nb_poses())
+    check(part.frontier == kept and part.stock.nb_poses() == given and part._canon is not canon,
+          "the same program loaded again while idle keeps the Stock and the executed path as they are")
     # a metric program on the inch machine with its WORKPIECE comment above its G21: the preview begins
     # the parse in the machine's units and reads the comment's 50 as inches; the part takes the
     # program's units for it (and leaves a comment that says UNITS= alone)
@@ -259,6 +260,10 @@ def main():
           "the path's vertices labelled with lines %s, %s..)" % (big[0], canon2.program_geometry.lines[0], canon2.program_geometry.lines[1]))
     stat2 = Stat()
     stat2.file = mm
+    part.load_program(canon2, stat2)                   # another program into the first part: a fresh load
+    check(part.frontier == (0, 0.0) and part.frontier_point() is None and part.stock.nb_poses() != given,
+          "another program loaded clears the executed path and cuts it whole (%d poses)" % part.stock.nb_poses())
+    part.stock.wait_idle(60000)
     part2 = kmotion_stock.StockPart(kmotion_stock.Settings(Ini(), td))
     part2.load_program(canon2, stat2)
     box = kmotion_stock.stock_box(canon2, part2.settings)
