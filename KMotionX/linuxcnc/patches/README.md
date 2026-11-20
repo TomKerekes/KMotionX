@@ -47,6 +47,19 @@ the spindle with `M61 Q` - showed no tool change at all in the preview: every ve
 of before the first change, and the Stock (`simcut/`) cut the whole program with the tool that was in
 the spindle, or with none. Rebuild the module with `make -C ~/linuxcnc-dev/src ../lib/python/gcode.so`.
 
+## For the tool length offset after an abort
+
+`task-tool-offset-after-abort.patch` (`src/emc/task/emctask.cc`, `src/emc/task/emccanon.cc`,
+`src/emc/nml_intf/canon.hh`): task's canon applies a tool length offset to the moves it converts the
+moment G43 runs, and queues the status update (EMC_TRAJ_SET_OFFSET) behind them, "at the right
+time, not at read-ahead time". An abort clears that queue, and then the status and motion disagree
+with the moves. On this machine a G43 from gmoccapy's tool reload at Machine on was lost to the
+aborts gmoccapy sends on its own mode changes: every move went 1.5 in high while the status said 0,
+so the DRO read 38 mm off the program, and the tool marker and the live plot sat 38 mm above the
+Stock's cut. The patch has `emcTaskAbort()` give the canon's offset (new
+`GET_EXTERNAL_TOOL_OFFSET_IN_FORCE()`, external units) to the status and to motion whenever it
+differs. `milltask` is rebuilt.
+
 ## For `[RS274NGC] RIGID_TAP_CYCLES`
 
 `interp-rigid-tap-cycles.patch` (`src/emc/rs274ngc/`): with the key set, the interpreter's

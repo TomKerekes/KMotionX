@@ -1,0 +1,70 @@
+diff --git a/src/emc/nml_intf/canon.hh b/src/emc/nml_intf/canon.hh
+index 96e558dbf2..57d795f77c 100644
+--- a/src/emc/nml_intf/canon.hh
++++ b/src/emc/nml_intf/canon.hh
+@@ -1022,6 +1022,10 @@ extern double GET_EXTERNAL_TOOL_LENGTH_ZOFFSET();
+ extern double GET_EXTERNAL_TOOL_LENGTH_AOFFSET();
+ extern double GET_EXTERNAL_TOOL_LENGTH_BOFFSET();
+ extern double GET_EXTERNAL_TOOL_LENGTH_COFFSET();
++
++// KMotionX: the tool offset the canon applies to the moves it converts, in external units as
++// EMC_TRAJ_SET_OFFSET carries it - the one in force whatever the status says (an abort re-sends it)
++extern EmcPose GET_EXTERNAL_TOOL_OFFSET_IN_FORCE();
+ extern double GET_EXTERNAL_TOOL_LENGTH_UOFFSET();
+ extern double GET_EXTERNAL_TOOL_LENGTH_VOFFSET();
+ extern double GET_EXTERNAL_TOOL_LENGTH_WOFFSET();
+diff --git a/src/emc/task/emccanon.cc b/src/emc/task/emccanon.cc
+index bb6c2deafb..04de18bff3 100644
+--- a/src/emc/task/emccanon.cc
++++ b/src/emc/task/emccanon.cc
+@@ -3601,6 +3601,22 @@ double GET_EXTERNAL_TOOL_LENGTH_ZOFFSET()
+     return TO_PROG_LEN(canon.toolOffset.tran.z);
+ }
+ 
++// KMotionX: see canon.hh
++EmcPose GET_EXTERNAL_TOOL_OFFSET_IN_FORCE()
++{
++    EmcPose off;
++    off.tran.x = TO_EXT_LEN(canon.toolOffset.tran.x);
++    off.tran.y = TO_EXT_LEN(canon.toolOffset.tran.y);
++    off.tran.z = TO_EXT_LEN(canon.toolOffset.tran.z);
++    off.a = TO_EXT_ANG(canon.toolOffset.a);
++    off.b = TO_EXT_ANG(canon.toolOffset.b);
++    off.c = TO_EXT_ANG(canon.toolOffset.c);
++    off.u = TO_EXT_LEN(canon.toolOffset.u);
++    off.v = TO_EXT_LEN(canon.toolOffset.v);
++    off.w = TO_EXT_LEN(canon.toolOffset.w);
++    return off;
++}
++
+ double GET_EXTERNAL_TOOL_LENGTH_AOFFSET()
+ {
+     return TO_PROG_ANG(canon.toolOffset.a);
+diff --git a/src/emc/task/emctask.cc b/src/emc/task/emctask.cc
+index d3336d1a4e..786037583b 100644
+--- a/src/emc/task/emctask.cc
++++ b/src/emc/task/emctask.cc
+@@ -251,6 +251,23 @@ int emcTaskAbort()
+     emcTaskCommand = NULL;
+     interp_list.clear();
+ 
++    // KMotionX: the canon applies a tool offset to the moves it converts the moment G43 runs, and
++    // queues the status update behind them (USE_TOOL_LENGTH_OFFSET: "at the right time, not at
++    // read-ahead time"); an abort drops the queue, and the status and motion then differ from the
++    // moves. A G43 from gmoccapy's tool reload, lost to the aborts of its own mode changes, left
++    // every move 1.5 in high with the status at 0: the DRO 38 mm off, the tool marker and the live
++    // plot above the cut. The canon's offset is the one in force: given to the status and to
++    // motion now, when it differs
++    {
++        EmcPose off = GET_EXTERNAL_TOOL_OFFSET_IN_FORCE();
++        EmcPose &st = emcStatus->task.toolOffset;
++        if (off.tran.x != st.tran.x || off.tran.y != st.tran.y || off.tran.z != st.tran.z ||
++            off.a != st.a || off.b != st.b || off.c != st.c || off.u != st.u || off.v != st.v || off.w != st.w) {
++            st = off;
++            emcTrajSetOffset(off);
++        }
++    }
++
+     // clear out the interpreter state
+     emcStatus->task.interpState = EMC_TASK_INTERP::IDLE;
+     emcStatus->task.execState = EMC_TASK_EXEC::DONE;
