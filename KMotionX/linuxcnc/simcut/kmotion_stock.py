@@ -1457,11 +1457,14 @@ class ImageToolPart(glcanon_scene.ToolPart):
             return glcanon_scene.ToolPart._draw_at_tool(self, ctx, pos, rx, ry, rz)
         ctx.mv.translate(*pos)
         self._apply_rotary(ctx, rx, ry, rz)
-        # solid, not LinuxCNC's translucent cone (tool_alpha): the image is a real tool, and a
-        # see-through cap over its own inside read as a hole. Drawn a shade darker than the cone's
-        # colour: the shader's light (ambient 0.6 plus diffuse 0.6) saturates a white material on
-        # every face turned even half toward the light, top and sides alike flat white
-        glBlendColor(0, 0, 0, 1.0)
+        # solid, not LinuxCNC's translucent cone: the image is a real tool, and a see-through cap
+        # over its own inside read as a hole. The tool's scope blends source plus tool_alpha times
+        # what is behind (GL_ONE, GL_CONSTANT_ALPHA), a brightening translucency; a constant alpha
+        # of 1 there would add the background whole and turn the tool white over the Stock, so the
+        # source replaces instead. A shade darker than the cone's colour, as the shader's light
+        # (ambient 0.6 plus diffuse 0.6) saturates a white material on every face turned even half
+        # toward the light, top and sides alike flat white
+        glBlendFunc(GL_ONE, GL_ZERO)
         ctx.prim.draw_cone(ctx, tuple(0.72 * c for c in ctx.colors["cone"][:3]), mesh_verts=mesh)
 
 
