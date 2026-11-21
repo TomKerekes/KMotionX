@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..c635c10589 100644
+index cae34386ee..a0143266af 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -29,6 +29,7 @@
@@ -286,7 +286,18 @@ index cae34386ee..c635c10589 100644
          Gtk.main_quit()
  
      def on_focus_out(self, widget, data=None):
-@@ -4369,6 +4529,13 @@ class gmoccapy(object):
+@@ -4007,7 +4167,9 @@ class gmoccapy(object):
+ 
+         if self.load_tool:
+             self.load_tool = False
+-            self.on_hal_status_interp_idle(None)
++            # KMotionX: the idle handler switches modes; not while a program runs
++            if self.stat.interp_state == linuxcnc.INTERP_IDLE:
++                self.on_hal_status_interp_idle(None)
+             return
+ 
+     def _set_enable_tooltips(self, value):
+@@ -4369,6 +4531,13 @@ class gmoccapy(object):
  
      def on_chk_ignore_limits_toggled(self, widget, data=None):
          if self.widgets.chk_ignore_limits.get_active():
@@ -300,7 +311,7 @@ index cae34386ee..c635c10589 100644
             self.command.override_limits()
  
      def on_tbtn_fullsize_preview_toggled(self, widget, data=None):
-@@ -5569,6 +5736,12 @@ class gmoccapy(object):
+@@ -5569,6 +5738,12 @@ class gmoccapy(object):
          tool_to_load = self.prefs.getpref("tool_in_spindle", 0, int)
          if tool_to_load == 0:
              return
@@ -313,3 +324,20 @@ index cae34386ee..c635c10589 100644
          self.load_tool = True
          self.tool_change = True
  
+@@ -5578,6 +5753,16 @@ class gmoccapy(object):
+         command = "M61 Q {0} G43".format(tool_to_load)
+         self.command.mdi(command)
+         self.command.wait_complete()
++        # KMotionX: back to manual here and the flags cleared. Stock gmoccapy leaves both to the
++        # interpreter-idle handler, which the tool-changed event unlocks; with the tool already in
++        # the spindle (kmotion-motion syncs it after homing) the MDI changes no tool, no event
++        # comes, and the flags stayed armed until the next one - the tool table rewritten at the
++        # program's M6 - which switched to manual in the middle of the run ("Can't switch mode
++        # while mode is AUTO and interpreter is not IDLE" right after Start)
++        self.command.mode(linuxcnc.MODE_MANUAL)
++        self.command.wait_complete()
++        self.load_tool = False
++        self.tool_change = False
+ 
+     def on_btn_tool_clicked(self, widget, data=None):
+         if self.widgets.tbtn_fullsize_preview0.get_active():
