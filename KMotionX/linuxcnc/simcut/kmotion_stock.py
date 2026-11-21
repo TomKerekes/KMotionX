@@ -1510,6 +1510,20 @@ def install(widget, inifile, ini_dir=None):
     if settings.enabled and settings.done_path:
         part.done_path = DonePathPart(part)            # over the program's lines, whatever the Stock's toggle says
         scene.insert_after(getattr(scene, "highlight", None) or scene.program, part.done_path)
+    # the dimension lines follow their toggle while the Stock shows the part. LinuxCNC draws
+    # them, and a plain box, whatever the toggle says once the program's lines are hidden (the
+    # Paths toggle), as a stand-in for the hidden program (PreviewScene.program_outline); with
+    # the part itself in view the stand-in only overrides the dimensions toggle
+    outline = getattr(type(scene), "program_outline", None)
+    extents, box = getattr(scene, "extents", None), getattr(scene, "bounding_box", None)
+    if outline is not None and extents is not None and box is not None:
+        def dimensions(ctx):
+            return bool(ctx.show_extents) if part.visible and ctx.canon is not None else outline(ctx)[0]
+
+        def plain_box(ctx):
+            return False if part.visible else outline(ctx)[1]
+        scene.regate(extents, dimensions)
+        scene.regate(box, plain_box)
 
     # redraws while the engine cuts: GTK (gremlin) or Tk (AXIS); another toolkit calls part.tick()
     # on a timer of its own and redraws when it says so
