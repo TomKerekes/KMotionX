@@ -18,6 +18,7 @@ GUI-independent.  The image name is read from the table by kmotion_stock.ToolIma
 these buttons do shows in any GUI."""
 import logging
 import os
+import re
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -63,6 +64,7 @@ def picture(name):
 
 COMMENT_COLUMN = 16         # of the tool table widget's model (gladevcp tooledit: KEYWORDS' ';')
 TOOL_COLUMN = 1
+DIAMETER_COLUMN = 12        # KEYWORDS' 'D'
 
 
 def number_text(v):
@@ -71,10 +73,53 @@ def number_text(v):
     return t
 
 
-class CreateToolDialog(Gtk.Dialog):
-    """Sizes of a basic tool in, a tool image file out (create())."""
+def image_defaults(name):
+    """The type and sizes a tool image's file name encodes, as the dialog names its files
+    ("Dovetail D0.75 A60 H0.3125 N0.375 L2.wrl"): (type index, {letter: text}), or None for a name
+    of another making."""
+    base = os.path.splitext(os.path.basename(name or ""))[0]
+    for k, (_label, _kind, sizes, _picture, pattern) in enumerate(TOOL_TYPES):
+        parts = re.split(r"\{\d+\}", pattern)
+        rx = "^" + r"(-?\d+\.?\d*)".join(re.escape(p) for p in parts) + "$"
+        m = re.match(rx, base, re.IGNORECASE)
+        if m and len(m.groups()) == len(sizes):
+            try:
+                return k, {letter: number_text(float(v)) for (letter, _n, _d), v in zip(sizes, m.groups())}
+            except ValueError:
+                return None
+    return None
 
-    def __init__(self, parent, image_dir, tool=None):
+
+def tool_defaults(app, part, tool):
+    """What the Create tool dialog starts from for the selected tool: its image's type and sizes
+    when the image is one the dialog made (its name says so), else the table's diameter."""
+    if not tool:
+        return None
+    name, diameter = "", 0.0
+    try:
+        for row in app.widgets.tooledit1.model:
+            if int(row[TOOL_COLUMN]) == int(tool):
+                name = kmotion_stock.image_in_comment(row[COMMENT_COLUMN] or "")
+                try:
+                    diameter = float(row[DIAMETER_COLUMN] or 0)
+                except (TypeError, ValueError):
+                    diameter = 0.0
+                break
+    except Exception:
+        log.exception("the selected tool's row")
+    if not name:
+        name = part.images.name(tool)
+    found = image_defaults(name) if name else None
+    if found:
+        return found
+    return (None, {"D": number_text(diameter)}) if diameter > 0 else None
+
+
+class CreateToolDialog(Gtk.Dialog):
+    """Sizes of a basic tool in, a tool image file out (create()).  defaults: (type index or None,
+    {letter: text}) to start from - the selected tool's image, or its diameter (tool_defaults)."""
+
+    def __init__(self, parent, image_dir, tool=None, defaults=None):
         Gtk.Dialog.__init__(self, title="Create tool", transient_for=parent, modal=True)
         self.image_dir = image_dir
         self.tool = tool
@@ -126,6 +171,14 @@ class CreateToolDialog(Gtk.Dialog):
         self._name_edited = False
         self.file_entry.connect("changed", self._on_name_edited)
         self._on_type_changed(self.combo)
+        if defaults:
+            kind, values = defaults
+            if kind is not None and 0 <= kind < len(TOOL_TYPES):
+                self.combo.set_active(kind)
+            sizes = TOOL_TYPES[self.combo.get_active()][2]
+            for (letter, _n, _d), e in zip(sizes, self.entries):
+                if letter in values:
+                    e.set_text(str(values[letter]))
         self.show_all()
 
     # -- the form ---------------------------------------------------------------
@@ -272,7 +325,7 @@ def on_tool_image(_button, app, part):
 
 def on_create_tool(_button, app, part):
     tool = selected_tool(app)
-    dlg = CreateToolDialog(app.widgets.window1, part.images.image_dir, tool)
+    dlg = CreateToolDialog(app.widgets.window1, part.images.image_dir, tool, tool_defaults(app, part, tool))
     try:
         while True:
             response = dlg.run()

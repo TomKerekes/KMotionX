@@ -96,7 +96,7 @@ T5 Dovetail-z .750 60deg.wrl
 New shapes: the **Create tool...** button on gmoccapy's tool table page writes an end mill, ball
 nose, V bit, T slot or dovetail from its sizes into the tool image folder, as KMotionCNC's Create
 Tool dialog does, and gives it to the selected tool if asked. It shows KMotionCNC's picture of the tool
-with its sizes lettered (`pictures/`, from KMotionCNC's resources), the letters beside the sizes. `tool_image.py` does the same from
+with its sizes lettered (`pictures/`, from KMotionCNC's resources), the letters beside the sizes. It starts from the selected tool's image when that is one it made (the file name says the type and sizes), its file name the image's so the tool is edited in place, else from the table's diameter. `tool_image.py` does the same from
 the command line (sizes in the machine's units, the tip at height 0):
 
 ```

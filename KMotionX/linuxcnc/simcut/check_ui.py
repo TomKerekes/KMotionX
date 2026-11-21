@@ -115,6 +115,19 @@ check(len(h) == 3 and abs(max(r) - 0.125) < 1e-6 and abs(h[1] - 0.125) < 1e-4, "
 dlg.entries[3].set_text("0.01")
 check(dlg.create() is None and dlg.message.get_text(), "sizes that make no tool are refused with a reason: %r" % dlg.message.get_text())
 dlg.destroy()
+nt = gmoccapy_stock.number_text
+d = gmoccapy_stock.image_defaults("Dovetail D0.75 A60 H0.3125 N0.375 L2.wrl")
+check(d == (4, {"D": nt(0.75), "A": nt(60), "H": nt(0.3125), "N": nt(0.375), "L": nt(2)}), "a dialog-made image's name parses back to its type and sizes: %r" % (d,))
+check(gmoccapy_stock.image_defaults("EndMill-z 1in .125.wrl") is None and gmoccapy_stock.image_defaults("") is None, "a name of another making does not")
+dlg = gmoccapy_stock.CreateToolDialog(None, images, tool=2, defaults=d)
+check(dlg.combo.get_active() == 4 and [e.get_text() for e in dlg.entries] == [nt(0.75), nt(60), nt(0.3125), nt(0.375), nt(2)]
+      and dlg.file_entry.get_text() == "Dovetail D0.75 A60 H0.3125 N0.375 L2", "the dialog starts from them, its name the image's: %r" % dlg.file_entry.get_text())
+dlg.destroy()
+gmoccapy_stock.set_tool_image(app, part, 2, os.path.join(images, "V D0.5 A60 T0 L2.wrl"))
+check(gmoccapy_stock.tool_defaults(app, part, 2) == (2, {"D": nt(0.5), "A": nt(60), "T": nt(0), "L": nt(2)}), "the selected tool's image gives the dialog its defaults")
+gmoccapy_stock.set_tool_image(app, part, 2, "")
+row[12] = "0.201"
+check(gmoccapy_stock.tool_defaults(app, part, 2) == (None, {"D": nt(0.201)}), "a tool without an image: the table's diameter")
 
 # the tool drawn from its image: the mesh of revolution
 import math, numpy as np
