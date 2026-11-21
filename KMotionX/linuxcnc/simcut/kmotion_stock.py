@@ -637,6 +637,8 @@ class StockPart(glcanon_scene.Part):
         self._box = None
         self._running = False
         self._eof = False                                      # the run read its program to the end: its last moves in flight
+        self._ignore_line = None                               # the status's executing line at a run's start: the last run's, until it changes
+        self._ended_at = 0.0                                   # when the last run ended (a reload right after is gmoccapy's own)
         self._done = 0
         self._shader = None
         self._slots = {}
@@ -677,13 +679,15 @@ class StockPart(glcanon_scene.Part):
         # jog; gmoccapy reloads the display then): the run goes on, nothing is cut again. Loaded
         # again as its run ends (an abort: the interpreter idle, gmoccapy reloads at once): the
         # run ends as it would have in _follow, stopped or complete
-        same = key == self._program_key and self._lines is not None
+        # the same program again, during its run or within moments of its end: gmoccapy reloads
+        # the display whenever the interpreter goes idle (a pause, an abort, the end). Loaded
+        # again later, while idle, it is the user's reload: a fresh load, the whole program cut
+        same = key == self._program_key and self._lines is not None and (self._running or time.time() - self._ended_at < 2.0)
         self._program_key = key
         if same:
-            # the same program again (gmoccapy reloads the display whenever the interpreter goes
-            # idle: at a pause, at an abort, at the end): the engine keeps its poses and its cut,
-            # as it would have shown the block whole and then cut it again; the new canon's
-            # comments get their units; a run goes on, or ends as it would have in _follow
+            # the engine keeps its poses and its cut, as it would have shown the block whole and
+            # then cut it again; the new canon's comments get their units; a run goes on, or ends
+            # as it would have in _follow
             if new:
                 try:
                     workpiece_units(canon, stat, geom)
@@ -748,7 +752,7 @@ class StockPart(glcanon_scene.Part):
                  self._piece(stat), sorted(set(vertex_tools(geom, spindle).tolist())), diameters, self.stock.defined())
         if self.settings.follow and self._run_on(stat):
             log.info("a run is on: following it")
-            self._start_run()
+            self._start_run(stat)
             self._follow(stat)
         else:
             self.stock.cut_all()
@@ -794,12 +798,14 @@ class StockPart(glcanon_scene.Part):
 
     _is_running = _run_on
 
-    def _start_run(self):
+    def _start_run(self, stat=None):
         self._running = True
         self._eof = False
         self._done = 0
         self._frontier = (0, 0.0)
         self._clear_from = 0
+        # task reports the last run's executing line until the new run's first move: not progress
+        self._ignore_line = (int(getattr(stat, "motion_line", 0) or 0) or None) if stat is not None else None
         self.stock.uncut_from(0)
 
     def _end_run(self, stat=None):
@@ -808,6 +814,7 @@ class StockPart(glcanon_scene.Part):
         path stay where they are - after a last look at where the tool came to rest, since the
         status's line and the tool's position catch up with each other only once it stands."""
         self._running = False
+        self._ended_at = time.time()
         if stat is not None and self._lines is not None:
             try:
                 done, front = self._progress(stat)
@@ -843,6 +850,25 @@ class StockPart(glcanon_scene.Part):
         lu = getattr(stat, "linear_units", 0) or 0
         return TOOL_ON_PATH_TOL_INCH * (25.4 * lu if lu else 1.0)
 
+    def _tool_on_line(self, stat, ml):
+        """Whether the tool tip stands on one of the pieces of line ml (within the tolerance)."""
+        try:
+            pos, off = stat.actual_position, stat.tool_offset
+            tip = np.array([pos[0] - off[0], pos[1] - off[1], pos[2] - off[2]], dtype=np.float32)
+        except (AttributeError, TypeError, IndexError):
+            return False
+        idx = np.nonzero(self._lines == ml)[0]
+        if not len(idx):
+            return False
+        lo, hi = max(int(idx[0]) - 1, 0), int(idx[-1])
+        if hi <= lo:
+            return float(np.linalg.norm(self._tips[hi] - tip)) <= self._tolerance(stat)
+        a, b = self._tips[lo:hi], self._tips[lo + 1:hi + 1]
+        ab = b - a
+        ab2 = np.einsum("ij,ij->i", ab, ab)
+        t = np.clip(np.einsum("ij,ij->i", tip - a, ab) / np.where(ab2 > 0, ab2, 1), 0, 1)
+        return float(np.linalg.norm(a + ab * t[:, None] - tip, axis=1).min()) <= self._tolerance(stat)
+
     def _progress(self, stat):
         """How far the run has come, from the status: (poses, frontier).  poses: how many poses the
         run has cut - all of the lines before the executing one, and on it the piece that the tool
@@ -856,6 +882,13 @@ class StockPart(glcanon_scene.Part):
         ml = int(getattr(stat, "motion_line", 0) or 0)
         if ml <= 0:
             return done, front
+        if self._ignore_line is not None:
+            if ml != self._ignore_line:
+                self._ignore_line = None
+            elif not self._tool_on_line(stat, ml):
+                return done, front                             # the last run's line, still reported, the tool elsewhere
+            else:
+                self._ignore_line = None                       # the same line again, and the tool on it: a real one
         # the executing line's poses, from the piece the tool was last on (done - 1 is its end):
         # the tool may still be on it
         d = max(done - 1, 0)
@@ -936,8 +969,8 @@ class StockPart(glcanon_scene.Part):
         told = False
         running = self._run_on(stat)
         if running and not self._running:
-            self._start_run()
-            log.info("run started (line %s): the Stock is uncut again", getattr(stat, "motion_line", "?"))
+            self._start_run(stat)
+            log.info("run started (the status still at line %s): the Stock is uncut again", getattr(stat, "motion_line", "?"))
             told = True
         if running:
             done, front = self._progress(stat)
