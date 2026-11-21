@@ -318,7 +318,7 @@ def paths_icon(size=32):
     c.scale(s, s)
     c.set_line_width(2.2)
     c.set_line_join(cairo.LINE_JOIN_ROUND)
-    c.set_source_rgb(0.92, 0.92, 0.92)
+    c.set_source_rgb(0.22, 0.22, 0.22)                 # dark on the button's light face (white vanished on it)
     c.move_to(4, 26)
     for i, x in enumerate(range(7, 29, 4)):
         c.line_to(x, 6 if i % 2 == 0 else 26)
