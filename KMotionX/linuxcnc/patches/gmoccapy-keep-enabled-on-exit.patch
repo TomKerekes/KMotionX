@@ -1,5 +1,5 @@
 diff --git a/src/emc/usr_intf/gmoccapy/gmoccapy.py b/src/emc/usr_intf/gmoccapy/gmoccapy.py
-index cae34386ee..57652b2142 100644
+index cae34386ee..46e837eda7 100644
 --- a/src/emc/usr_intf/gmoccapy/gmoccapy.py
 +++ b/src/emc/usr_intf/gmoccapy/gmoccapy.py
 @@ -29,6 +29,7 @@
@@ -21,7 +21,7 @@ index cae34386ee..57652b2142 100644
          GLib.timeout_add( cycle_time, self._periodic )  # time between calls to the function, in milliseconds
          GLib.timeout_add(1000, self._periodic_1s)       # 1 s timer for elapsed time display
          self.elapsed_time_run = 0
-@@ -2756,6 +2761,61 @@ class gmoccapy(object):
+@@ -2756,6 +2761,68 @@ class gmoccapy(object):
          except:
              raise SystemExit("gmoccapy can not poll linuxcnc status any more")
  
@@ -56,6 +56,13 @@ index cae34386ee..57652b2142 100644
 +                    self.on_hal_status_state_off(None)
 +        finally:
 +            self._reconciling = False
++        # KMotionX: the stop button follows the interpreter every poll too. Stock gmoccapy enables
++        # it on the status watcher's "interp-run" edge alone, sent only when the interpreter
++        # leaves idle; a run begun from any other state (an MDI tool change that left it
++        # waiting) finds the button grey and its clicks go nowhere, the program runs to its end
++        want = self.stat.task_state == linuxcnc.STATE_ON and self.stat.interp_state != linuxcnc.INTERP_IDLE
++        if self.widgets.btn_stop.get_sensitive() != want:
++            self.widgets.btn_stop.set_sensitive(want)
 +
 +        # the homed state likewise: the DROs' colour (Combi_DRO, which with a non-identity
 +        # kinematics follows only the watcher's all-homed / not-all-homed edges) and the
@@ -83,7 +90,7 @@ index cae34386ee..57652b2142 100644
          error = self.error_channel.poll()
          if error:
              self._show_error(error)
-@@ -2820,33 +2880,67 @@ class gmoccapy(object):
+@@ -2820,33 +2887,67 @@ class gmoccapy(object):
  # button handlers Start
  
      # toggle emergency button
@@ -158,7 +165,7 @@ index cae34386ee..57652b2142 100644
                  self._update_widgets(False)
                  return
              self._update_widgets(True)
-@@ -3039,6 +3133,7 @@ class gmoccapy(object):
+@@ -3039,6 +3140,7 @@ class gmoccapy(object):
          self.command.mode(linuxcnc.MODE_MANUAL)
  
      def on_hal_status_state_estop_reset(self, widget=None):
@@ -166,7 +173,7 @@ index cae34386ee..57652b2142 100644
          self.widgets.tbtn_estop.set_active(False)
          self.widgets.tbtn_estop.set_image(self.widgets.img_emergency_off)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_off)
-@@ -3071,7 +3166,21 @@ class gmoccapy(object):
+@@ -3071,7 +3173,21 @@ class gmoccapy(object):
          self.widgets.ntb_info.set_current_page(0)
          self.widgets.ntb_jog.set_current_page(0)
  
@@ -188,7 +195,7 @@ index cae34386ee..57652b2142 100644
          widgetlist = ["rbt_manual", "btn_homing", "btn_touch", "btn_tool",
                        "ntb_jog", "spc_feed", "btn_feed_100", "rbt_forward",
                        "rbt_reverse", "rbt_stop", "tbtn_flood", "tbtn_mist",
-@@ -3081,7 +3190,9 @@ class gmoccapy(object):
+@@ -3081,7 +3197,9 @@ class gmoccapy(object):
          if not self.widgets.tbtn_on.get_active():
              self.widgets.tbtn_on.set_active(True)
          self.widgets.tbtn_on.set_image(self.widgets.img_machine_on)
@@ -199,7 +206,7 @@ index cae34386ee..57652b2142 100644
          if self.widgets.ntb_main.get_current_page() != 0:
              self.command.mode(linuxcnc.MODE_MANUAL)
              self.command.wait_complete()
-@@ -3092,6 +3203,12 @@ class gmoccapy(object):
+@@ -3092,6 +3210,12 @@ class gmoccapy(object):
          else:
              self.widgets.chk_ignore_limits.set_sensitive(False)
  
@@ -212,7 +219,7 @@ index cae34386ee..57652b2142 100644
      def on_hal_status_override_limits_changed(self, object, state, limits_list):
          # object = hal_status from glade file
          # state = true if override_limit is active
-@@ -3150,6 +3267,19 @@ class gmoccapy(object):
+@@ -3150,6 +3274,19 @@ class gmoccapy(object):
              self.widgets.ntb_jog.set_current_page(0)
              return
  
@@ -232,7 +239,7 @@ index cae34386ee..57652b2142 100644
          # if MDI button is not sensitive, we are not ready for MDI commands
          # so we have to abort external commands and get back to manual mode
          # This will happen mostly, if we are in settings mode, as we do disable the mode button
-@@ -3364,14 +3494,33 @@ class gmoccapy(object):
+@@ -3364,14 +3501,33 @@ class gmoccapy(object):
          self.initialized = True
  
      # kill keyboard and estop machine before closing
@@ -268,7 +275,7 @@ index cae34386ee..57652b2142 100644
          Gtk.main_quit()
  
      def on_focus_out(self, widget, data=None):
-@@ -4369,6 +4518,13 @@ class gmoccapy(object):
+@@ -4369,6 +4525,13 @@ class gmoccapy(object):
  
      def on_chk_ignore_limits_toggled(self, widget, data=None):
          if self.widgets.chk_ignore_limits.get_active():
@@ -282,7 +289,7 @@ index cae34386ee..57652b2142 100644
             self.command.override_limits()
  
      def on_tbtn_fullsize_preview_toggled(self, widget, data=None):
-@@ -5569,6 +5725,12 @@ class gmoccapy(object):
+@@ -5569,6 +5732,12 @@ class gmoccapy(object):
          tool_to_load = self.prefs.getpref("tool_in_spindle", 0, int)
          if tool_to_load == 0:
              return
