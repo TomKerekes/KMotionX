@@ -179,6 +179,10 @@ if [ $DO_LINUXCNC = 1 ]; then
     step "kmotion-motion (LinuxCNC's motion module replacement) and its tests"
     run make -C "$KMOTIONX_DIR/KMotionX/linuxcnc/kmotion-motion" LINUXCNC_DIR="$LINUXCNC_DIR"
     run make -C "$KMOTIONX_DIR/KMotionX/linuxcnc/kmotion-motion" LINUXCNC_DIR="$LINUXCNC_DIR" test
+
+    step "the Stock (SimCut material removal in the preview, linuxcnc/simcut) and its engine check"
+    run make -C "$KMOTIONX_DIR/KMotionX/linuxcnc/simcut"
+    run make -C "$KMOTIONX_DIR/KMotionX/linuxcnc/simcut" check
 fi
 
 step "VirtualBox Guest Additions (shared clipboard, drag and drop, a resizable display)"
