@@ -135,7 +135,7 @@ check(abs(m[:, 2].min()) < 1e-6 and abs(m[:, 2].max() - 2.0) < 1e-6 and abs(np.h
       "from the tip at z 0 to the length 2, radius 0.375 at most")
 m2 = kmotion_stock.revolve_profile([0, 1], [0.125, 0.125], False, slices=8)
 m3 = kmotion_stock.revolve_profile([0, 1], [0.125, 0.125], True, slices=8)
-check(len(m2) == 8 * 6 + 8 * 3 * 2 and len(m3) == 8 * 6 + 8 * 3, "a closed end mill has two caps, an open one the bottom only")
+check(len(m2) == 8 * 6 + 8 * 3 * 2 and len(m3) == 8 * 6 + 8 * 3 * 2, "an end mill has both caps, closed or open above (drawn solid)")
 tp = kmotion_stock.ImageToolPart(ti)
 check(tp.mesh_for(3) is None, "a tool without an image draws LinuxCNC's own marker")
 

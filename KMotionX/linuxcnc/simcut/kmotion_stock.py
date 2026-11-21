@@ -1367,8 +1367,10 @@ def simplify_profile(h, r, tol):
 def revolve_profile(h, r, open_above, slices=24, tol=None):
     """A tool's profile (heights above the tip, radii) as a surface of revolution about Z: float32
     (N, 6) position and normal triangles, wound counter-clockwise seen from outside, as LinuxCNC's
-    glcanon_bake.cylinder_mesh is.  The tip is at z = 0.  A flat tip and a closed top are capped;
-    an open tool ends at its last profile point (the image's length)."""
+    glcanon_bake.cylinder_mesh is.  The tip is at z = 0.  A flat tip and the top are capped: an
+    open tool (one the engine takes as going on upward) ends at its last profile point, the image's
+    length, and is drawn solid to there - uncapped, its inside faces were culled and the tool was
+    see-through from above."""
     h = [float(v) for v in h]
     r = [float(v) for v in r]
     if len(h) < 2:
@@ -1408,7 +1410,7 @@ def revolve_profile(h, r, open_above, slices=24, tol=None):
             out.append((0.0, 0.0, z, 0.0, 0.0, -1.0))
             out.append(ring(z, rad, i + 1) + (0.0, 0.0, -1.0))
             out.append(ring(z, rad, i) + (0.0, 0.0, -1.0))
-    if not open_above and pts[-1][1] > 0:               # a closed top: a disk facing up
+    if pts[-1][1] > 0:                                  # the top: a disk facing up
         z, rad = pts[-1]
         for i in range(slices):
             out.append((0.0, 0.0, z, 0.0, 0.0, 1.0))
