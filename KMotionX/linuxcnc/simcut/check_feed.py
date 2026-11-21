@@ -183,6 +183,10 @@ def main():
     st = part.stock.stats()
     check(st["applied"] == part._done and 0.22 < block - st["volume"][2] < 0.34,
           "... and the engine has cut %d poses, %.4f cubic inch (half of the first slot: 0.28)" % (st["applied"], block - st["volume"][2]))
+    stat.actual_position = (4.5, 2.5, -1.125 + 0.5, 0, 0, 0, 0, 0, 0)   # the tool already on line 12 while the status still says 8
+    part._follow(stat)
+    check(int(part._lines[part._done - 1]) == 12 and abs(part._tips[part._done - 1][1] - 2.5) <= 0.06,
+          "the status's line trailing the tool: the tool is found on line 12's piece and the cut brought there (%d poses)" % part._done)
     stat.motion_line = 12                               # the second slot, G1 Y6.5, the tool a little way in
     stat.actual_position = (4.5, 2.5, -1.125 + 0.5, 0, 0, 0, 0, 0, 0)
     part._follow(stat)

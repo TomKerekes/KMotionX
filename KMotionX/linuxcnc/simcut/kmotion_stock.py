@@ -117,6 +117,8 @@ DONE_PATH_WIDTH = 2.0
 #: How near the tool has to come to a piece of the path for that piece to count as cut, in
 #: inches (KMotionCNC's TOOL_ON_PATH_TOL)
 TOOL_ON_PATH_TOL_INCH = 0.01
+LOOKAHEAD_POSES = 600                   # how far past the executing line the tool is looked for on the path (the
+                                        # status's line trails the tool by about a second here; a piece is 0.05 inch)
 
 # The shaders.  No #version line: rs274.glcanon_gl.compile_shader prepends the one of the live
 # API (GLSL 330 core, or GLSL ES 3.00 with precision statements).  A port of Stock3d.cpp's: the
@@ -699,7 +701,7 @@ class StockPart(glcanon_scene.Part):
                 self._follow(stat)
             else:
                 log.info("the program loaded again as its run ended")
-                self._end_run()
+                self._end_run(stat)
             return
         if new:
             self._frontier = (0, 0.0)                          # a new program: none of it is executed
@@ -800,11 +802,21 @@ class StockPart(glcanon_scene.Part):
         self._clear_from = 0
         self.stock.uncut_from(0)
 
-    def _end_run(self):
+    def _end_run(self, stat=None):
         """The run is over: complete (the program read to its end, or the path at its last
         segments) and the whole program is cut; stopped otherwise, and the cut and the executed
-        path stay where they are."""
+        path stay where they are - after a last look at where the tool came to rest, since the
+        status's line and the tool's position catch up with each other only once it stands."""
         self._running = False
+        if stat is not None and self._lines is not None:
+            try:
+                done, front = self._progress(stat)
+                self._frontier = max(self._frontier, front)
+                if done > self._done:
+                    self._done = done
+                    self.stock.cut_to(done)
+            except Exception:
+                log.exception("the last look at the run")
         n = len(self._tips) if self._tips is not None else 0
         if self._eof or (n and self._frontier[0] >= n - 2):
             self.stock.cut_all()                               # the moves after the last line seen are cut too
@@ -863,6 +875,7 @@ class StockPart(glcanon_scene.Part):
         except (AttributeError, TypeError, IndexError):
             return max(done, count), front
         # the pieces of the line: from the vertex before its first one to its last
+        found = False
         lo = max(first - 1, 0)
         if last > lo:
             a = self._tips[lo:last]
@@ -876,8 +889,26 @@ class StockPart(glcanon_scene.Part):
             if dist[k] <= self._tolerance(stat):
                 count = lo + k + 2                             # the piece the tool is on is done
                 front = max(front, (lo + k, float(t[k])))      # the path is executed as far as the tool
+                found = True
         elif np.linalg.norm(self._tips[first] - tip) <= self._tolerance(stat):
             count = first + 1
+            found = True
+        # the status's executing line trails the tool (about a second here, with the planner's
+        # knots): a tool not on that line but on a piece a little further along the path has
+        # executed the path to there - the nearest piece within the tolerance among the next ones
+        lo = max(count - 1, 0)
+        hi = min(lo + LOOKAHEAD_POSES, n - 1)
+        if not found and hi > lo:
+            a = self._tips[lo:hi]
+            b = self._tips[lo + 1:hi + 1]
+            ab = b - a
+            ab2 = np.einsum("ij,ij->i", ab, ab)
+            t = np.clip(np.einsum("ij,ij->i", tip - a, ab) / np.where(ab2 > 0, ab2, 1), 0, 1)
+            dist = np.linalg.norm(a + ab * t[:, None] - tip, axis=1)
+            k = int(np.argmin(dist))
+            if dist[k] <= self._tolerance(stat):
+                count = max(count, lo + k + 2)
+                front = max(front, (lo + k, float(t[k])))
         return max(done, min(count, n)), front
 
     @property
@@ -927,7 +958,7 @@ class StockPart(glcanon_scene.Part):
         elif self._running and self._run_held(stat):
             pass                                               # paused, the GUI in manual (a jog): the run stands
         elif self._running:
-            self._end_run()
+            self._end_run(stat)
             told = True
         return told
 
