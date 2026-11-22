@@ -37,6 +37,66 @@ check(not ti.changed(), "nothing changed yet")
 time.sleep(0.05); open(table, "a").write("T3 P3 D0.2 ;drill\n"); os.utime(table, None)
 check(ti.changed(), "a change of the tool table is seen")
 
+# the table file edited for a GUI without gmoccapy's tool table
+open(table, "w").write("T1 P1 Z0.511 D0.125 ;1/8 end mill [EndMill-z 1in .125.wrl]\nT2 P2 D0.0625 ;1/16 end mill\nT3 P3 D0.2\n")
+check(kmotion_stock.table_file_with_image(table, 2, "V D0.5 A60 T0 L2.wrl") and open(table).read().split("\n")[1] == "T2 P2 D0.0625 ;1/16 end mill [V D0.5 A60 T0 L2.wrl]",
+      "the image goes into tool 2's comment in the file: %r" % open(table).read().split("\n")[1])
+check(kmotion_stock.table_file_with_image(table, 3, "x.wrl") and open(table).read().split("\n")[2] == "T3 P3 D0.2 ;[x.wrl]", "a line without a comment gets one")
+check(kmotion_stock.table_file_with_image(table, 1, "") and open(table).read().split("\n")[0] == "T1 P1 Z0.511 D0.125 ;1/8 end mill", "an image taken out of the file")
+check(not kmotion_stock.table_file_with_image(table, 9, "x.wrl") and len(open(table).read().split("\n")) == 4, "a tool that is not there: nothing written")
+check(kmotion_stock.read_tool_table_images(table) == {2: "V D0.5 A60 T0 L2.wrl", 3: "x.wrl"}, "and read back as the Stock reads them")
+open(table, "w").write("T1 P1 Z0.511 D0.125 ;1/8 end mill [EndMill-z 1in .125.wrl]\nT2 P2 D0.0625 ;1/16 end mill\n")
+
+# AXIS: the Stock menu on a Tk root with stand-ins for AXIS's preview, stat and command
+import tkinter, axis_stock, tool_dialog
+class TkPart:
+    class Settings: tool_table = table
+    settings = Settings(); images = ti; visible = True
+    def set_visible(self, on): self.visible = bool(on)
+class Preview:
+    redraws = 0
+    def tkRedraw(self): self.redraws += 1
+class TkStat:
+    tool_in_spindle = 2
+    def poll(self): pass
+class Command:
+    loads = 0
+    def load_tool_table(self): self.loads += 1
+root = tkinter.Tk(); root.withdraw()
+root.tk.call("menu", ".menu", "-tearoff", "0"); root.tk.call("menu", ".menu.file"); root.tk.call("menu", ".menu.help")
+root.tk.call(".menu", "add", "cascade", "-label", "File", "-menu", ".menu.file")
+root.tk.call(".menu", "add", "cascade", "-label", "Help", "-menu", ".menu.help")
+tkpart, o, c = TkPart(), Preview(), Command()
+menu = axis_stock.install(root, o, TkStat(), c, tkpart)
+labels = [root.tk.call(".menu", "entrycget", str(i), "-label") for i in range(int(root.tk.call(".menu", "index", "end")) + 1)]
+check(labels == ["File", "Stock", "Help"], "the Stock cascade sits before Help: %r" % labels)
+entries = [root.tk.call(menu, "entrycget", str(i), "-label") for i in range(int(root.tk.call(menu, "index", "end")) + 1) if root.tk.call(menu, "type", str(i)) != "separator"]
+check(entries == ["Show stock", "Tool image...", "Remove tool image...", "Create tool..."], "its entries: %r" % entries)
+check(int(root.tk.getvar(axis_stock.SHOW_VAR)) == 1, "Show stock starts checked (the Stock shown)")
+root.tk.call(menu, "invoke", "0")                                    # the checkbutton entry toggles its variable, then runs the command
+check(not tkpart.visible and o.redraws == 1, "unchecking hides the Stock and redraws the preview")
+asked = []
+tkinter.simpledialog.askinteger = lambda title, prompt, **kw: asked.append((title, kw.get("initialvalue"))) or 2
+tkinter.filedialog.askopenfilename = lambda **kw: os.path.join(images, "V D0.5 A60 T0 L2.wrl")
+root.tk.call(menu, "invoke", "2")
+check(asked == [("Tool image", 2)] and open(table).read().split("\n")[1] == "T2 P2 D0.0625 ;1/16 end mill [V D0.5 A60 T0 L2.wrl]" and c.loads == 1,
+      "Tool image: asks for the tool (the one in the spindle offered), writes the file, has LinuxCNC read the table")
+root.tk.call(menu, "invoke", "3")
+check(open(table).read().split("\n")[1] == "T2 P2 D0.0625 ;1/16 end mill" and c.loads == 2, "Remove tool image takes it out")
+started = []
+popen = axis_stock.subprocess.Popen
+axis_stock.subprocess.Popen = lambda args, **kw: started.append((args, kw.get("env", {}).get("PYTHONPATH", "")))
+root.tk.call(menu, "invoke", "4")
+axis_stock.subprocess.Popen = popen
+started = [started[0][0]] if started else []
+check(len(started) == 1 and started[0][1].endswith("tool_dialog.py") and started[0][2:] == ["--images", images, "--tool", "2", "--table", table],
+      "Create tool starts the dialog's own process for the tool: %r" % (started and started[0][2:]))
+root.destroy()
+open(table, "w").write("T1 P1 Z0.511 D0.125 ;1/8 end mill [EndMill-z 1in .125.wrl]\nT2 P2 D0.0625 ;1/16 end mill [EndMill D0.5 L1.5.wrl]\n")
+check(tool_dialog.table_tool_defaults(table, 2) == (0, {"D": "0.5", "L": "1.5"}), "the stand-alone dialog starts from the tool's image in the file: %r" % (tool_dialog.table_tool_defaults(table, 2),))
+check(tool_dialog.table_tool_defaults(table, 1) == (None, {"D": "0.125"}), "or from the table's diameter: %r" % (tool_dialog.table_tool_defaults(table, 1),))
+open(table, "w").write("T1 P1 Z0.511 D0.125 ;1/8 end mill [EndMill-z 1in .125.wrl]\nT2 P2 D0.0625 ;1/16 end mill\n")
+
 # gmoccapy stand-ins
 class WTree:
     def __init__(self): self.box = Gtk.ButtonBox()

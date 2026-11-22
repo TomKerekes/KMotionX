@@ -26,6 +26,12 @@ try:
     else:
         raise RuntimeError("stock_rc.py: neither gmoccapy (self.widgets.gremlin) nor AXIS (o) is here")
     _part = kmotion_stock.install(_widget, _ini, os.getcwd())
+    if "o" in dir() and "root_window" in dir():                                              # AXIS: a Stock menu
+        try:
+            import axis_stock
+            axis_stock.install(root_window, o, s, c, _part)                                   # noqa: F821
+        except Exception:
+            kmotion_stock.log.exception("AXIS's Stock menu")
     if "self" in dir() and hasattr(self, "widgets") and hasattr(self.widgets, "tooledit1"):      # noqa: F821 - gmoccapy
         import gmoccapy_stock
         gmoccapy_stock.install(self, _part)                                                       # noqa: F821

@@ -24,6 +24,11 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
   kept as `view_stock` and `view_paths` in gmoccapy's preferences), and two buttons on the tool table page: **Tool image...**
   gives the selected tool a tool image, **Create tool...** makes one from a basic tool's sizes
   (KMotionCNC's Create Tool). `tool_image.py` does the latter from the command line.
+- `axis_stock.py` - under AXIS, a `Stock` menu before `Help`: **Show stock**, **Tool image...**
+  and **Remove tool image...** for a tool asked for by number (the one in the spindle offered;
+  they edit the tool table file and have LinuxCNC read it again), **Create tool...**, which runs
+  `tool_dialog.py`: the Create tool dialog as a process of its own (`--images DIR --table FILE
+  --tool N`), for a GUI that is not GTK.
 - `stock-demo.ngc` - a 9 x 6 x 1 inch block, two slots and a rapid that crashes into it, cut
   with T1 and its length offset. Every move lies between X-0.5 and 9.5 and Y-0.5 and 6.5, inside
   soft limits of 10. The block's top is at Z-1 and the retracts at Z-0.5, so that a length offset
@@ -55,7 +60,13 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
    ;STOCK_DONE_PATH = 1            ; the path the run has executed, drawn over the program's lines (0: not)
    ```
 
-   `configs/kmotion-sim` (AXIS) and `configs/kmotion-minirouter` (gmoccapy) have these.
+   `configs/kmotion-sim` (AXIS), `configs/kmotion-minirouter` and `configs/kmotion-3link`
+   (gmoccapy) have these. The one `USER_COMMAND_FILE` serves both GUIs: in gmoccapy it adds the
+   Stock and Paths toggles under the preview and the Tool image and Create tool buttons on the
+   tool table page; in AXIS a `Stock` menu before `Help` (show or hide the Stock, a tool image
+   picked for a tool or taken away, the Create tool dialog), the program's lines and the live
+   plot being in AXIS's own View menu. The ini is the only place the Stock is set up; a config
+   without the two lines above has none of it.
 3. Load a program whose first lines declare the stock, as `stock-demo.ngc` does:
 
    ```
@@ -188,11 +199,13 @@ uploads (each block's vertices, their extent and kinds) and the matrices of a fr
 ## Not yet
 
 - Buttons to save, load and unload Stock files (the part has `save`, `load`, `unload` for a GUI
-  to call); the Stock and Paths toggles are gmoccapy's only (`set_visible` and the widget's
-  `show_program` for another GUI). gmoccapy's own pencil toggle is the live plot of the actual
-  position, which the executed path stands in for.
+  to call); the Stock toggle is gmoccapy's and AXIS's (`set_visible` for another GUI), the Paths
+  toggle gmoccapy's (AXIS has it in View). gmoccapy's own pencil toggle is the live plot of the
+  actual position, which the executed path stands in for.
 - The tool image lives in the tool's comment, not in a column of the table (LinuxCNC's table
-  has none); the buttons are gmoccapy's only, other GUIs edit the comment or `TOOL_IMAGES`.
+  has none). gmoccapy's buttons edit its tool table page; AXIS's menu asks for the tool's number
+  (its tool table is the separate tooledit program) and edits the table file, then has LinuxCNC
+  read it again; another GUI edits the comment or `TOOL_IMAGES`.
 - Several `(WORKPIECE,...)` pieces, cylinders and tubes as such (one box for now).
 - Jogging does not cut; after an abort the whole program is cut, not the part up to the tool.
 - The engine's automatic resolution starts at 0.001 inch; on a millimetre machine that is

@@ -244,6 +244,38 @@ def comment_with_image(comment, name):
     return (base + " " if base else "") + "[%s]" % name
 
 
+def tool_number(line):
+    """The T word of a tool table line (its part before the comment), or None."""
+    for word in line.split():
+        if word[:1] in "Tt":
+            try:
+                return int(word[1:])
+            except ValueError:
+                return None
+    return None
+
+
+def table_file_with_image(file, tool, name):
+    """Give tool number tool the image name in a LinuxCNC tool table file ("" takes it away): its
+    line's comment gets [name], the other lines stay as they are.  True when the tool was there."""
+    tool = int(tool)
+    out, found = [], False
+    with open(file, encoding="utf-8", errors="surrogateescape") as f:
+        for raw in f:
+            text = raw.rstrip("\r\n")
+            eol = raw[len(text):]
+            line, sep, comment = text.partition(";")
+            if tool_number(line) == tool:
+                found = True
+                new = comment_with_image(comment, name)
+                raw = (line + ";" + new if sep else line.rstrip() + (" ;" + new if new else "")) + eol
+            out.append(raw)
+    if found:
+        with open(file, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.writelines(out)
+    return found
+
+
 def read_tool_table_images(file):
     """{tool number: image name} from the comments of a LinuxCNC tool table file."""
     out = {}
