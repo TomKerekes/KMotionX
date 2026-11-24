@@ -29,6 +29,10 @@ file serves KMotionCNC. `SimCut_LinuxCNC_Handoff.md` beside it describes the eng
   they edit the tool table file and have LinuxCNC read it again), **Create tool...**, which runs
   `tool_dialog.py`: the Create tool dialog as a process of its own (`--images DIR --table FILE
   --tool N`), for a GUI that is not GTK.
+- `3D_Chips with stock.ngc` - LinuxCNC's 3D Chips sample with a `WORKPIECE` comment: a 100 x 100
+  x 40 mm block cut with T2, a 1/4 inch ball nose, then a slot round its base with T3, a T-slot
+  cutter. `configs/kmotion-sim` opens it at start; its G54 (Z -3 inch) keeps the 60 mm retract
+  and the T-slot's 2 inch length offset under the Z limit.
 - `stock-demo.ngc` - a 9 x 6 x 1 inch block, two slots and a rapid that crashes into it, cut
   with T1 and its length offset. Every move lies between X-0.5 and 9.5 and Y-0.5 and 6.5, inside
   soft limits of 10. The block's top is at Z-1 and the retracts at Z-0.5, so that a length offset

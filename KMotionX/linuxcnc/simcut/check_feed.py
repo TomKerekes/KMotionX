@@ -68,8 +68,12 @@ def main():
     canon = Canon()
     td = tempfile.mkdtemp()
     canon.parameter_file = os.path.join(td, "sim.var")
-    import shutil
-    shutil.copy(os.path.join(HERE, "..", "configs", "kmotion-sim", "sim.var"), canon.parameter_file)
+    # kmotion-sim's parameters, without its G54 offset (its Z puts the 3D Chips block below the spindle's
+    # home): the positions below are the demo's own, with no work offset
+    with open(os.path.join(HERE, "..", "configs", "kmotion-sim", "sim.var")) as src, open(canon.parameter_file, "w") as dst:
+        for line in src:
+            words = line.split()
+            dst.write("%s\t0.000000\n" % words[0] if words[:1] in (["5221"], ["5222"], ["5223"]) else line)
     canon.configure_program_geometry("XYZ", glcanon_bake.RotationOffsets(), False, want_axis_positions=False)
     # Without a running LinuxCNC the interpreter has no tool table (it lives in shared memory), so the
     # demo is parsed with the tool's length offset given as G43.1 in place of T1 M6 G43 H1

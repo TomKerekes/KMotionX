@@ -403,7 +403,10 @@ installation from scratch, with its scripts.
     (jerk defaults to 10 × accel) and counts per unit from `[JOINT_n] INPUT_SCALE`.
 - `configs/kmotion-sim/` – a LinuxCNC configuration that loads `kmotion-motion` instead of
   `motmod` in simulate mode (the sim/axis config, inches, 3 joints, trivkins), plus
-  `drive.py`, which runs the whole thing from the command line.
+  `drive.py`, which runs the whole thing from the command line. It opens
+  `simcut/3D_Chips with stock.ngc` with the Stock on: tool 2 in `sim.tbl` is a 1/4 inch ball
+  nose, tool 3 a T-slot cutter, both with their tool images, and `sim.var`'s G54 puts the
+  block's top 3 inches below the spindle's home, under the Z limit of 0.12.
 - `configs/kmotion-minirouter/` – the same for Tom's Kogna: board mode, 2540 counts/inch,
   250 mm/s, 2500 mm/s², jerk 25000 mm/s³ in inches, `MinirouterInit.c` as the init program,
   homing through `Home.c`, the bench spindle on channel 3 (`spindle/`), gmoccapy as the GUI.
