@@ -122,3 +122,10 @@ ipch/
 
 # Local History for Visual Studio
 .localhistory/
+# left behind on a Linux desktop: vim swap files, tooledit's table backups, halshow's window state,
+# KMotionServer's logs where it was started
+*.swp
+*.bak
+halshow.preferences
+kmx_server_stdout
+kmx_server_stderr

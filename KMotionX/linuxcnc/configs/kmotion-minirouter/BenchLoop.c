@@ -32,17 +32,17 @@
 
 static void SimulateSwitches(void)
 {
-	SetStateBit(48, ch0->Dest < -1000.0);
+	SetStateBit(48, ch0->Dest < -1000.0);  // fake home
 	SetStateBit(49, ch1->Dest < -2000.0);
 	SetStateBit(50, ch2->Dest < -3000.0);
 
-	SetStateBit(51, ch0->Dest < -1500.0);
+	SetStateBit(51, ch0->Dest < -1500.0);  // fake limits
 	SetStateBit(52, ch1->Dest < -2500.0);
-	SetStateBit(53, ch2->Dest < -3500.0);
+	SetStateBit(53, ch2->Dest < -30480.0);
 
 	SetStateBit(54, ch0->Dest > 30480.0);
 	SetStateBit(55, ch1->Dest > 30480.0);
-	SetStateBit(56, ch2->Dest > 30480.0);
+	SetStateBit(56, ch2->Dest > 1000.0);
 }
 
 int main()

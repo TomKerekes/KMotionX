@@ -5,8 +5,8 @@
 ( Also press the Toggle Skip Lines with "/" to see that part )
 ( If the program is too big or small for your machine, change the scale below )
 ( LinuxCNC 19/1/2012 2:13:51 PM )
-#<depth>=0
-#<zclear>=9
+#<depth>=1
+#<zclear>=0
 #<scale>=1.85
 #<feedrate>=4000
 #<plungerate>=4000
