@@ -596,6 +596,12 @@ def workpiece_units(canon, stat, geom):
     a = math.radians(float(getattr(stat, "rotation_xy", 0.0) or 0.0))
     rot = np.array([[math.cos(a), -math.sin(a), 0.0], [math.sin(a), math.cos(a), 0.0], [0.0, 0.0, 1.0]])
     origin = (g5x + rot @ g92) / lu
+    if getattr(canon, "kmotion_units_done", False):
+        return 0                                                # this parse's comments are corrected already (another part loaded it)
+    try:
+        canon.kmotion_units_done = True                         # the scaling is in place: once per parse, whoever loads it
+    except AttributeError:
+        pass
     changed = 0
     for wp in wps:
         lineno = int(getattr(wp, "lineno", -1))
