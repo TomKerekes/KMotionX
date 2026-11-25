@@ -10,7 +10,11 @@ import kmotion_simcut as sim
 S = sim.Stock()
 S.define((0, 0, -1), (4, 2, 0), 0.05)
 T = S.add_tool_flat(0.5)
-xyz = np.array([[-1, 1, 0.5], [-1, 1, -0.5], [5, 1, -0.5], [5, 1, 0.5]], dtype=np.float32)
+# the slot's centre a quarter of a lattice cell off the lattice: with its sides exactly on lattice lines
+# (Y 0.75 and 1.25 for a centre at Y 1) the engine counts the nodes on both lines as cut, one column more
+# than the slot (removed 1.1 for 1.0); off the lines the volume is the slot's
+Y = 1.0125
+xyz = np.array([[-1, Y, 0.5], [-1, Y, -0.5], [5, Y, -0.5], [5, Y, 0.5]], dtype=np.float32)
 flags = np.array([0, sim.SIMPOSE_MOVE | sim.SIMPOSE_RAPID, sim.SIMPOSE_MOVE, sim.SIMPOSE_MOVE | sim.SIMPOSE_RAPID])
 S.add_poses(xyz, np.full(4, T), flags)
 S.cut_all()
